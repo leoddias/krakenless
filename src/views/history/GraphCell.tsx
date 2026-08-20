@@ -3,8 +3,18 @@ import type { GraphRow } from './graph';
 import styles from './history.module.css';
 
 /** Horizontal distance between lanes, in pixels. */
-const LANE_WIDTH = 12;
+const LANE_WIDTH = 10;
 const NODE_RADIUS = 3.5;
+
+/**
+ * Most rows a repository with many branches would otherwise reserve.
+ *
+ * `laneCount` is the widest point of the *whole* list, and every row reserves
+ * it. A repository with a dozen branch tips would push the commit subject —
+ * the one thing the row exists to show — off the end of every line. Lanes past
+ * this are still drawn, just clipped.
+ */
+const MAX_RESERVED_LANES = 4;
 
 function laneX(lane: number): number {
   return lane * LANE_WIDTH + LANE_WIDTH / 2;
@@ -27,7 +37,8 @@ export function GraphCell({
   laneCount: number;
   rowHeight: number;
 }): ReactNode {
-  const width = Math.max(laneCount, 1) * LANE_WIDTH;
+  const drawWidth = Math.max(laneCount, 1) * LANE_WIDTH;
+  const width = Math.min(drawWidth, MAX_RESERVED_LANES * LANE_WIDTH);
   const nodeX = laneX(row.lane);
   const middle = rowHeight / 2;
 
@@ -36,7 +47,8 @@ export function GraphCell({
       className={styles.graph}
       width={width}
       height={rowHeight}
-      viewBox={`0 0 ${width} ${rowHeight}`}
+      viewBox={`0 0 ${drawWidth} ${rowHeight}`}
+      preserveAspectRatio="xMinYMid slice"
       aria-hidden="true"
       focusable="false"
     >

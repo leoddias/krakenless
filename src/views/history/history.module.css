@@ -109,7 +109,10 @@
 }
 
 .subject {
-  flex: 1 1 auto;
+  /* The subject is what the row exists to show, so it grows first and shrinks
+     last. Giving the author equal footing left ~6 readable characters here in
+     a three-panel layout. */
+  flex: 4 1 auto;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
@@ -167,7 +170,9 @@
 }
 
 .author {
-  flex: none;
+  /* Yields space to the subject rather than holding a fixed width. */
+  flex: 0 1 auto;
+  min-width: 0;
   max-width: 12ch;
   overflow: hidden;
   white-space: nowrap;
