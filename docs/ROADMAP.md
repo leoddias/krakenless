@@ -69,6 +69,37 @@ after 2 more weeks → proceed to v0.2. Else: keep as personal tool, stop invest
 
 ## Backlog (ideas parking lot — not scheduled)
 
+**`git log` has no `--topo-order`, so a parent can be emitted above its child.**
+`buildLogCommand` (`src/git/commands/log.ts`) leaves the ordering to git's
+default, and with `--all` a parent can arrive before the commit that lists it.
+The graph can only draw an edge downwards, so that merge renders with no line to
+that parent at all. Adding `--topo-order` makes the case unreachable. The
+current behaviour is pinned by a test named "draws a merge whose parents are both
+above it with no line at all", so it cannot regress silently — but the test
+documents a limitation, not a desired outcome. Touching the log builder means a
+`safety-reviewer` pass before handoff.
+
+**No budget on avatar lookups (ADR-0021).** A repository with twenty thousand
+distinct author addresses, scrolled end to end, is twenty thousand Gravatar
+requests and twenty thousand cache files. Each identity is asked for once and
+never again, so the cost is bounded per identity but not per repository, and
+nothing ever sweeps the folder. Wanted: a session cap, and a way to empty the
+cache from Settings.
+
+**Turning avatars off does not cancel a request already in flight.** One
+in-flight lookup (at most, and under a ten-second timeout) still completes and
+writes its cache entry after the setting is switched off. Harmless but untidy.
+
+**`cargo fmt --check` is red across the whole crate.** `build.rs`, `main.rs`,
+`git_runner.rs`, `watcher.rs`, `config.rs` and `avatars.rs` all disagree with
+rustfmt; the repository has never been rustfmt-clean and the check is not in the
+CI gate. Worth one commit to settle it in either direction — adopt it and add it
+to the gate, or write down that it is deliberately not used.
+
+**No entry point to the editor from the working-tree panel (ADR-0022).** Editing
+starts from the diff panel's file header. The changes list, which is where a
+user is already looking at the file names, has no "Edit" of its own.
+
 **Linux CI wedges the runner (open, deprioritised 2026-08-20).** Linux was
 pulled out of the CI gate — it is not a v0.1 target and every attempt cost 45
 minutes and produced no log. The investigation lives in

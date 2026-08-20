@@ -10,16 +10,19 @@
   M0–M5 is checked off; the only open item is the dogfood gate, which is two
   weeks of use, not code.
 - **UI redesigned** (2026-08-20) to GitKraken's layout language — ADR-0017,
-  with author badges on the graph nodes (ADR-0018, derived locally; ADR-0019,
-  optional GitHub pictures) and resizable panels whose sizes persist
-  (ADR-0020). Two passes of screenshot feedback are in; the graph, sidebar and
-  toolbar have been seen running, the diff, working tree and the drag have not.
+  with author pictures on the graph nodes (ADR-0018 derived badge, ADR-0021
+  optional Gravatar/GitHub pictures) and resizable panels whose sizes persist
+  (ADR-0020). Three passes of screenshot feedback are in.
+- **Working-tree files can be edited in the app** (ADR-0022) — the first time
+  Krakenless writes to a user's disk outside git. Read that ADR before touching
+  `src-tauri/src/worktree.rs` or `src/fs/**`.
 - **Verified in the running app**, by hand with screenshots: welcome + recent
   repos, history with the commit graph and ref decorations, working-tree panel
   (stage/unstage/discard/commit), diff viewer, remote bar, branches + stashes,
   conflict banner, settings, keyboard shortcuts, fs-watch refresh.
-- **Test status:** `npm test` 997 passing (44 files), `cargo test` 36 passing
-  as of the previous session; oxlint and prettier clean.
+- **Test status:** `npm test` 1106 passing (48 files), `cargo test` 64 passing;
+  oxlint and prettier clean. `cargo fmt` is *not* clean and never has been — see
+  `docs/ROADMAP.md` § Backlog.
 - The discard path — the only code that takes work off disk — has integration
   tests that **execute the recovery command the UI displays**. Keep that
   property for any future change to `stage.ts` or `recovery.ts`.
@@ -38,14 +41,17 @@
 
 ## Next up (in order)
 
-1. **Look at the panels not yet seen running**: the diff, the working tree and
+1. **Try the new editor on a real file** — it is the only code that writes to
+   your disk, and it has not been used by hand yet. Consider a
+   `safety-reviewer` pass over `src-tauri/src/worktree.rs` first.
+2. **Look at the panels not yet seen running**: the diff, the working tree and
    its commit box, settings, welcome — plus dragging each edge, and the toolbar
    at narrow widths.
-2. **The dogfood gate** (`docs/ROADMAP.md` § M5): use Krakenless as the only
+3. **The dogfood gate** (`docs/ROADMAP.md` § M5): use Krakenless as the only
    Git client for two weeks. Everything else in v0.1 is done, so this is the
    next real step and it produces the list that shapes v0.2.
-3. Fix whatever the gate surfaces, in the order it hurts.
-4. Then the validation checkpoint in `PLAN.md`: builds to 3–5 friends, and the
+4. Fix whatever the gate surfaces, in the order it hurts.
+5. Then the validation checkpoint in `PLAN.md`: builds to 3–5 friends, and the
    decision to invest in v0.2 or stop.
 
 ## Blockers / open questions
@@ -61,6 +67,44 @@
   until `buildPushCommand` emits a `<local>:<upstream>` refspec.
 
 ## Session log
+
+### 2026-08-20 (fourth pass) — an editor, real avatars, a fixed graph
+
+Three pieces, two of them built in parallel worktrees and merged here.
+
+- **Files in the working tree can be edited in the app** (ADR-0022). New Rust
+  module `src-tauri/src/worktree.rs` — the only code in the product that writes
+  a user's file outside git, so the guards *are* the module: the path must
+  resolve inside the repository after symlinks are followed, `.git` is refused,
+  a symlink is refused rather than followed (the atomic replace would turn it
+  into a regular file), >2 MiB and non-UTF-8 are refused, and every write names
+  the content fingerprint it expects to replace. `src/fs/text.ts` measures line
+  endings, byte-order mark and trailing newline and restores them on save;
+  mixed-ending files are refused, because a text box cannot represent the
+  difference and saving would rewrite every line. The entry point is an "Edit"
+  button in the diff panel's file header, working tree only.
+- **Author pictures are real** (ADR-0021, supersedes part of ADR-0019): GitHub
+  by account number for noreply addresses, Gravatar (SHA-256 of the address) for
+  everyone else, derived badge underneath so a blocked request leaves a face.
+  Cached at `%APPDATA%/krakenless/avatars/`, one request per identity ever,
+  negative results cached too, 30-day expiry. Still off by default.
+  **The old `githubAvatars: true` is deliberately not inherited** — that switch
+  promised "no email address is ever sent anywhere" and this one does not, so
+  the answer to the narrower question does not carry. One checkbox, re-ticked.
+- **The commit graph drew dangling lines.** Two defects: edges had no vertical
+  vocabulary, so a merge's second-parent lane got a full-height line starting at
+  the row's top edge attached to nothing; and lanes were never freed on a
+  rejoin, leaving an orphan slot drawing a line to a commit that never came.
+  `GraphEdge` now carries explicit `from`/`to` anchors. The reviewer fuzzed
+  30,000 random histories against `buildGraph` afterwards.
+- Both packets were reviewed by `conventions-reviewer`; the avatar packet was
+  blocked once by `safety-reviewer` and fixed (size caps, no redirects followed,
+  fetch timeout, same-host check on `response.url`).
+- `docs/ARCHITECTURE.md` gained two invariants that were previously untrue:
+  where the app may write a file, and which network calls it may make.
+- **Not reviewed:** the working-tree write path in `worktree.rs` has not been
+  through `safety-reviewer`. The convention names `src/git/**` and the runner,
+  which this is not — but it writes user files, which deserves the same bar.
 
 ### 2026-08-20 (redesign, third pass) — GitHub pictures, and draggable edges
 

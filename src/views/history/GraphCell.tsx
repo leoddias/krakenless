@@ -76,7 +76,7 @@ export function GraphCell({
   author?: { name: string; email: string };
   /**
    * Picture to draw over the badge, when the user has opted into fetching one
-   * (ADR-0019). It is layered *on top of* the derived badge rather than
+   * (ADR-0021). It is layered *on top of* the derived badge rather than
    * replacing it, so a request that is blocked, offline or 404 leaves the
    * initials showing instead of a hole.
    */
