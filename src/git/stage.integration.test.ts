@@ -58,11 +58,42 @@ describe('discard', () => {
     // This is the test that makes "discard" safe to offer at all.
     write('drop.txt', 'drop edited\n');
 
-    git(buildDiscardCommand(['drop.txt'], 'krakenless: discarded test').args);
+    git(
+      buildDiscardCommand(['drop.txt'], 'krakenless: discarded test', { keepIndex: true })
+        .args,
+    );
     expect(read('drop.txt')).toContain('drop original');
 
     git(buildStashApplyCommand('stash@{0}', { pop: true }).args);
     expect(read('drop.txt')).toContain('drop edited');
+  });
+
+  it('keeps the staged snapshot of a file that is both staged and dirty', () => {
+    // The failure this guards: without --keep-index the stash reverts the index
+    // to HEAD as well, and `git stash pop` never restores that staged version —
+    // the user's staged work would be gone with no route back.
+    write('drop.txt', 'staged version\n');
+    git(['add', 'drop.txt']);
+    write('drop.txt', 'worktree version\n');
+
+    git(buildDiscardCommand(['drop.txt'], 'label', { keepIndex: true }).args);
+
+    expect(git(['show', ':drop.txt'])).toBe('staged version\n');
+    expect(read('drop.txt')).toBe('staged version\n');
+  });
+
+  it('can restore the discarded edit from the stash commit by oid', () => {
+    // The undo command the UI shows is `git checkout <oid> -- <paths>`; a
+    // `stash pop` would conflict against the restored staged content.
+    write('drop.txt', 'staged version\n');
+    git(['add', 'drop.txt']);
+    write('drop.txt', 'worktree version\n');
+    git(buildDiscardCommand(['drop.txt'], 'label', { keepIndex: true }).args);
+
+    const oid = git(['rev-parse', 'refs/stash']).trim();
+    git(['checkout', oid, '--', 'drop.txt']);
+
+    expect(read('drop.txt')).toBe('worktree version\n');
   });
 
   it('leaves changes to other files alone', () => {
@@ -71,7 +102,7 @@ describe('discard', () => {
     write('keep.txt', 'keep edited\n');
     write('drop.txt', 'drop edited\n');
 
-    git(buildDiscardCommand(['drop.txt'], 'label').args);
+    git(buildDiscardCommand(['drop.txt'], 'label', { keepIndex: true }).args);
 
     expect(read('keep.txt')).toContain('keep edited');
     expect(read('drop.txt')).toContain('drop original');
@@ -80,7 +111,7 @@ describe('discard', () => {
   it('recovers a discarded untracked file', () => {
     write('new.txt', 'brand new\n');
 
-    git(buildDiscardCommand(['new.txt'], 'label').args);
+    git(buildDiscardCommand(['new.txt'], 'label', { keepIndex: false }).args);
     expect(existsSync(join(repo, 'new.txt'))).toBe(false);
 
     git(buildStashApplyCommand('stash@{0}', { pop: true }).args);
@@ -89,7 +120,11 @@ describe('discard', () => {
 
   it('records the label so the UI can name the stash', () => {
     write('drop.txt', 'edited\n');
-    git(buildDiscardCommand(['drop.txt'], 'krakenless: discarded 2026-08-20').args);
+    git(
+      buildDiscardCommand(['drop.txt'], 'krakenless: discarded 2026-08-20', {
+        keepIndex: true,
+      }).args,
+    );
     expect(git(['stash', 'list'])).toContain('krakenless: discarded 2026-08-20');
   });
 });

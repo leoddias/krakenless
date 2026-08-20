@@ -20,8 +20,10 @@ import {
   stagePaths,
   unstagePaths,
   type DiscardResult,
+  type DiscardSelection,
 } from '../git/stage';
 import type { CommitOptions } from '../git/commands/stage';
+import { userConfirmed } from '../git/confirm';
 import { getStatus } from '../git/status';
 import type { FileDiff, Hunk } from '../git/types';
 import type { Store } from './store';
@@ -186,15 +188,36 @@ export async function stageHunks(
  */
 export async function discard(
   store: Store,
-  paths: string[],
+  selection: DiscardSelection,
+  confirmationReason: string,
 ): Promise<DiscardResult | null> {
   const root = currentRoot(store);
-  if (root === null || paths.length === 0) return null;
+  const count = selection.tracked.length + selection.untracked.length;
+  if (root === null || count === 0) return null;
 
   let result: DiscardResult | null = null;
   await mutate(store, async () => {
-    result = await discardPaths(root, paths);
+    // The token is minted from the text the user agreed to; a caller that never
+    // asked has nothing to pass here.
+    result = await discardPaths(root, selection, userConfirmed(confirmationReason));
   });
+
+  if (result !== null) {
+    const outcome: DiscardResult = result;
+    store.dispatch({
+      type: 'notice',
+      notice: outcome.discarded
+        ? {
+            tone: 'info',
+            message: `Discarded changes to ${count} file(s).`,
+            undoHint: outcome.undoCommands.join('\n'),
+          }
+        : {
+            tone: 'warning',
+            message: 'Nothing to discard — those paths had no changes.',
+          },
+    });
+  }
   return result;
 }
 

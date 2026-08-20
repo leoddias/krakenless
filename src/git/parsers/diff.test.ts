@@ -692,6 +692,10 @@ describe('parseDiff — entries git writes without --- / +++ lines', () => {
       oldPath: 'modeme.sh',
       newPath: 'modeme.sh',
       conflicted: false,
+      // The modes must survive: a patch that omits them stages content
+      // without the exec bit.
+      oldMode: '100644',
+      newMode: '100755',
       kind: 'modified',
       binary: false,
       headerLines: [

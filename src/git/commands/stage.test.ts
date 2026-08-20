@@ -54,10 +54,20 @@ describe('apply builders', () => {
     expect(buildApplyCachedCommand({ reverse: false }).args).toEqual([
       'apply',
       '--cached',
-      '--unidiff-zero',
       '--whitespace=nowarn',
       '-',
     ]);
+  });
+
+  it('only disables the context check for hunks that have no context', () => {
+    // --unidiff-zero turns off the safety check that catches a patch aimed at
+    // the wrong place in the file.
+    expect(buildApplyCachedCommand({ reverse: false }).args).not.toContain(
+      '--unidiff-zero',
+    );
+    expect(buildApplyCachedCommand({ reverse: false, zeroContext: true }).args).toContain(
+      '--unidiff-zero',
+    );
   });
 
   it('marks the reverse direction destructive', () => {
@@ -99,10 +109,13 @@ describe('buildCommitCommand', () => {
 });
 
 describe('buildDiscardCommand', () => {
-  it('discards by stashing, so the change can be recovered', () => {
-    expect(buildDiscardCommand(['a.txt'], 'label').args).toEqual([
+  it('discards a tracked path by stashing, keeping the staged snapshot', () => {
+    // Without --keep-index the stash also reverts staged content to HEAD, and
+    // nothing brings that back.
+    expect(buildDiscardCommand(['a.txt'], 'label', { keepIndex: true }).args).toEqual([
       'stash',
       'push',
+      '--keep-index',
       '--include-untracked',
       '--message',
       'label',
@@ -111,19 +124,29 @@ describe('buildDiscardCommand', () => {
     ]);
   });
 
+  it('drops --keep-index for untracked paths, which git rejects with it', () => {
+    // Verified against git 2.39: --keep-index with an untracked pathspec fails
+    // with "did not match any file(s) known to git".
+    expect(
+      buildDiscardCommand(['new.txt'], 'label', { keepIndex: false }).args,
+    ).not.toContain('--keep-index');
+  });
+
   it('never builds a plain restore of the working tree', () => {
     // `git restore --worktree` would be unrecoverable; that is the whole point.
-    expect(buildDiscardCommand(['a.txt'], 'label').args).not.toContain('restore');
+    expect(
+      buildDiscardCommand(['a.txt'], 'label', { keepIndex: true }).args,
+    ).not.toContain('restore');
   });
 
   it('requires confirmation', () => {
-    const command = buildDiscardCommand(['a.txt'], 'label');
+    const command = buildDiscardCommand(['a.txt'], 'label', { keepIndex: true });
     expect(command.destructive).toBe(true);
     expect(isDestructive(command.args)).toBe(true);
   });
 
   it('refuses an empty path list, which would discard the whole tree', () => {
-    expect(() => buildDiscardCommand([], 'label')).toThrow(GitError);
+    expect(() => buildDiscardCommand([], 'label', { keepIndex: true })).toThrow(GitError);
   });
 });
 

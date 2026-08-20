@@ -216,11 +216,19 @@ pub fn run_git(
     // Write stdin on its own thread too: a patch larger than the pipe buffer
     // would otherwise block us here while the child blocks writing output.
     if let Some(text) = stdin_text {
-        if let Some(mut pipe) = child.stdin.take() {
-            std::thread::spawn(move || {
-                let _ = pipe.write_all(text.as_bytes());
-                // Dropping the handle closes the pipe, which is git's EOF.
-            });
+        match child.stdin.take() {
+            Some(mut pipe) => {
+                std::thread::spawn(move || {
+                    let _ = pipe.write_all(text.as_bytes());
+                    // Dropping the handle closes the pipe, which is git's EOF.
+                });
+            }
+            // Without a pipe the patch would never reach git, and the child
+            // would sit waiting for input until the timeout killed it.
+            None => {
+                kill_tree(&mut child);
+                return Err(GitRunError::IoFailed("git stdin was not available".into()));
+            }
         }
     }
 
@@ -246,8 +254,13 @@ pub fn run_git(
         }
     };
 
-    let stdout = collect(&stdout_rx, timed_out, "stdout")?;
-    let stderr = collect(&stderr_rx, timed_out, "stderr")?;
+    // After a kill the pipes should close at once, so a short grace is enough.
+    // On the success path the reader may still be draining a large diff, so it
+    // gets the command's own timeout budget — bounded, but not tight enough to
+    // truncate legitimate output.
+    let grace = if timed_out { PIPE_GRACE } else { timeout };
+    let stdout = collect(&stdout_rx, grace)?;
+    let stderr = collect(&stderr_rx, grace)?;
 
     let (stdout_text, stdout_lossy) = decode(stdout);
     let (stderr_text, _) = decode(stderr);
@@ -261,25 +274,22 @@ pub fn run_git(
     })
 }
 
-/// Waits for one reader thread. After a timeout the wait is bounded, because a
-/// surviving grandchild may keep the pipe open indefinitely.
+/// Waits for one reader thread, always with a deadline.
+///
+/// Even on the success path the wait must be bounded: git can exit while a
+/// process it spawned (ssh's ControlMaster, a credential helper, a hook daemon)
+/// still holds the write end of the pipe, and `read_to_end` would then never
+/// return. An unbounded wait there wedges the whole IPC call with no timeout.
 fn collect(
     rx: &mpsc::Receiver<std::io::Result<Vec<u8>>>,
-    timed_out: bool,
-    which: &str,
+    grace: Duration,
 ) -> Result<Vec<u8>, GitRunError> {
-    let received = if timed_out {
-        match rx.recv_timeout(PIPE_GRACE) {
-            Ok(value) => value,
-            // The pipe is still held open by something git spawned; the child
-            // is already dead, so report what we know instead of hanging.
-            Err(_) => return Ok(Vec::new()),
-        }
-    } else {
-        rx.recv()
-            .map_err(|_| GitRunError::IoFailed(format!("{which} reader died")))?
-    };
-    received.map_err(|e| GitRunError::IoFailed(format!("{which}: {e}")))
+    match rx.recv_timeout(grace) {
+        Ok(received) => received.map_err(|e| GitRunError::IoFailed(e.to_string())),
+        // The child is gone but something it spawned still holds the pipe.
+        // Report what we have rather than hanging forever.
+        Err(_) => Ok(Vec::new()),
+    }
 }
 
 /// Decodes captured bytes, reporting whether anything had to be replaced.

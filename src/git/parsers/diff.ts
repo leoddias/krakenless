@@ -330,6 +330,8 @@ interface HeaderFacts {
   binary: boolean;
   oldPath?: string;
   newPath?: string;
+  oldMode?: string;
+  newMode?: string;
 }
 
 /**
@@ -340,8 +342,6 @@ interface HeaderFacts {
  */
 const INERT_HEADERS = [
   'index ',
-  'old mode ',
-  'new mode ',
   // Combined diffs spell a mode change `mode <a>,<b>..<c>` on one line; a
   // two-side patch never writes a bare `mode `.
   'mode ',
@@ -378,10 +378,16 @@ function readHeaderLine(line: string, facts: HeaderFacts): void {
   } else if (line.startsWith('copy to ')) {
     setKind(facts, 'copied', line);
     facts.newPath = decodePath(line.slice('copy to '.length));
+  } else if (line.startsWith('old mode ')) {
+    facts.oldMode = line.slice('old mode '.length).trim();
+  } else if (line.startsWith('new mode ')) {
+    facts.newMode = line.slice('new mode '.length).trim();
   } else if (line.startsWith('new file mode ')) {
     setKind(facts, 'added', line);
+    facts.newMode = line.slice('new file mode '.length).trim();
   } else if (line.startsWith('deleted file mode ')) {
     setKind(facts, 'deleted', line);
+    facts.oldMode = line.slice('deleted file mode '.length).trim();
   } else if (line.startsWith('Binary files ') || line.startsWith('GIT binary patch')) {
     facts.binary = true;
   } else if (line.startsWith('--- ')) {
@@ -467,6 +473,8 @@ function parseFileEntry(
       kind: facts.kind,
       binary: facts.binary,
       conflicted: false,
+      ...(facts.oldMode === undefined ? {} : { oldMode: facts.oldMode }),
+      ...(facts.newMode === undefined ? {} : { newMode: facts.newMode }),
       headerLines,
       hunks,
     },

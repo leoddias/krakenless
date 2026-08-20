@@ -82,7 +82,11 @@ describe('actions', () => {
     unstagePaths.mockResolvedValue(undefined);
     applyHunks.mockResolvedValue(undefined);
     commit.mockResolvedValue(undefined);
-    discardPaths.mockResolvedValue({ stashLabel: 'krakenless: discarded now' });
+    discardPaths.mockResolvedValue({
+      discarded: true,
+      stashLabel: 'krakenless: discarded now',
+      undoCommands: ['git checkout abc123 -- "a.txt"'],
+    });
   });
 
   it('opens a repository and loads status and history', async () => {
@@ -270,10 +274,37 @@ describe('actions', () => {
     const store = createStore();
     await openRepo(store, 'C:/repos/app');
 
-    const result = await discard(store, ['a.txt']);
+    const result = await discard(
+      store,
+      { tracked: ['a.txt'], untracked: [] },
+      'Discard changes to a.txt?',
+    );
 
-    expect(discardPaths).toHaveBeenCalledWith(REPO.root, ['a.txt']);
+    expect(discardPaths).toHaveBeenCalledWith(
+      REPO.root,
+      { tracked: ['a.txt'], untracked: [] },
+      expect.objectContaining({ reason: 'Discard changes to a.txt?' }),
+    );
     expect(result?.stashLabel).toContain('krakenless');
+    // The undo route must reach the user, not just the return value.
+    expect(store.getState().notice?.undoHint).toContain('git checkout');
+  });
+
+  it('says nothing was discarded when git created no stash', async () => {
+    // `stash push -- <path>` exits 0 and creates nothing when the path is
+    // unchanged; claiming success would send the user to an unrelated stash.
+    discardPaths.mockResolvedValue({ discarded: false, undoCommands: [] });
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await discard(
+      store,
+      { tracked: ['a.txt'], untracked: [] },
+      'Discard changes to a.txt?',
+    );
+
+    expect(store.getState().notice).toMatchObject({ tone: 'warning' });
+    expect(store.getState().notice?.undoHint).toBeUndefined();
   });
 
   it('refreshes the history after committing', async () => {

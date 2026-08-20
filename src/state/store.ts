@@ -8,7 +8,14 @@
 
 import type { AppConfig } from '../config/schema';
 import { defaultConfig } from '../config/schema';
-import type { Commit, FileDiff, RepoInfo, RepoStatus } from '../git/types';
+import type {
+  Branch,
+  Commit,
+  FileDiff,
+  RepoInfo,
+  RepoStatus,
+  StashEntry,
+} from '../git/types';
 
 /** Every panel is in exactly one of these states — no silent blank screens. */
 export type Loadable<T> =
@@ -28,12 +35,28 @@ export interface Selection {
   path: string | null;
 }
 
+/**
+ * A message the user must be able to read *after* the operation finished —
+ * notably the stash label a discard leaves behind, which is the only way back
+ * to the discarded work.
+ */
+export interface Notice {
+  tone: 'info' | 'warning' | 'error';
+  message: string;
+  /** Command the user can run to undo, when one exists. */
+  undoHint?: string;
+}
+
 export interface AppState {
   config: AppConfig;
   repo: Loadable<RepoInfo>;
   status: Loadable<RepoStatus>;
   commits: Loadable<Commit[]>;
   diff: Loadable<FileDiff[]>;
+  branches: Loadable<Branch[]>;
+  stashes: Loadable<StashEntry[]>;
+  /** Last thing a write operation did, shown until the user moves on. */
+  notice: Notice | null;
   selection: Selection;
   /** Set while a git command that changes the repository is in flight. */
   busy: boolean;
@@ -46,6 +69,9 @@ export function initialState(): AppState {
     status: idle(),
     commits: idle(),
     diff: idle(),
+    branches: idle(),
+    stashes: idle(),
+    notice: null,
     selection: { commitOid: null, path: null },
     busy: false,
   };
@@ -66,6 +92,13 @@ export type Action =
   | { type: 'diff/loading' }
   | { type: 'diff/loaded'; files: FileDiff[] }
   | { type: 'diff/failed'; message: string; kind?: string }
+  | { type: 'branches/loading' }
+  | { type: 'branches/loaded'; branches: Branch[] }
+  | { type: 'branches/failed'; message: string; kind?: string }
+  | { type: 'stashes/loading' }
+  | { type: 'stashes/loaded'; stashes: StashEntry[] }
+  | { type: 'stashes/failed'; message: string; kind?: string }
+  | { type: 'notice'; notice: Notice | null }
   | { type: 'selection/commit'; oid: string | null }
   | { type: 'selection/path'; path: string | null }
   | { type: 'busy'; busy: boolean };
@@ -123,6 +156,29 @@ export function reduce(state: AppState, action: Action): AppState {
         ...state,
         diff: { state: 'error', message: action.message, ...kindOf(action.kind) },
       };
+
+    case 'branches/loading':
+      return { ...state, branches: { state: 'loading' } };
+    case 'branches/loaded':
+      return { ...state, branches: { state: 'ready', value: action.branches } };
+    case 'branches/failed':
+      return {
+        ...state,
+        branches: { state: 'error', message: action.message, ...kindOf(action.kind) },
+      };
+
+    case 'stashes/loading':
+      return { ...state, stashes: { state: 'loading' } };
+    case 'stashes/loaded':
+      return { ...state, stashes: { state: 'ready', value: action.stashes } };
+    case 'stashes/failed':
+      return {
+        ...state,
+        stashes: { state: 'error', message: action.message, ...kindOf(action.kind) },
+      };
+
+    case 'notice':
+      return { ...state, notice: action.notice };
 
     case 'selection/commit':
       // Changing what is selected invalidates the diff shown for the old

@@ -16,16 +16,31 @@ import {
   type PushOptions,
 } from './commands/remote';
 import {
+  buildResolveStashCommand,
   buildStashApplyCommand,
   buildStashDropCommand,
   buildStashListCommand,
 } from './commands/stage';
+import type { Confirmation } from './confirm';
 import { GitError } from './errors';
 import { parseBranches, parseRemotes, parseStashes } from './parsers/branch';
 import { runGit } from './runner';
 import type { Branch, Remote, StashEntry } from './types';
 
-const CONFIRMED = { confirmed: true } as const;
+/** Read-only and additive commands; nothing here can lose work. */
+const SAFE = { confirmed: true } as const;
+
+/**
+ * Gate for the destructive half. The token can only be minted where the user
+ * was actually asked (`userConfirmed`), so no module-level constant can stand
+ * in for their answer.
+ */
+function approved(confirmation: Confirmation): { confirmed: true } {
+  if (confirmation.reason.length === 0) {
+    throw new GitError('needs-confirmation', 'Confirmation is missing its reason');
+  }
+  return { confirmed: true };
+}
 
 // --- reads -----------------------------------------------------------------
 
@@ -50,7 +65,7 @@ export async function listStashes(repo: string): Promise<StashEntry[]> {
 // --- network ---------------------------------------------------------------
 
 export function fetch(repo: string, options: FetchOptions = {}): Promise<unknown> {
-  return runGit(repo, buildFetchCommand(options), CONFIRMED);
+  return runGit(repo, buildFetchCommand(options), SAFE);
 }
 
 /**
@@ -61,7 +76,7 @@ export function fetch(repo: string, options: FetchOptions = {}): Promise<unknown
  */
 export async function pull(repo: string): Promise<void> {
   try {
-    await runGit(repo, buildPullCommand(), CONFIRMED);
+    await runGit(repo, buildPullCommand(), SAFE);
   } catch (error) {
     if (
       error instanceof GitError &&
@@ -78,11 +93,11 @@ export async function pull(repo: string): Promise<void> {
 }
 
 export function push(repo: string, options: PushOptions): Promise<unknown> {
-  return runGit(repo, buildPushCommand(options), CONFIRMED);
+  return runGit(repo, buildPushCommand(options), SAFE);
 }
 
-export function abortMerge(repo: string): Promise<unknown> {
-  return runGit(repo, buildMergeAbortCommand(), CONFIRMED);
+export function abortMerge(repo: string, confirmation: Confirmation): Promise<unknown> {
+  return runGit(repo, buildMergeAbortCommand(), approved(confirmation));
 }
 
 // --- branches --------------------------------------------------------------
@@ -92,11 +107,11 @@ export function createBranch(
   name: string,
   startPoint?: string,
 ): Promise<unknown> {
-  return runGit(repo, buildCreateBranchCommand(name, startPoint), CONFIRMED);
+  return runGit(repo, buildCreateBranchCommand(name, startPoint), SAFE);
 }
 
 export function switchBranch(repo: string, name: string): Promise<unknown> {
-  return runGit(repo, buildSwitchCommand(name), CONFIRMED);
+  return runGit(repo, buildSwitchCommand(name), SAFE);
 }
 
 export function switchNewBranch(
@@ -104,11 +119,11 @@ export function switchNewBranch(
   name: string,
   startPoint?: string,
 ): Promise<unknown> {
-  return runGit(repo, buildSwitchNewCommand(name, startPoint), CONFIRMED);
+  return runGit(repo, buildSwitchNewCommand(name, startPoint), SAFE);
 }
 
 export function checkoutRevision(repo: string, rev: string): Promise<unknown> {
-  return runGit(repo, buildCheckoutRevisionCommand(rev), CONFIRMED);
+  return runGit(repo, buildCheckoutRevisionCommand(rev), SAFE);
 }
 
 export interface DeleteBranchOutcome {
@@ -127,15 +142,17 @@ export interface DeleteBranchOutcome {
 export async function deleteBranch(
   repo: string,
   name: string,
+  confirmation: Confirmation,
   options: { force: boolean } = { force: false },
 ): Promise<DeleteBranchOutcome> {
+  const gate = approved(confirmation);
   if (options.force) {
-    await runGit(repo, buildDeleteBranchCommand(name, { force: true }), CONFIRMED);
+    await runGit(repo, buildDeleteBranchCommand(name, { force: true }), gate);
     return { deleted: true };
   }
 
   try {
-    await runGit(repo, buildDeleteBranchCommand(name, { force: false }), CONFIRMED);
+    await runGit(repo, buildDeleteBranchCommand(name, { force: false }), gate);
     return { deleted: true };
   } catch (error) {
     if (error instanceof GitError && /not fully merged/i.test(error.stderr)) {
@@ -150,14 +167,46 @@ export async function deleteBranch(
 
 // --- stash -----------------------------------------------------------------
 
-export function applyStash(
+/**
+ * Confirms `ref` still points at `expectedOid` before touching it.
+ *
+ * Stash indices shift on every push — including this app's own discard — so a
+ * click on `stash@{0}` can land on an entry the user never saw. The list hands
+ * back the oid it displayed; if the ref moved, nothing is touched.
+ */
+async function assertStashUnchanged(
   repo: string,
   ref: string,
-  options: { pop: boolean },
-): Promise<unknown> {
-  return runGit(repo, buildStashApplyCommand(ref, options), CONFIRMED);
+  expectedOid: string,
+): Promise<void> {
+  const output = await runGit(repo, buildResolveStashCommand(ref), {
+    allowExitCodes: [1],
+  });
+  const actual = output.stdout.trim();
+  if (actual !== expectedOid) {
+    throw new GitError(
+      'command-failed',
+      'The stash list changed since it was loaded. Refresh and try again.',
+      { args: [ref] },
+    );
+  }
 }
 
-export function dropStash(repo: string, ref: string): Promise<unknown> {
-  return runGit(repo, buildStashDropCommand(ref), CONFIRMED);
+export async function applyStash(
+  repo: string,
+  entry: { ref: string; oid: string },
+  options: { pop: boolean },
+  confirmation: Confirmation,
+): Promise<void> {
+  await assertStashUnchanged(repo, entry.ref, entry.oid);
+  await runGit(repo, buildStashApplyCommand(entry.ref, options), approved(confirmation));
+}
+
+export async function dropStash(
+  repo: string,
+  entry: { ref: string; oid: string },
+  confirmation: Confirmation,
+): Promise<void> {
+  await assertStashUnchanged(repo, entry.ref, entry.oid);
+  await runGit(repo, buildStashDropCommand(entry.ref), approved(confirmation));
 }

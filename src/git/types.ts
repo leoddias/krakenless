@@ -160,6 +160,14 @@ export interface FileDiff {
    * which *must* be staged wholesale, so staging code has to switch on this.
    */
   conflicted: boolean;
+  /**
+   * File modes as git reported them, when it did. The patch serializer must
+   * re-emit these: a patch that omits a mode change stages the content without
+   * the exec bit, and one that guesses `100644` for a symlink stages a regular
+   * file containing the link target.
+   */
+  oldMode?: string;
+  newMode?: string;
   /** Raw `diff --git` header lines preceding the first hunk. */
   headerLines: string[];
   hunks: Hunk[];
@@ -187,6 +195,11 @@ export interface Remote {
 export interface StashEntry {
   /** Ref of the entry, e.g. `stash@{0}`. */
   ref: string;
+  /**
+   * Commit the ref pointed at when the list was read. Indices shift whenever
+   * anything is stashed, so every mutation re-checks this before acting.
+   */
+  oid: string;
   index: number;
   message: string;
   /** Branch the stash was taken on, when git recorded one. */

@@ -24,17 +24,34 @@ function fail(message: string): never {
  * `headerLines` may carry `index`/`mode` lines that no longer describe the
  * subset of hunks being staged.
  */
+const DEFAULT_MODE = '100644';
+
 function fileHeader(file: FileDiff): string[] {
   const oldSide = file.kind === 'added' ? '/dev/null' : `a/${file.oldPath}`;
   const newSide = file.kind === 'deleted' ? '/dev/null' : `b/${file.newPath}`;
-  return [
-    `diff --git a/${file.oldPath} b/${file.newPath}`,
-    ...(file.kind === 'added' ? ['new file mode 100644'] : []),
-    ...(file.kind === 'deleted' ? ['deleted file mode 100644'] : []),
-    `--- ${oldSide}`,
-    `+++ ${newSide}`,
-  ];
+  const lines = [`diff --git a/${file.oldPath} b/${file.newPath}`];
+
+  // Modes are re-emitted from what git reported. Guessing 100644 for a file
+  // that is executable — or a symlink — stages something other than what the
+  // user is looking at.
+  if (file.kind === 'added') {
+    lines.push(`new file mode ${file.newMode ?? DEFAULT_MODE}`);
+  } else if (file.kind === 'deleted') {
+    lines.push(`deleted file mode ${file.oldMode ?? DEFAULT_MODE}`);
+  } else if (file.oldMode !== undefined && file.newMode !== undefined) {
+    lines.push(`old mode ${file.oldMode}`, `new mode ${file.newMode}`);
+  }
+
+  lines.push(`--- ${oldSide}`, `+++ ${newSide}`);
+  return lines;
 }
+
+/**
+ * Paths git would have to C-quote in the `---`/`+++` lines. Git's own parsing
+ * of those lines is heuristic, so rather than reproduce the quoting we refuse
+ * to build a patch at all — the caller falls back to whole-file staging.
+ */
+const UNQUOTABLE_PATH = /["\\\t\n]/;
 
 interface HunkBody {
   lines: string[];
@@ -125,6 +142,15 @@ export function serializeHunks(file: FileDiff, hunks: Hunk[]): string {
   }
   if (file.conflicted) {
     fail(`Cannot build a patch for the conflicted file ${file.newPath}`);
+  }
+  if (file.kind === 'renamed' || file.kind === 'copied') {
+    // Git infers a rename from the differing paths in the header, so a patch
+    // carrying only some hunks would un-rename the file in the index while
+    // leaving the other hunks applied to the old path.
+    fail(`Hunk-level staging is not supported for the ${file.kind} file ${file.newPath}`);
+  }
+  if (UNQUOTABLE_PATH.test(file.oldPath) || UNQUOTABLE_PATH.test(file.newPath)) {
+    fail(`Cannot build a patch for a path containing quotes, tabs or newlines`);
   }
   if (hunks.length === 0) {
     fail(`No hunks selected for ${file.newPath}`);

@@ -11,7 +11,7 @@ import type { GitCommand } from '../types';
 
 /** Stages whole paths. Adding is always recoverable, so it needs no confirmation. */
 export function buildStageCommand(paths: string[]): GitCommand {
-  return { args: ['add', '--', ...pathspec(paths).slice(1)] };
+  return { args: ['add', ...pathspec(paths)] };
 }
 
 /**
@@ -27,20 +27,34 @@ export function buildUnstageCommand(paths: string[]): GitCommand {
  * tree untouched: a malformed patch can then fail without having changed a
  * single file the user is editing.
  */
-export function buildApplyCachedCommand(options: { reverse: boolean }): GitCommand {
-  const args = ['apply', '--cached', '--unidiff-zero', '--whitespace=nowarn'];
+export interface ApplyOptions {
+  reverse: boolean;
+  /**
+   * Only for hunks with no context lines. `--unidiff-zero` disables git's
+   * context safety check, so passing it unconditionally would throw away the
+   * protection that catches a patch aimed at the wrong place in the file.
+   */
+  zeroContext?: boolean;
+}
+
+function applyArgs(options: ApplyOptions, check: boolean): string[] {
+  const args = ['apply', '--cached'];
+  if (check) args.push('--check');
+  args.push('--whitespace=nowarn');
+  if (options.zeroContext === true) args.push('--unidiff-zero');
   if (options.reverse) args.push('--reverse');
   // The patch itself arrives on stdin; `-` tells git to read it from there.
   args.push('-');
-  return { args, destructive: options.reverse };
+  return args;
+}
+
+export function buildApplyCachedCommand(options: ApplyOptions): GitCommand {
+  return { args: applyArgs(options, false), destructive: options.reverse };
 }
 
 /** Dry run of the same patch. Used to refuse a patch before it can half-apply. */
-export function buildApplyCheckCommand(options: { reverse: boolean }): GitCommand {
-  const args = ['apply', '--cached', '--check', '--unidiff-zero', '--whitespace=nowarn'];
-  if (options.reverse) args.push('--reverse');
-  args.push('-');
-  return { args };
+export function buildApplyCheckCommand(options: ApplyOptions): GitCommand {
+  return { args: applyArgs(options, true) };
 }
 
 export interface CommitOptions {
@@ -70,16 +84,29 @@ export function buildCommitCommand(options: CommitOptions): GitCommand {
  * Discards working-tree changes for specific paths *by stashing them*.
  *
  * A path-limited `stash push` reverts exactly those paths and keeps the changes
- * recoverable with `git stash pop` — verified against git 2.39: other files'
- * edits and untracked files outside the pathspec are left alone. `git restore`
- * would do the same job with no way back, which fails the safety bar: a
- * mis-click must cost a `stash pop`, not the user's work.
+ * recoverable — verified against git 2.39: other files' edits and untracked
+ * files outside the pathspec are left alone. `git restore` would do the same
+ * job with no way back, which fails the safety bar.
+ *
+ * `--keep-index` is load-bearing. Without it the stash reverts the *staged*
+ * content to HEAD too, and no `stash pop` puts that snapshot back — discarding
+ * an unstaged edit would silently destroy a staged one. With it, discard means
+ * "drop my unstaged edits", which is exactly `git restore <path>` semantics.
  */
-export function buildDiscardCommand(paths: string[], label: string): GitCommand {
+export function buildDiscardCommand(
+  paths: string[],
+  label: string,
+  options: { keepIndex: boolean },
+): GitCommand {
   return {
     args: [
       'stash',
       'push',
+      // Only for tracked paths: git 2.39 restores the index side with
+      // `checkout-index`, which fails outright on an untracked path
+      // ("did not match any file(s) known to git"). An untracked file has no
+      // index entry to protect anyway.
+      ...(options.keepIndex ? ['--keep-index'] : []),
       '--include-untracked',
       '--message',
       label,
@@ -94,6 +121,19 @@ export function buildDiscardCommand(paths: string[], label: string): GitCommand 
 export function buildStashListCommand(): GitCommand {
   return {
     args: ['stash', 'list', '-z', '--format=%gd%x00%H%x00%aI%x00%gs'],
+  };
+}
+
+/**
+ * Resolves a stash ref to the commit it points at.
+ *
+ * Stash indices shift whenever anything is stashed — including this app's own
+ * discard. Verifying the oid before dropping or popping is what stops a click
+ * on the row the user was looking at from destroying a different entry.
+ */
+export function buildResolveStashCommand(ref: string): GitCommand {
+  return {
+    args: ['rev-parse', '--verify', '--quiet', `${assertRevision(ref)}^{commit}`],
   };
 }
 

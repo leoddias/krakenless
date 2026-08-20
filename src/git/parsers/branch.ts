@@ -54,6 +54,10 @@ export function parseBranches(stdout: string): Branch[] {
     }
 
     const tracking = parseTracking(track);
+    // `refs/remotes/<remote>/HEAD` is a symref, not a checkoutable branch;
+    // offering "switch" on it lands the user in detached HEAD by surprise.
+    if (/^refs\/remotes\/[^/]+\/HEAD$/.test(fullRef)) continue;
+
     const branch: Branch = {
       name,
       oid,
@@ -121,7 +125,7 @@ export function parseStashes(stdout: string): StashEntry[] {
 
   const entries: StashEntry[] = [];
   for (let i = 0; i < chunks.length; i += FIELDS_PER_STASH) {
-    const [ref, , date, message] = chunks.slice(i, i + FIELDS_PER_STASH) as [
+    const [ref, oid, date, message] = chunks.slice(i, i + FIELDS_PER_STASH) as [
       string,
       string,
       string,
@@ -131,7 +135,8 @@ export function parseStashes(stdout: string): StashEntry[] {
     const index = /^stash@\{(\d+)\}$/.exec(ref);
     if (index === null) fail(`Unrecognized stash ref: ${ref.slice(0, 40)}`);
 
-    const entry: StashEntry = { ref, index: Number(index[1]), message, date };
+    if (oid.length === 0) fail(`Stash ${ref} has no object id`);
+    const entry: StashEntry = { ref, oid, index: Number(index[1]), message, date };
     // `On <branch>: <message>` is how git records where a stash was taken.
     const branch = /^(?:On|WIP on) ([^:]+):/.exec(message);
     if (branch !== null) entry.branch = branch[1];

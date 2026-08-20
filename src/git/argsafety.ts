@@ -54,6 +54,12 @@ export function assertRefName(name: string): string {
   if (name.length === 0) reject('empty ref name', name);
   // The one that matters: a ref starting with `-` is read as an option.
   if (name.startsWith('-')) reject('ref name may not start with a dash', name);
+  // `git branch '+main'` is legal, and `git push origin +main` reads that as
+  // the refspec `+main:main` — a lease-less force push.
+  if (name.startsWith('+')) reject('ref name may not start with a plus', name);
+  // A ref literally named `refs/heads/x` would make a refspec ambiguous.
+  if (name.startsWith('refs/'))
+    reject('ref name must be short, not a full ref path', name);
   if (name.includes('\0')) reject('ref name contains NUL', name);
   // Rules from git-check-ref-format(1) that are cheap to enforce here.
   if (/[\s~^:?*[\\]/.test(name)) reject('ref name contains a forbidden character', name);

@@ -56,7 +56,13 @@ export function buildPushCommand(options: PushOptions): GitCommand {
   const args = ['push', '--progress'];
   if (options.setUpstream === true) args.push('--set-upstream');
   if (options.forceWithLease === true) args.push('--force-with-lease');
-  args.push(assertRefName(options.remote), assertRefName(options.branch));
+
+  const branch = assertRefName(options.branch);
+  args.push(assertRefName(options.remote));
+  // An explicit, fully-qualified refspec. A bare branch token would let a name
+  // like `+main` be read as a force refspec, and a name like `refs/heads/x`
+  // resolve somewhere unintended.
+  args.push(`refs/heads/${branch}:refs/heads/${branch}`);
   return {
     args,
     destructive: options.forceWithLease === true,

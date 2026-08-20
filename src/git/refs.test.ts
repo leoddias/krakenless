@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { deleteBranch, listStashes, pull, push } from './refs';
+import { userConfirmed } from './confirm';
 import { GitError } from './errors';
 import { buildFetchCommand, buildPullCommand, buildPushCommand } from './commands/remote';
 
@@ -91,7 +92,9 @@ describe('deleteBranch', () => {
 
   it('deletes with the safe form first', async () => {
     invoke.mockResolvedValue(raw());
-    await expect(deleteBranch('C:/repo', 'topic')).resolves.toEqual({ deleted: true });
+    await expect(
+      deleteBranch('C:/repo', 'topic', userConfirmed('delete branch topic')),
+    ).resolves.toEqual({ deleted: true });
     expect(invoke).toHaveBeenCalledWith(
       'git_run',
       expect.objectContaining({ args: ['branch', '-d', 'topic'] }),
@@ -104,7 +107,7 @@ describe('deleteBranch', () => {
       raw({ code: 1, stderr: "error: the branch 'topic' is not fully merged" }),
     );
 
-    const outcome = await deleteBranch('C:/repo', 'topic');
+    const outcome = await deleteBranch('C:/repo', 'topic', userConfirmed('delete topic'));
     expect(outcome.deleted).toBe(false);
     expect(outcome.unmergedWarning).toContain('not merged');
     expect(invoke).toHaveBeenCalledTimes(1);
@@ -112,7 +115,9 @@ describe('deleteBranch', () => {
 
   it('forces only when explicitly asked', async () => {
     invoke.mockResolvedValue(raw());
-    await deleteBranch('C:/repo', 'topic', { force: true });
+    await deleteBranch('C:/repo', 'topic', userConfirmed('force delete topic'), {
+      force: true,
+    });
     expect(invoke).toHaveBeenCalledWith(
       'git_run',
       expect.objectContaining({ args: ['branch', '-D', 'topic'] }),
@@ -121,7 +126,9 @@ describe('deleteBranch', () => {
 
   it('propagates an unrelated failure', async () => {
     invoke.mockResolvedValue(raw({ code: 1, stderr: "error: branch 'topic' not found" }));
-    await expect(deleteBranch('C:/repo', 'topic')).rejects.toThrow(GitError);
+    await expect(
+      deleteBranch('C:/repo', 'topic', userConfirmed('delete topic')),
+    ).rejects.toThrow(GitError);
   });
 });
 
@@ -138,6 +145,7 @@ describe('listStashes', () => {
     await expect(listStashes('C:/repo')).resolves.toEqual([
       {
         ref: 'stash@{0}',
+        oid: 'abc',
         index: 0,
         message: 'On main: wip',
         branch: 'main',
