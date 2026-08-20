@@ -1,0 +1,68 @@
+.bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-raised);
+}
+
+.info {
+  border-left: 3px solid var(--accent);
+}
+
+.warning {
+  border-left: 3px solid #d7a54a;
+}
+
+.error {
+  border-left: 3px solid var(--danger);
+}
+
+.body {
+  min-width: 0;
+  flex: 1;
+}
+
+.message {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.hintLabel {
+  margin: 0.4rem 0 0.2rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.command {
+  margin: 0 0 0.25rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 4px;
+  background: var(--bg);
+  /* The command is the only route back to discarded work: it must be readable
+     and selectable in full, never truncated. */
+  overflow-x: auto;
+  white-space: pre;
+  font-size: 0.8rem;
+  user-select: all;
+}
+
+.dismiss {
+  flex: none;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg);
+  padding: 0.25rem 0.6rem;
+  cursor: pointer;
+}
+
+.dismiss:hover {
+  border-color: var(--accent);
+}
+
+.dismiss:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

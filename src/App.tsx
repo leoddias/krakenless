@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import './index.css';
 import './app.css';
 import { loadConfig } from './config/store';
@@ -7,6 +7,8 @@ import { useAppState, useStore } from './state/hooks';
 import { watchRepository, type WatchHandle } from './state/watch';
 import { ChangesView } from './views/changes';
 import { DiffView } from './views/diff';
+import { SettingsView } from './views/settings';
+import { NoticeBar } from './views/shell';
 import { HistoryView } from './views/history/HistoryView';
 import { WelcomeView } from './views/welcome';
 
@@ -53,7 +55,13 @@ function useRepositoryWatch(root: string | null): void {
   }, [store, root]);
 }
 
-function RepoHeader({ root }: { root: string }): ReactNode {
+function RepoHeader({
+  root,
+  onOpenSettings,
+}: {
+  root: string;
+  onOpenSettings: () => void;
+}): ReactNode {
   const store = useStore();
   const status = useAppState((state) => state.status);
   const name = root.split('/').filter(Boolean).pop() ?? root;
@@ -88,9 +96,12 @@ function RepoHeader({ root }: { root: string }): ReactNode {
           </span>
         )}
       </div>
+      <button type="button" className="repo-header__action" onClick={onOpenSettings}>
+        Settings
+      </button>
       <button
         type="button"
-        className="repo-header__close"
+        className="repo-header__action"
         onClick={() => closeRepo(store)}
       >
         Close repository
@@ -101,10 +112,16 @@ function RepoHeader({ root }: { root: string }): ReactNode {
 
 function RepoView({ root }: { root: string }): ReactNode {
   useRepositoryWatch(root);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  if (settingsOpen) {
+    return <SettingsView onClose={() => setSettingsOpen(false)} />;
+  }
 
   return (
     <div className="repo-layout">
-      <RepoHeader root={root} />
+      <RepoHeader root={root} onOpenSettings={() => setSettingsOpen(true)} />
+      <NoticeBar />
       <div className="repo-panels">
         <section className="repo-panels__history" aria-label="History">
           <HistoryView />

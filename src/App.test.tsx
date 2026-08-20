@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 import { StoreProvider } from './state/hooks';
@@ -22,6 +22,13 @@ vi.mock('./views/history/HistoryView', () => ({
 }));
 vi.mock('./views/diff', () => ({ DiffView: () => <div>diff view</div> }));
 vi.mock('./views/changes', () => ({ ChangesView: () => <div>changes view</div> }));
+vi.mock('./views/settings', () => ({
+  SettingsView: ({ onClose }: { onClose: () => void }) => (
+    <button type="button" onClick={onClose}>
+      settings view
+    </button>
+  ),
+}));
 
 const REPO: RepoInfo = {
   root: 'C:/repos/app',
@@ -85,6 +92,38 @@ describe('App', () => {
 
     store.dispatch({ type: 'repo/closed' });
     await waitFor(() => expect(stop).toHaveBeenCalled());
+  });
+
+  it('surfaces a notice, with its undo command, above the panels', () => {
+    const store = createStore();
+    store.dispatch({ type: 'repo/opened', repo: REPO });
+    store.dispatch({
+      type: 'notice',
+      notice: {
+        tone: 'info',
+        message: 'Discarded changes to 1 file(s).',
+        undoHint: 'git restore --source=abc123 --worktree -- "a.txt"',
+      },
+    });
+    renderApp(store);
+
+    expect(screen.getByRole('status')).toHaveTextContent('Discarded changes');
+    expect(
+      screen.getByText('git restore --source=abc123 --worktree -- "a.txt"'),
+    ).toBeInTheDocument();
+  });
+
+  it('opens settings and comes back to the panels', () => {
+    const store = createStore();
+    store.dispatch({ type: 'repo/opened', repo: REPO });
+    renderApp(store);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    expect(screen.getByText('settings view')).toBeInTheDocument();
+    expect(screen.queryByText('history view')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings view' }));
+    expect(screen.getByText('history view')).toBeInTheDocument();
   });
 
   it('shows the branch and ahead/behind counters', () => {
