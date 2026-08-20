@@ -1,0 +1,49 @@
+import { pathspec } from '../argsafety';
+import type { GitCommand } from '../types';
+
+export interface StatusOptions {
+  /**
+   * `all` lists every file inside an untracked directory; `normal` collapses
+   * the directory into a single `dir/` entry. The GUI stages individual files,
+   * so `all` is the default — with `normal` the user would be offered a path
+   * that is not a file.
+   */
+  untracked?: 'all' | 'normal' | 'no';
+  /** Adds `!` records for ignored paths. Off by default: the list is huge. */
+  includeIgnored?: boolean;
+  /** Limit the report to these repository-relative paths. */
+  paths?: string[];
+}
+
+/**
+ * Status of the whole worktree, machine-readable.
+ *
+ * Uses porcelain **v2** (v1 cannot express submodule state or rename scores)
+ * with `-z`: with `-z` git never quotes or escapes a path, so a filename with
+ * a newline, a quote, or a backslash arrives verbatim. `--branch` adds the
+ * `# branch.*` headers the UI needs for ahead/behind.
+ *
+ * `--no-pager` and `-c core.quotePath=false` are prepended by the runner for
+ * every invocation, so they are deliberately absent here.
+ */
+export function buildStatusCommand(options: StatusOptions = {}): GitCommand {
+  const args = [
+    'status',
+    '--porcelain=v2',
+    '--branch',
+    '-z',
+    `--untracked-files=${options.untracked ?? 'all'}`,
+  ];
+  if (options.includeIgnored) {
+    // `matching` lists ignored files individually. The default (`traditional`)
+    // collapses an ignored directory into one entry unless untracked=all, so
+    // its output would silently change with the untracked mode.
+    args.push('--ignored=matching');
+  }
+  if (options.paths !== undefined) {
+    // Routed through pathspec(): a user-selected path that is absolute or
+    // escapes the repository would make status report a tree we never opened.
+    args.push(...pathspec(options.paths));
+  }
+  return { args };
+}
