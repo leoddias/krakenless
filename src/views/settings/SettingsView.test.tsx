@@ -115,6 +115,44 @@ describe('SettingsView', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it('offers author pictures switched off', () => {
+    renderSettings();
+    expect(screen.getByRole('checkbox', { name: /author pictures/i })).not.toBeChecked();
+  });
+
+  it('says plainly what is sent and to whom', () => {
+    // The whole pitch is privacy: the copy has to name the host and the thing
+    // it receives, not describe the feature and leave that out.
+    renderSettings();
+    const field = screen
+      .getByRole('checkbox', { name: /author pictures/i })
+      .closest('label');
+    expect(field).toHaveTextContent('www.gravatar.com');
+    expect(field).toHaveTextContent('hash of their email address and your IP address');
+    expect(field).toHaveTextContent('avatars.githubusercontent.com');
+    expect(field).toHaveTextContent('thirty days');
+  });
+
+  it('saves the choice to fetch pictures', async () => {
+    const { store } = renderSettings();
+    fireEvent.click(screen.getByRole('checkbox', { name: /author pictures/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
+    expect(saveConfig.mock.calls[0]?.[0]).toMatchObject({ remoteAvatars: true });
+    expect(store.getState().config.remoteAvatars).toBe(true);
+  });
+
+  it('changes what About claims once pictures are on', () => {
+    renderSettings();
+    expect(screen.getByLabelText('About')).not.toHaveTextContent('Gravatar');
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /author pictures/i }));
+    expect(screen.getByLabelText('About')).toHaveTextContent(
+      'plus Gravatar and GitHub for the author pictures you turned on above',
+    );
+  });
+
   it('drops the saved marker as soon as a field changes again', async () => {
     renderSettings();
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));

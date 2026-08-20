@@ -1,3 +1,4 @@
+mod avatars;
 mod config;
 mod external;
 mod git_runner;
@@ -23,6 +24,8 @@ pub fn run() {
             config::config_read,
             config::config_write,
             config::config_dir_path,
+            avatars::avatar_read,
+            avatars::avatar_write,
             watcher::watch_repo,
             watcher::unwatch_repo,
             external::open_external,

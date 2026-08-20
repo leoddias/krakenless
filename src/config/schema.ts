@@ -24,15 +24,18 @@ export interface AppConfig {
   mergetool: string;
   theme: 'dark' | 'light' | 'system';
   /**
-   * Opt-in: fetch author pictures from `avatars.githubusercontent.com`.
+   * Opt-in: fetch author pictures from Gravatar and GitHub.
    *
    * Off by default, and the only setting in this file that can cause a network
-   * request to anything other than a git remote (ADR-0019). It covers only
-   * authors whose email is a GitHub noreply address, because that address
-   * already carries the account id — no API call, no token, and nobody's
-   * private email is ever sent anywhere.
+   * request to anything other than a git remote (ADR-0021). When it is on,
+   * every author whose picture is not already cached costs one request:
+   * `avatars.githubusercontent.com` by account id for GitHub noreply
+   * addresses, and `www.gravatar.com` — which receives a hash of the address
+   * and this machine's IP — for everyone else. Named `remoteAvatars` rather
+   * than for one of those hosts, because the honest name is the one that says
+   * a request leaves the machine.
    */
-  githubAvatars: boolean;
+  remoteAvatars: boolean;
   layout: LayoutConfig;
 }
 
@@ -69,7 +72,7 @@ export function defaultConfig(): AppConfig {
     editorCommand: '',
     mergetool: '',
     theme: 'dark',
-    githubAvatars: false,
+    remoteAvatars: false,
     layout: { sidebarWidth: 264, detailWidth: 340, historyRatio: 0.62 },
   };
 }
@@ -140,6 +143,26 @@ function asLayout(value: unknown): LayoutConfig {
   });
 }
 
+/**
+ * Reads the author-pictures switch, honouring the name it used to have.
+ *
+ * Strictly `true`: anything else on disk — a string "true", a 1, a typo —
+ * leaves the network alone, because the safe reading of a malformed privacy
+ * setting is the private one.
+ *
+ * `githubAvatars` (ADR-0019) was renamed to `remoteAvatars` when the feature
+ * grew to cover Gravatar (ADR-0021). Someone who had switched the old one on
+ * keeps pictures rather than silently losing them; the reverse — a rename
+ * quietly turning a feature *on* — is what would need to be avoided, and the
+ * old key can only ever have meant "on". The new key wins whenever it is
+ * present at all, so a file that says `remoteAvatars: false` is off no matter
+ * what a leftover `githubAvatars` line says.
+ */
+function readRemoteAvatars(raw: Record<string, unknown>): boolean {
+  if ('remoteAvatars' in raw) return raw['remoteAvatars'] === true;
+  return raw['githubAvatars'] === true;
+}
+
 function asRecentRepos(value: unknown): RecentRepo[] {
   if (!Array.isArray(value)) return [];
   const seen = new Set<string>();
@@ -185,10 +208,7 @@ export function parseConfig(text: string | null): AppConfig {
       theme === 'light' || theme === 'system' || theme === 'dark'
         ? theme
         : defaults.theme,
-    // Strictly `true`: anything else on disk — a string "true", a 1, a typo —
-    // leaves the network alone, because the safe reading of a malformed
-    // privacy setting is the private one.
-    githubAvatars: raw['githubAvatars'] === true,
+    remoteAvatars: readRemoteAvatars(raw),
     layout: asLayout(raw['layout']),
   };
 }

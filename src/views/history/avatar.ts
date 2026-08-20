@@ -2,12 +2,15 @@
  * Author avatars, computed locally.
  *
  * Git stores a name and an email in a commit and nothing else — there is no
- * picture in the repository. GitKraken fills that gap by asking Gravatar, which
- * means sending a hash of the author's email to a third party for every commit
- * on screen. Krakenless makes no network call except to git remotes, so the
- * avatar is *derived* instead: initials on a colour picked deterministically
- * from the identity. Same author, same badge, in every repository, forever, and
- * nothing leaves the machine.
+ * picture in the repository. This module makes one up rather than asking
+ * anybody: initials on a colour picked deterministically from the identity.
+ * Same author, same badge, in every repository, forever, and nothing leaves
+ * the machine.
+ *
+ * This is what the graph draws by default. A user who switches `remoteAvatars`
+ * on (ADR-0021) gets a fetched picture layered *over* this badge, never
+ * instead of it, so a request that is blocked, offline or 404 still leaves a
+ * face rather than a hole.
  */
 
 /**

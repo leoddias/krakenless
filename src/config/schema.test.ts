@@ -133,20 +133,40 @@ describe('withoutRecentRepo', () => {
   });
 });
 
-describe('githubAvatars', () => {
+describe('remoteAvatars', () => {
   it('is off in a fresh config', () => {
-    expect(defaultConfig().githubAvatars).toBe(false);
+    expect(defaultConfig().remoteAvatars).toBe(false);
   });
 
   it('is on only when the file says exactly true', () => {
-    expect(parseConfig('{"githubAvatars":true}').githubAvatars).toBe(true);
+    expect(parseConfig('{"remoteAvatars":true}').remoteAvatars).toBe(true);
   });
 
   it('reads anything else as off, because that is the private answer', () => {
     for (const value of ['"true"', '1', 'null', '"yes"', '{}']) {
-      expect(parseConfig(`{"githubAvatars":${value}}`).githubAvatars).toBe(false);
+      expect(parseConfig(`{"remoteAvatars":${value}}`).remoteAvatars).toBe(false);
     }
-    expect(parseConfig('{}').githubAvatars).toBe(false);
+    expect(parseConfig('{}').remoteAvatars).toBe(false);
+  });
+
+  it('keeps the pictures of someone who had the old githubAvatars on', () => {
+    // Renamed in ADR-0021. A rename must not silently switch a feature the
+    // user chose back off.
+    expect(parseConfig('{"githubAvatars":true}').remoteAvatars).toBe(true);
+  });
+
+  it('lets the new key win whenever it is in the file', () => {
+    expect(
+      parseConfig('{"githubAvatars":true,"remoteAvatars":false}').remoteAvatars,
+    ).toBe(false);
+    expect(parseConfig('{"githubAvatars":false}').remoteAvatars).toBe(false);
+  });
+
+  it('writes only the new key, so the old one dies on the next save', () => {
+    const config = parseConfig('{"githubAvatars":true}');
+    const text = serializeConfig(config);
+    expect(text).toContain('"remoteAvatars": true');
+    expect(text).not.toContain('githubAvatars');
   });
 });
 
