@@ -1,7 +1,13 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RepoStatus, StatusEntry } from '../../git/types';
-import { commitStaged, discard, stage, unstage } from '../../state/actions';
+import {
+  commitStaged,
+  discard,
+  refreshStatus,
+  stage,
+  unstage,
+} from '../../state/actions';
 import { StoreProvider } from '../../state/hooks';
 import { createStore, type Store } from '../../state/store';
 import { ChangesView } from './ChangesView';
@@ -11,12 +17,14 @@ vi.mock('../../state/actions', () => ({
   unstage: vi.fn(),
   discard: vi.fn(),
   commitStaged: vi.fn(),
+  refreshStatus: vi.fn(),
 }));
 
 const stageMock = vi.mocked(stage);
 const unstageMock = vi.mocked(unstage);
 const discardMock = vi.mocked(discard);
 const commitMock = vi.mocked(commitStaged);
+const refreshMock = vi.mocked(refreshStatus);
 
 function entry(overrides: Partial<StatusEntry> & { path: string }): StatusEntry {
   return {
@@ -78,6 +86,7 @@ beforeEach(() => {
   unstageMock.mockReset().mockResolvedValue(undefined);
   discardMock.mockReset().mockResolvedValue({ stashLabel: 'krakenless: discarded now' });
   commitMock.mockReset().mockResolvedValue(undefined);
+  refreshMock.mockReset().mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -239,6 +248,29 @@ describe('staging', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Unstage all' }));
 
     expect(unstageMock).toHaveBeenCalledWith(store, ['a.ts', 'old.ts', 'new.ts']);
+  });
+
+  it('reports a failed staging and re-reads the status', async () => {
+    stageMock.mockRejectedValue(new Error('fatal: Unable to create index.lock'));
+    const store = renderWithEntries([entry({ path: 'a.ts', worktree: 'modified' })]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stage a.ts' }));
+
+    const alert = await screen.findByRole('alert');
+    // `git add` can stage part of its pathspec and still fail, so the lists on
+    // screen cannot be trusted until they are read again.
+    expect(alert).toHaveTextContent('may already have been applied');
+    expect(alert).toHaveTextContent('fatal: Unable to create index.lock');
+    expect(refreshMock).toHaveBeenCalledWith(store);
+  });
+
+  it('reports a failed unstaging the same way', async () => {
+    unstageMock.mockRejectedValue(new Error('fatal: pathspec did not match'));
+    renderWithEntries([entry({ path: 'a.ts', index: 'modified' })]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unstage a.ts' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unstaging failed');
   });
 
   it('disables bulk actions when the list is empty', () => {

@@ -17,7 +17,13 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { RepoStatus, StatusEntry } from '../../git/types';
-import { commitStaged, discard, stage, unstage } from '../../state/actions';
+import {
+  commitStaged,
+  discard,
+  refreshStatus,
+  stage,
+  unstage,
+} from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
 import type { Loadable } from '../../state/store';
 import styles from './ChangesView.module.css';
@@ -34,6 +40,8 @@ import {
 } from './labels';
 
 interface Recovery {
+  /** Local identity: two discards can share a label to the millisecond. */
+  id: number;
   stashLabel: string;
   paths: string[];
 }
@@ -64,6 +72,7 @@ export function ChangesView(): ReactNode {
   const [pending, setPending] = useState<Pending | null>(null);
   const [recoveries, setRecoveries] = useState<Recovery[]>([]);
   const [failure, setFailure] = useState<string | null>(null);
+  const nextRecoveryId = useRef(0);
   const [draft, setDraft] = useState<CommitDraft>({
     message: '',
     amend: false,
@@ -80,6 +89,26 @@ export function ChangesView(): ReactNode {
       stagedToo: paths.filter((path) => stagedPaths.has(path)),
       notice: 'none',
     });
+  };
+
+  /**
+   * Runs a staging write and, if it fails, says so and re-reads the status.
+   *
+   * A rejected `git add` can still have staged part of its pathspec, and the
+   * action layer only refreshes on success — leaving the lists showing a world
+   * that no longer matches the index is how a user commits what they believed
+   * they had excluded.
+   */
+  const runStaging = async (what: string, run: () => Promise<void>): Promise<void> => {
+    setFailure(null);
+    try {
+      await run();
+    } catch (error) {
+      setFailure(
+        `${what} failed, and part of it may already have been applied. The lists below have been re-read from git. ${messageOf(error)}`,
+      );
+      await refreshStatus(store);
+    }
   };
 
   const runDiscard = async (current: Pending): Promise<void> => {
@@ -100,9 +129,12 @@ export function ChangesView(): ReactNode {
           'Those paths no longer have unstaged changes, so nothing was discarded.',
         );
       } else {
+        // Recomputed, not narrowed: a path can have gained staged content while
+        // the dialog was open, and the warning has to be true at confirm time.
+        const stagedNow = new Set(pathsOfAll(groupEntries(latest.value.entries).staged));
         setPending({
           paths: stillThere,
-          stagedToo: current.stagedToo.filter((path) => stillThere.includes(path)),
+          stagedToo: stillThere.filter((path) => stagedNow.has(path)),
           notice: 'changed',
         });
       }
@@ -119,8 +151,13 @@ export function ChangesView(): ReactNode {
         setFailure('Nothing was discarded, so there is nothing to recover.');
         return;
       }
+      nextRecoveryId.current += 1;
       setRecoveries((previous) => [
-        { stashLabel: result.stashLabel, paths: current.paths },
+        {
+          id: nextRecoveryId.current,
+          stashLabel: result.stashLabel,
+          paths: current.paths,
+        },
         ...previous,
       ]);
     } catch (error) {
@@ -141,11 +178,11 @@ export function ChangesView(): ReactNode {
       */}
       {recoveries.map((recovery) => (
         <RecoveryNotice
-          key={recovery.stashLabel}
+          key={recovery.id}
           recovery={recovery}
           onDismiss={() =>
             setRecoveries((previous) =>
-              previous.filter((item) => item.stashLabel !== recovery.stashLabel),
+              previous.filter((item) => item.id !== recovery.id),
             )
           }
         />
@@ -199,8 +236,8 @@ export function ChangesView(): ReactNode {
           busy={busy}
           draft={draft}
           onDraft={setDraft}
-          onStage={(paths) => void stage(store, paths)}
-          onUnstage={(paths) => void unstage(store, paths)}
+          onStage={(paths) => void runStaging('Staging', () => stage(store, paths))}
+          onUnstage={(paths) => void runStaging('Unstaging', () => unstage(store, paths))}
           onAskDiscard={askDiscard}
         />
       )}
@@ -335,9 +372,10 @@ function DiscardConfirmation({
   const cancelRef = useRef<HTMLButtonElement>(null);
 
   // The safe choice takes focus, so a stray Enter cancels instead of discards.
+  // Re-run on a re-ask: the list changed, so the user has to look again.
   useEffect(() => {
     cancelRef.current?.focus();
-  }, []);
+  }, [notice]);
 
   return (
     <div
