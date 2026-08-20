@@ -120,37 +120,37 @@ jobs:
       # log — but the *step conclusions* stay readable through the API. So the
       # last step that succeeded and the one left running name the culprit,
       # without needing any log at all.
-      - name: "Lib: config (Linux)"
+      - name: 'Lib: config (Linux)'
         if: matrix.os == 'ubuntu-latest'
         timeout-minutes: 5
         run: |
           cargo test --manifest-path src-tauri/Cargo.toml --lib config:: -- --test-threads=1
 
-      - name: "Lib: watcher (Linux)"
+      - name: 'Lib: watcher (Linux)'
         if: matrix.os == 'ubuntu-latest'
         timeout-minutes: 5
         run: |
           cargo test --manifest-path src-tauri/Cargo.toml --lib watcher:: -- --test-threads=1
 
-      - name: "Lib: runner validation (Linux)"
+      - name: 'Lib: runner validation (Linux)'
         if: matrix.os == 'ubuntu-latest'
         timeout-minutes: 5
         run: |
           cargo test --manifest-path src-tauri/Cargo.toml --lib git_runner::tests::rejects -- --test-threads=1
 
-      - name: "Lib: runner capture (Linux)"
+      - name: 'Lib: runner capture (Linux)'
         if: matrix.os == 'ubuntu-latest'
         timeout-minutes: 6
         run: |
           cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1             git_runner::tests::captures_stdout_and_zero_exit_code             git_runner::tests::surfaces_nonzero_exit_code_and_stderr             git_runner::tests::decode_flags_invalid_utf8_instead_of_hiding_it             git_runner::tests::an_unreadable_pipe_is_an_error_not_empty_output             git_runner::tests::redirecting_git_env_vars_are_not_inherited
 
-      - name: "Lib: runner stdin (Linux)"
+      - name: 'Lib: runner stdin (Linux)'
         if: matrix.os == 'ubuntu-latest'
         timeout-minutes: 6
         run: |
           cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1             git_runner::tests::feeds_stdin_to_the_child             git_runner::tests::without_stdin_the_child_sees_eof_immediately             git_runner::tests::a_large_stdin_payload_does_not_deadlock
 
-      - name: "Lib: external launcher (Linux)"
+      - name: 'Lib: external launcher (Linux)'
         if: matrix.os == 'ubuntu-latest'
         timeout-minutes: 6
         run: |
@@ -158,7 +158,7 @@ jobs:
 
       # The prime suspect: it deliberately makes a child hang, then kills a
       # process group. Last on purpose, so everything before it is known good.
-      - name: "Lib: runner timeout and kill (Linux)"
+      - name: 'Lib: runner timeout and kill (Linux)'
         if: matrix.os == 'ubuntu-latest'
         timeout-minutes: 6
         run: |
