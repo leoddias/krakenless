@@ -6,26 +6,41 @@
 
 ## Current state
 
-- **Phase:** pre-code. Planning + harness complete; no application code yet.
-- Repo contains: AGPL-3.0 license, `PLAN.md` (agreed product plan),
-  agent harness (`CLAUDE.md`, `docs/`, `.claude/` skills + agents).
-- Stack locked (see `docs/DECISIONS.md`): Tauri 2 + React/TS, system git via
-  shell-out, JSON config, Windows-first.
-- Nothing is built or scaffolded. `npm`/`cargo` not yet initialized.
-
-## Next up (in order)
-
-1. **M0 — Scaffold** (`docs/ROADMAP.md` § M0): create the Tauri 2 + React +
-   TypeScript + Vite project, ESLint/Prettier, Vitest, CI workflow, `.gitignore`.
-2. M1 — read-only repo view (open repo, status, log/graph data).
-3. Then follow ROADMAP milestones in order.
+- **Phase:** M0 scaffold landed. App code exists; the desktop shell is unverified.
+- Frontend: Vite + React 19 + TS (strict, `noUncheckedIndexedAccess`), Vitest +
+  Testing Library (1 test, green), oxlint, Prettier (markdown excluded).
+- Desktop: `src-tauri/` initialized (crate `krakenless`, identifier
+  `dev.krakenless.app`, 1280x800 window). **Never compiled** — no Rust locally.
+- CI: `.github/workflows/ci.yml` — frontend lint/format/test/build job +
+  Windows job (clippy, cargo test, `tauri build`).
+- Agent harness now covers parallel work: `docs/PARALLEL.md`, `docs/TASKS.md`,
+  `/fanout`, `/task-loop`, agents `task-worker` + `conventions-reviewer`
+  (ADR-0013). Linter choice recorded in ADR-0014.
 
 ## Blockers / open questions
 
-- None. All v0.1 design questions were resolved in the 2026-08-19 interview
-  (see `docs/DECISIONS.md`).
+- **Rust toolchain missing on the dev machine** (`cargo`/`rustc` not on PATH).
+  Blocks: running or building the desktop app, `cargo test`, clippy. Fix:
+  install rustup + MSVC build tools. Nothing in the frontend is blocked.
+- Everything Tauri-side (`src-tauri/`) is therefore unverified code — treat the
+  first successful `tauri dev` as the real M0 completion.
 
 ## Session log
+
+### 2026-08-19 — Parallel harness + M0 scaffold
+
+- Added the parallel-work harness: `docs/PARALLEL.md` (task packets with
+  disjoint owned globs, worktree isolation, orchestrator-only integration),
+  `docs/TASKS.md` board, `/fanout` and `/task-loop` skills, `task-worker` and
+  `conventions-reviewer` agents. Locked as ADR-0013; wired into `CLAUDE.md`.
+- Scaffolded the app (M0): Vite react-ts template into the repo, strict
+  tsconfig, Vitest + jsdom + Testing Library with a passing App test, Prettier
+  (markdown excluded so agent docs stay stable), oxlint (ADR-0014), Tauri 2
+  init with renamed crate/identifier/window size, CI workflow.
+- Verified locally: `npm test` green, `npm run build` green, `npm run lint`
+  clean, `npm run format:check` clean. **Not** verified: anything Rust.
+- Scaffolding was deliberately kept single-agent — per PARALLEL.md, fan-out
+  needs ≥2 disjoint packets and a settled contract; M0 had neither.
 
 ### 2026-08-19 — Design interview + harness
 - Ran full design interview (grill-me). Resolved product identity, stack,
