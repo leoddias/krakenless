@@ -74,6 +74,17 @@
   line-height: 1.45;
 }
 
+.noticeCause {
+  margin: 0.4rem 0 0;
+  padding: 0.35rem 0.5rem;
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 0.85rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .confirmActions {
   display: flex;
   gap: 0.5rem;

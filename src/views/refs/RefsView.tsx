@@ -15,7 +15,7 @@
  * the git layer validates is literally what they agreed to.
  */
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import type { Branch, StashEntry } from '../../git/types';
 import {
   createAndSwitch,
@@ -50,20 +50,52 @@ import {
  * result of git having refused, and carries the warning git produced so the
  * second question is asked with the real consequence in view.
  */
-type Deletion =
-  { stage: 'safe'; name: string } | { stage: 'force'; name: string; warning: string };
+type Deletion = {
+  name: string;
+  /**
+   * Repository the question was asked about. Branch names collide across
+   * repositories (`main` is everywhere), and the action layer resolves the root
+   * from *current* state — so a question answered after the user switched
+   * repositories would delete a same-named branch somewhere else.
+   */
+  root: string;
+} & ({ stage: 'safe' } | { stage: 'force'; warning: string });
 
 type StashActionKind = 'apply' | 'pop' | 'drop';
 
 interface StashQuestion {
   entry: StashEntry;
   kind: StashActionKind;
+  root: string;
 }
 
 /** A stash that was dropped, and the oid that is the only way back to it. */
 interface DropRecovery {
   label: string;
   oid: string;
+  /** Repository the oid lives in; it names nothing in any other one. */
+  root: string;
+}
+
+/**
+ * Something that did not happen, or did not happen the way the button said.
+ *
+ * `cause` is git's own words, taken from the notice the action layer produced,
+ * because the boolean the action returns cannot tell a refused stash from a
+ * stash that applied *with conflicts* — and those two need opposite reactions
+ * from the user.
+ */
+interface Failure {
+  text: string;
+  cause: string | null;
+  /** Repository it is about; it is not shown against any other one. */
+  root: string;
+}
+
+/** A message about something that did happen, in the repository named here. */
+interface Outcome {
+  text: string;
+  root: string;
 }
 
 export function RefsView(): ReactNode {
@@ -76,9 +108,20 @@ export function RefsView(): ReactNode {
 
   const [deletion, setDeletion] = useState<Deletion | null>(null);
   const [stashQuestion, setStashQuestion] = useState<StashQuestion | null>(null);
-  const [failure, setFailure] = useState<string | null>(null);
-  const [outcome, setOutcome] = useState<string | null>(null);
+  const [failure, setFailure] = useState<Failure | null>(null);
+  const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [recovery, setRecovery] = useState<DropRecovery | null>(null);
+  /**
+   * True from the moment a confirmed operation starts until it has resolved.
+   *
+   * `state.busy` is not enough: the action layer clears it *before* awaiting the
+   * refreshes that follow, so between those two moments the buttons are live
+   * again while the answer to the previous question is still on its way. A
+   * second click in that window would run a second git command against a
+   * question the user answered once.
+   */
+  const [running, setRunning] = useState(false);
+  const locked = busy || running;
 
   // Both lists are loaded for whatever repository is open, and re-loaded when
   // the user opens another one — a stale branch list belongs to a different
@@ -89,75 +132,181 @@ export function RefsView(): ReactNode {
     void refreshStashes(store);
   }, [store, root]);
 
+  // Anything asked or said about another repository is not shown against this
+  // one. Derived rather than cleared on a repo change, so there is no render in
+  // which a question about repository A is on screen over repository B: branch
+  // names collide across repositories, and the action layer resolves the root
+  // from current state. `recovery` is exempt on purpose — it names its own
+  // repository and is the only route back to work that was dropped.
+  const openDeletion = deletion !== null && deletion.root === root ? deletion : null;
+  const openStashQuestion =
+    stashQuestion !== null && stashQuestion.root === root ? stashQuestion : null;
+  const shownFailure = failure !== null && failure.root === root ? failure : null;
+  const shownOutcome = outcome !== null && outcome.root === root ? outcome : null;
+
   const clearMessages = (): void => {
     setFailure(null);
     setOutcome(null);
-    setRecovery(null);
+    // `recovery` is deliberately not cleared here: it holds the only route back
+    // to work that was just dropped, and the next click must not take it away.
+  };
+
+  /**
+   * Runs a confirmed operation, reporting what git said when it did not do what
+   * the button promised.
+   *
+   * The action layer swallows the error into a store notice and returns only a
+   * boolean, so the notice is read back here — comparing identity, so a stale
+   * message from an earlier operation is never presented as this one's cause.
+   */
+  const perform = async <T,>(run: () => Promise<T>): Promise<[T, string | null]> => {
+    const before = store.getState().notice;
+    setRunning(true);
+    try {
+      const result = await run();
+      const after = store.getState().notice;
+      const cause =
+        after !== null && after !== before && after.tone === 'error'
+          ? after.message
+          : null;
+      return [result, cause];
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  /** True while the question still applies to the repository that is open. */
+  const stillCurrent = (askedAbout: string): boolean => {
+    const repo = store.getState().repo;
+    return repo.state === 'ready' && repo.value.root === askedAbout;
   };
 
   const runDelete = async (pending: Deletion): Promise<void> => {
+    if (running) return;
     clearMessages();
     const { name } = pending;
+    if (!stillCurrent(pending.root)) {
+      setDeletion(null);
+      setFailure({
+        text: `Nothing was deleted: the open repository changed after the question about "${name}" was asked.`,
+        cause: null,
+        root: pending.root,
+      });
+      return;
+    }
+
     const force = pending.stage === 'force';
     const reason = force ? forceDeleteBranchQuestion(name) : deleteBranchQuestion(name);
 
-    const result = await removeBranch(store, name, reason, { force });
+    const [result, cause] = await perform(() =>
+      removeBranch(store, name, reason, { force }),
+    );
     if (result !== null && result.deleted) {
       setDeletion(null);
-      setOutcome(`Deleted branch "${name}".`);
+      setOutcome({ text: `Deleted branch "${name}".`, root: pending.root });
       return;
     }
     if (result !== null && result.unmergedWarning !== undefined) {
       // Ask again — a different question, with the warning attached. Nothing
-      // here calls the action layer a second time on its own.
-      setDeletion({ stage: 'force', name, warning: result.unmergedWarning });
+      // here calls the action layer a second time on its own, and the forcing
+      // button arrives disarmed (see DeleteConfirmation).
+      setDeletion({ ...pending, stage: 'force', warning: result.unmergedWarning });
       return;
     }
     setDeletion(null);
-    setFailure(`Branch "${name}" was not deleted.`);
+    setFailure({ text: `Branch "${name}" was not deleted.`, cause, root: pending.root });
   };
 
   const runStashAction = async (pending: StashQuestion): Promise<void> => {
+    if (running) return;
     clearMessages();
     setStashQuestion(null);
     const { entry, kind } = pending;
+    if (!stillCurrent(pending.root)) {
+      setFailure({
+        text: `Nothing was done: the open repository changed after the question about "${stashLabel(entry)}" was asked.`,
+        cause: null,
+        root: pending.root,
+      });
+      return;
+    }
     // The oid travels with the ref: `stash@{1}` alone is a position, and
     // positions move.
     const target = { ref: entry.ref, oid: entry.oid };
 
-    const done =
+    const [done, cause] = await perform(() =>
       kind === 'drop'
-        ? await removeStash(store, target, dropStashQuestion(entry))
-        : await restoreStash(
+        ? removeStash(store, target, dropStashQuestion(entry))
+        : restoreStash(
             store,
             target,
             { pop: kind === 'pop' },
             kind === 'pop' ? popStashQuestion(entry) : applyStashQuestion(entry),
-          );
+          ),
+    );
 
     if (!done) {
-      setFailure(
-        `${ACTION_NOUN[kind]} "${stashLabel(entry)}" did not run. The stash list has been re-read from git — entries shift whenever anything is stashed, so check the list below and act on the row you see now.`,
-      );
+      // Deliberately not "nothing happened": a pop or apply that *conflicts*
+      // also fails, and it has already written the working tree. Git's own
+      // message is the only thing that can tell those apart, so it leads.
+      setFailure({
+        text:
+          kind === 'drop'
+            ? `Dropping stash "${stashLabel(entry)}" did not complete. If git refused because the list moved, the entry is untouched — the list has been re-read, so act on the row you see now.`
+            : `${ACTION_NOUN[kind]} "${stashLabel(entry)}" did not complete. Read what git reported before retrying: a stash that applied with conflicts also fails, and your working tree already contains the changes and the conflict markers. If instead git refused because the list moved, nothing was touched.`,
+        cause,
+        root: pending.root,
+      });
       return;
     }
     if (kind === 'drop') {
-      setRecovery({ label: stashLabel(entry), oid: entry.oid });
+      setRecovery({ label: stashLabel(entry), oid: entry.oid, root: pending.root });
       return;
     }
-    setOutcome(
-      kind === 'pop'
-        ? `Popped stash "${stashLabel(entry)}" — it is no longer in the list.`
-        : `Applied stash "${stashLabel(entry)}" — it is still in the list.`,
-    );
+    setOutcome({
+      text:
+        kind === 'pop'
+          ? `Popped stash "${stashLabel(entry)}" — it is no longer in the list.`
+          : `Applied stash "${stashLabel(entry)}" — it is still in the list.`,
+      root: pending.root,
+    });
   };
+
+  // Computed once: a recovery command is only offered when the oid git handed
+  // back is one this panel can vouch for.
+  const recoveryCommand = recovery === null ? null : dropRecoveryCommand(recovery.oid);
 
   return (
     <section className={styles.panel} aria-label="Branches and stashes">
       {/*
-        Messages sit above the lists: a drop leaves an oid that is the only
-        route back to the work, and a list that reloads underneath must not take
-        it off screen.
+        The open question comes first, so a notice appearing or being dismissed
+        underneath it cannot shift a destructive button under the pointer. Only
+        one question is ever on screen.
+      */}
+      {openDeletion !== null && (
+        <DeleteConfirmation
+          // Keyed by stage: the forcing question is a fresh component, so it
+          // cannot inherit the armed state of the one it replaced.
+          key={openDeletion.stage}
+          deletion={openDeletion}
+          busy={locked}
+          onCancel={() => setDeletion(null)}
+          onConfirm={() => void runDelete(openDeletion)}
+        />
+      )}
+
+      {openStashQuestion !== null && (
+        <StashConfirmation
+          question={openStashQuestion}
+          busy={locked}
+          onCancel={() => setStashQuestion(null)}
+          onConfirm={() => void runStashAction(openStashQuestion)}
+        />
+      )}
+
+      {/*
+        A drop leaves an oid that is the only route back to the work, so this
+        notice outlives the lists reloading underneath it and every later click.
       */}
       {recovery !== null && (
         <div className={styles.recovery} role="status">
@@ -165,12 +314,17 @@ export function RefsView(): ReactNode {
             Dropped stash &quot;{recovery.label}&quot;
           </strong>
           <p className={styles.noticeText}>
-            The entry is gone from the list, but its commit survives until git collects
-            it. Run this to bring the changes back:
+            The entry is gone from the list, but its commit survives in {recovery.root}{' '}
+            until git collects it.{' '}
+            {recoveryCommand === null
+              ? 'Git reported an object id this panel does not recognise, so no command is offered here — look for the entry with `git fsck --unreachable`.'
+              : 'Run this there to bring the changes back:'}
           </p>
-          <pre className={styles.noticeCommand}>
-            <code>{dropRecoveryCommand(recovery.oid)}</code>
-          </pre>
+          {recoveryCommand !== null && (
+            <pre className={styles.noticeCommand}>
+              <code>{recoveryCommand}</code>
+            </pre>
+          )}
           <button
             type="button"
             className={styles.button}
@@ -181,9 +335,14 @@ export function RefsView(): ReactNode {
         </div>
       )}
 
-      {failure !== null && (
+      {shownFailure !== null && (
         <div className={styles.failure} role="alert">
-          <p className={styles.noticeText}>{failure}</p>
+          <p className={styles.noticeText}>{shownFailure.text}</p>
+          {shownFailure.cause !== null && (
+            <p className={styles.noticeCause}>
+              <strong>git said:</strong> {shownFailure.cause}
+            </p>
+          )}
           <button
             type="button"
             className={styles.button}
@@ -194,9 +353,9 @@ export function RefsView(): ReactNode {
         </div>
       )}
 
-      {outcome !== null && (
+      {shownOutcome !== null && (
         <div className={styles.outcome} role="status">
-          <p className={styles.noticeText}>{outcome}</p>
+          <p className={styles.noticeText}>{shownOutcome.text}</p>
           <button
             type="button"
             className={styles.button}
@@ -207,27 +366,9 @@ export function RefsView(): ReactNode {
         </div>
       )}
 
-      {deletion !== null && (
-        <DeleteConfirmation
-          deletion={deletion}
-          busy={busy}
-          onCancel={() => setDeletion(null)}
-          onConfirm={() => void runDelete(deletion)}
-        />
-      )}
-
-      {stashQuestion !== null && (
-        <StashConfirmation
-          question={stashQuestion}
-          busy={busy}
-          onCancel={() => setStashQuestion(null)}
-          onConfirm={() => void runStashAction(stashQuestion)}
-        />
-      )}
-
       <div className={styles.body}>
         <BranchesSection
-          busy={busy}
+          busy={locked}
           selectedOid={selectedOid}
           onSwitch={(name) => {
             clearMessages();
@@ -238,17 +379,21 @@ export function RefsView(): ReactNode {
             return createAndSwitch(store, name, startPoint);
           }}
           onAskDelete={(name) => {
+            if (root === null) return;
             clearMessages();
+            setStashQuestion(null);
             // Always the safe stage: force is unreachable from a click.
-            setDeletion({ stage: 'safe', name });
+            setDeletion({ stage: 'safe', name, root });
           }}
         />
 
         <StashesSection
-          busy={busy}
+          busy={locked}
           onAsk={(entry, kind) => {
+            if (root === null) return;
             clearMessages();
-            setStashQuestion({ entry, kind });
+            setDeletion(null);
+            setStashQuestion({ entry, kind, root });
           }}
         />
       </div>
@@ -491,6 +636,8 @@ function CreateBranchForm({
   const [name, setName] = useState('');
   const [fromSelected, setFromSelected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const fieldId = useId();
+  const errorId = useId();
 
   const useSelected = fromSelected && selectedOid !== null;
 
@@ -525,17 +672,17 @@ function CreateBranchForm({
         void submit();
       }}
     >
-      <label className={styles.createLabel} htmlFor="refs-new-branch">
+      <label className={styles.createLabel} htmlFor={fieldId}>
         New branch
       </label>
       <input
-        id="refs-new-branch"
+        id={fieldId}
         className={styles.input}
         value={name}
         disabled={busy}
         placeholder="feature/my-change"
         aria-invalid={error !== null}
-        aria-describedby={error === null ? undefined : 'refs-new-branch-error'}
+        aria-describedby={error === null ? undefined : errorId}
         onChange={(event) => {
           setName(event.target.value);
           setError(null);
@@ -560,7 +707,7 @@ function CreateBranchForm({
         Create and switch
       </button>
       {error !== null && (
-        <p id="refs-new-branch-error" className={styles.fieldError} role="alert">
+        <p id={errorId} className={styles.fieldError} role="alert">
           {error}
         </p>
       )}
@@ -580,15 +727,28 @@ function DeleteConfirmation({
   onConfirm: () => void;
 }): ReactNode {
   const cancelRef = useRef<HTMLButtonElement>(null);
-
-  // The safe choice takes focus, and takes it again when the question changes
-  // to the forcing one: a keystroke aimed at the first question must never
-  // land on the second, which drops commits.
-  useEffect(() => {
-    cancelRef.current?.focus();
-  }, [deletion.stage]);
+  const armId = useId();
+  /**
+   * Whether the forcing button will act at all.
+   *
+   * The safe and the forcing question occupy the same box, so the dangerous
+   * button appears where the harmless one just was. A click already on its way
+   * — or a user clicking again because the first attempt seemed to do nothing —
+   * would otherwise land on `-D`. The forcing stage is a keyed remount, so it
+   * always starts disarmed and needs a separate, deliberate gesture that did
+   * not exist a moment ago.
+   */
+  const [armed, setArmed] = useState(false);
 
   const forcing = deletion.stage === 'force';
+
+  // The safe choice takes focus on mount — and the forcing question is a fresh
+  // mount, so it takes focus again there: a keystroke aimed at the first
+  // question must never land on the second, which drops commits.
+  useEffect(() => {
+    cancelRef.current?.focus();
+  }, []);
+
   const question = forcing
     ? forceDeleteBranchQuestion(deletion.name)
     : deleteBranchQuestion(deletion.name);
@@ -597,6 +757,7 @@ function DeleteConfirmation({
     <div
       className={styles.confirm}
       role="alertdialog"
+      aria-modal="true"
       aria-label={forcing ? 'Confirm forced branch delete' : 'Confirm branch delete'}
       onKeyDown={(event) => {
         if (event.key === 'Escape') onCancel();
@@ -611,6 +772,17 @@ function DeleteConfirmation({
           any of them would be lost.
         </p>
       )}
+      {forcing && (
+        <label className={styles.checkbox} htmlFor={armId}>
+          <input
+            id={armId}
+            type="checkbox"
+            checked={armed}
+            onChange={(event) => setArmed(event.target.checked)}
+          />
+          I understand those commits will be lost
+        </label>
+      )}
       <div className={styles.confirmActions}>
         <button
           type="button"
@@ -623,7 +795,7 @@ function DeleteConfirmation({
         <button
           type="button"
           className={`${styles.button} ${styles.danger}`}
-          disabled={busy}
+          disabled={busy || (forcing && !armed)}
           onClick={onConfirm}
         >
           {forcing ? 'Delete anyway and drop those commits' : 'Delete branch'}
@@ -748,6 +920,7 @@ function StashConfirmation({
     <div
       className={styles.confirm}
       role="alertdialog"
+      aria-modal="true"
       aria-label="Confirm stash action"
       onKeyDown={(event) => {
         if (event.key === 'Escape') onCancel();
@@ -797,10 +970,13 @@ function Notice({
   live?: boolean;
   children: ReactNode;
 }): ReactNode {
+  // A list that fails to load does it asynchronously, so the failure has to be
+  // announced rather than merely drawn.
+  const role = tone === 'error' ? 'alert' : live === true ? 'status' : undefined;
   return (
     <div
       className={`${styles.notice} ${tone === 'error' ? styles.noticeError : ''}`}
-      role={live === true ? 'status' : undefined}
+      role={role}
     >
       <strong className={styles.noticeTitle}>{title}</strong>
       <p className={styles.noticeText}>{children}</p>

@@ -124,6 +124,19 @@ function dialog(): HTMLElement {
   return screen.getByRole('alertdialog');
 }
 
+function forceButton(): HTMLElement {
+  return screen.getByRole('button', { name: 'Delete anyway and drop those commits' });
+}
+
+/** Ticks the "I understand" box that arms the forcing button. */
+async function arm(): Promise<void> {
+  await click(
+    within(dialog()).getByRole('checkbox', {
+      name: 'I understand those commits will be lost',
+    }),
+  );
+}
+
 beforeEach(() => {
   refreshBranchesMock.mockReset().mockResolvedValue(undefined);
   refreshStashesMock.mockReset().mockResolvedValue(undefined);
@@ -256,10 +269,13 @@ describe('branch list', () => {
   it('reaches the branch with the keyboard', () => {
     renderLoaded();
     const target = screen.getByRole('button', { name: /feature\/x/ });
-    // A real <button>: focusable, and Enter or Space activates it natively.
     act(() => target.focus());
     expect(document.activeElement).toBe(target);
+    // jsdom does not synthesise the native Enter/Space activation of a button,
+    // so the assertion is on the thing that guarantees it: the switch is a real
+    // <button> with the button role, not a click-only div.
     expect(target.tagName).toBe('BUTTON');
+    expect(target).not.toHaveAttribute('tabindex', '-1');
   });
 
   it('checks a remote branch out as a local one instead of switching to it', async () => {
@@ -411,9 +427,25 @@ describe('deleting a branch', () => {
     expect(dialog()).toHaveTextContent(
       'Branch "feature/x" has commits that are not merged anywhere.',
     );
-    expect(
-      screen.getByRole('button', { name: 'Delete anyway and drop those commits' }),
-    ).toBeInTheDocument();
+    // Present, but inert: it arrives disarmed so a click aimed at the safe
+    // question cannot land on it.
+    expect(forceButton()).toBeInTheDocument();
+    expect(forceButton()).toBeDisabled();
+    await click(forceButton());
+    expect(removeBranchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('arms the forcing button only through its own separate gesture', async () => {
+    removeBranchMock.mockResolvedValue({
+      deleted: false,
+      unmergedWarning: 'not merged',
+    });
+    renderLoaded();
+    await askDelete();
+    await click(screen.getByRole('button', { name: 'Delete branch' }));
+    expect(forceButton()).toBeDisabled();
+    await arm();
+    expect(forceButton()).toBeEnabled();
   });
 
   it('forces only on the second confirmation, with its own reason', async () => {
@@ -425,9 +457,8 @@ describe('deleting a branch', () => {
     const store = renderLoaded();
     await askDelete();
     await click(screen.getByRole('button', { name: 'Delete branch' }));
-    await click(
-      screen.getByRole('button', { name: 'Delete anyway and drop those commits' }),
-    );
+    await arm();
+    await click(forceButton());
 
     expect(removeBranchMock).toHaveBeenCalledTimes(2);
     expect(removeBranchMock).toHaveBeenLastCalledWith(
@@ -481,6 +512,70 @@ describe('deleting a branch', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(
       'Branch "feature/x" was not deleted.',
     );
+  });
+
+  it('quotes what git reported when the delete failed', async () => {
+    const store = renderLoaded();
+    removeBranchMock.mockImplementation(async () => {
+      store.dispatch({
+        type: 'notice',
+        notice: { tone: 'error', message: 'error: branch is checked out at /other' },
+      });
+      return null;
+    });
+    await askDelete();
+    await click(screen.getByRole('button', { name: 'Delete branch' }));
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'error: branch is checked out at /other',
+    );
+  });
+
+  it('runs one command per answer, even when clicked again mid-flight', async () => {
+    let release: (() => void) | null = null;
+    removeBranchMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ deleted: true });
+        }),
+    );
+    renderLoaded();
+    await askDelete();
+    const confirm = screen.getByRole('button', { name: 'Delete branch' });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    await act(async () => {
+      release?.();
+    });
+    expect(removeBranchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not show a message about one repository over another', async () => {
+    const store = renderLoaded();
+    await askDelete();
+    await click(screen.getByRole('button', { name: 'Delete branch' }));
+    expect(screen.getByRole('status')).toHaveTextContent('Deleted branch "feature/x".');
+
+    act(() =>
+      store.dispatch({
+        type: 'repo/opened',
+        repo: { root: '/other', gitDir: '/other/.git', bare: false, empty: false },
+      }),
+    );
+    expect(screen.queryByText('Deleted branch "feature/x".')).not.toBeInTheDocument();
+  });
+
+  it('drops the question when the open repository changes', async () => {
+    const store = renderLoaded();
+    await askDelete();
+    act(() =>
+      store.dispatch({
+        type: 'repo/opened',
+        repo: { root: '/other', gitDir: '/other/.git', bare: false, empty: false },
+      }),
+    );
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(removeBranchMock).not.toHaveBeenCalled();
   });
 });
 
@@ -583,9 +678,18 @@ describe('stash list', () => {
     );
   });
 
-  it('reports a refusal as "the list moved" and does not retry', async () => {
-    removeStashMock.mockResolvedValue(false);
-    renderLoaded();
+  it('reports a refused drop honestly and does not retry', async () => {
+    const store = renderLoaded();
+    removeStashMock.mockImplementation(async () => {
+      store.dispatch({
+        type: 'notice',
+        notice: {
+          tone: 'error',
+          message: 'The stash list changed since it was loaded. Refresh and try again.',
+        },
+      });
+      return false;
+    });
     await click(
       within(stashRow('WIP on main: parser')).getByRole('button', {
         name: 'Drop',
@@ -594,11 +698,82 @@ describe('stash list', () => {
     await click(screen.getByRole('button', { name: 'Drop stash' }));
 
     expect(removeStashMock).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole('alert')).toHaveTextContent(
-      /entries shift whenever anything is stashed/,
-    );
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('did not complete');
+    expect(alert).toHaveTextContent('The stash list changed since it was loaded.');
     // No recovery command: nothing was dropped, so nothing can be recovered.
     expect(screen.queryByText(/git stash apply/)).not.toBeInTheDocument();
+  });
+
+  it('never claims a failed pop left the working tree alone', async () => {
+    const store = renderLoaded();
+    restoreStashMock.mockImplementation(async () => {
+      store.dispatch({
+        type: 'notice',
+        notice: { tone: 'error', message: 'CONFLICT (content): Merge conflict in a.ts' },
+      });
+      return false;
+    });
+    await click(
+      within(stashRow('WIP on main: parser')).getByRole('button', { name: 'Pop' }),
+    );
+    await click(screen.getByRole('button', { name: 'Pop stash' }));
+
+    const alert = screen.getByRole('alert');
+    // A conflicting pop fails *after* writing the working tree, so the panel
+    // must not report it as "nothing happened".
+    expect(alert).not.toHaveTextContent('did not run');
+    expect(alert).toHaveTextContent('did not complete');
+    expect(alert).toHaveTextContent('your working tree already contains the changes');
+    expect(alert).toHaveTextContent('CONFLICT (content): Merge conflict in a.ts');
+  });
+
+  it('keeps the recovery command on screen through later clicks', async () => {
+    renderLoaded();
+    await click(
+      within(stashRow('WIP on main: parser')).getByRole('button', { name: 'Drop' }),
+    );
+    await click(screen.getByRole('button', { name: 'Drop stash' }));
+    expect(screen.getByRole('status')).toHaveTextContent('git stash apply');
+
+    await click(screen.getByRole('button', { name: /feature\/x/ }));
+    expect(screen.getByRole('status')).toHaveTextContent(
+      `git stash apply ${'b'.repeat(40)}`,
+    );
+  });
+
+  it('names the repository the dropped stash lives in', async () => {
+    renderLoaded();
+    await click(
+      within(stashRow('WIP on main: parser')).getByRole('button', { name: 'Drop' }),
+    );
+    await click(screen.getByRole('button', { name: 'Drop stash' }));
+    expect(screen.getByRole('status')).toHaveTextContent('/repo');
+  });
+
+  it('shows one question at a time', async () => {
+    renderLoaded();
+    await click(screen.getByTitle('Delete feature/x'));
+    await click(
+      within(stashRow('WIP on main: parser')).getByRole('button', { name: 'Drop' }),
+    );
+    expect(screen.getAllByRole('alertdialog')).toHaveLength(1);
+    expect(dialog()).toHaveTextContent('Drop stash "WIP on main: parser"');
+  });
+
+  it('drops the stash question when the open repository changes', async () => {
+    const store = renderLoaded();
+    await click(
+      within(stashRow('WIP on main: parser')).getByRole('button', { name: 'Drop' }),
+    );
+    act(() =>
+      store.dispatch({
+        type: 'repo/opened',
+        repo: { root: '/other', gitDir: '/other/.git', bare: false, empty: false },
+      }),
+    );
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(removeStashMock).not.toHaveBeenCalled();
   });
 
   it('says which side of pop happened', async () => {

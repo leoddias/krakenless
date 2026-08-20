@@ -71,6 +71,7 @@ export function branchNameError(name: string): string | null {
   if (name.length === 0) return 'Enter a branch name.';
   if (name.startsWith('-')) return 'A branch name may not start with a dash.';
   if (name.startsWith('+')) return 'A branch name may not start with a plus.';
+  if (name.includes('\0')) return 'A branch name may not contain a NUL character.';
   if (name.startsWith('refs/')) {
     return 'Use the short name, not a full ref path like "refs/heads/main".';
   }
@@ -123,16 +124,21 @@ export function dropStashQuestion(entry: StashEntry): string {
   return `Drop stash "${stashLabel(entry)}" without applying it?`;
 }
 
+/** Object ids as git prints them: hex, SHA-1 or SHA-256 length. */
+const OID = /^[0-9a-f]{40}$|^[0-9a-f]{64}$/;
+
 /**
- * How to get a dropped stash back.
+ * How to get a dropped stash back, or `null` when no command can be offered.
  *
- * `git stash drop` only deletes the ref; the commit survives until git
- * collects it, and its oid is the only way to name it afterwards — which is
- * why the panel shows the oid it acted on rather than the `stash@{n}` index
- * that has already shifted.
+ * `git stash drop` only deletes the ref; the commit survives until git collects
+ * it, and its oid is the only way to name it afterwards — which is why this
+ * names the oid the panel acted on rather than the `stash@{n}` index that has
+ * already shifted. The shape is checked because this string is handed to the
+ * user to paste into a shell: an oid that is not an oid must not travel there
+ * as if it were one.
  */
-export function dropRecoveryCommand(oid: string): string {
-  return `git stash apply ${oid}`;
+export function dropRecoveryCommand(oid: string): string | null {
+  return OID.test(oid) ? `git stash apply ${oid}` : null;
 }
 
 const SECOND = 1000;

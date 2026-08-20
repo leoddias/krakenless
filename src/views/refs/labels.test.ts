@@ -147,6 +147,7 @@ describe('branchNameError', () => {
     ['/leading', 'leading slash'],
     ['double//slash', 'empty component'],
     ['@', 'bare @'],
+    ['nul\u0000name', 'NUL'],
   ])('rejects %s (%s)', (name) => {
     expect(branchNameError(name)).not.toBeNull();
   });
@@ -167,6 +168,7 @@ describe('branchNameError', () => {
       'double//slash',
       '@',
       '',
+      'nul\u0000name',
     ];
     for (const name of names) {
       expect(branchNameError(name)).not.toBeNull();
@@ -225,7 +227,25 @@ describe('stashLabel', () => {
 
 describe('dropRecoveryCommand', () => {
   it('names the oid, not the index that has already shifted', () => {
-    expect(dropRecoveryCommand('deadbeef')).toBe('git stash apply deadbeef');
+    const oid = 'b'.repeat(40);
+    expect(dropRecoveryCommand(oid)).toBe(`git stash apply ${oid}`);
+  });
+
+  it('accepts a SHA-256 object id', () => {
+    const oid = 'c'.repeat(64);
+    expect(dropRecoveryCommand(oid)).toBe(`git stash apply ${oid}`);
+  });
+
+  it.each([
+    ['deadbeef', 'abbreviated'],
+    ['', 'empty'],
+    ['Z'.repeat(40), 'not hex'],
+    [`${'a'.repeat(40)}; rm -rf /`, 'trailing command'],
+    [`${'a'.repeat(40)} --all`, 'trailing option'],
+  ])('offers no command for %s (%s)', (oid) => {
+    // The string is handed to the user to paste into a shell; anything that is
+    // not an object id must not travel there dressed as one.
+    expect(dropRecoveryCommand(oid)).toBeNull();
   });
 });
 
