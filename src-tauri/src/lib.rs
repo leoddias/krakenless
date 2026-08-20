@@ -1,5 +1,6 @@
 mod config;
 mod git_runner;
+mod watcher;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -15,11 +16,14 @@ pub fn run() {
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())
+        .manage(watcher::WatcherState::default())
         .invoke_handler(tauri::generate_handler![
             git_runner::git_run,
             config::config_read,
             config::config_write,
-            config::config_dir_path
+            config::config_dir_path,
+            watcher::watch_repo,
+            watcher::unwatch_repo
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
