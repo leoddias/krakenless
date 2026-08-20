@@ -114,37 +114,55 @@ jobs:
         timeout-minutes: 20
         run: cargo test --manifest-path src-tauri/Cargo.toml --no-run
 
-      # Backgrounded and polled, not run in the foreground. `timeout` did not
-      # end the step on this runner even with SIGKILL, and a step that never
-      # ends gets cancelled — and a cancelled job publishes no log at all. This
-      # way the foreground shell always finishes and always prints what the
-      # tests managed to write, so the last line names whatever hung.
-      - name: Lib tests (Linux)
+      # Split one test group per step, ordered from harmless to most suspect.
+      #
+      # A wedged step gets the job cancelled, and a cancelled job publishes no
+      # log — but the *step conclusions* stay readable through the API. So the
+      # last step that succeeded and the one left running name the culprit,
+      # without needing any log at all.
+      - name: "Lib: config (Linux)"
         if: matrix.os == 'ubuntu-latest'
-        timeout-minutes: 12
+        timeout-minutes: 5
         run: |
-          set +e
-          cargo test --manifest-path src-tauri/Cargo.toml --lib             -- --test-threads=1 --nocapture > lib-tests.log 2>&1 &
-          pid=$!
-          for _ in $(seq 1 60); do
-            kill -0 "$pid" 2>/dev/null || break
-            sleep 5
-          done
-          if kill -0 "$pid" 2>/dev/null; then
-            echo "=== still running after 5 minutes; killing ==="
-            kill -9 "$pid" 2>/dev/null
-            pkill -9 -f 'krakenless_lib' 2>/dev/null
-            status=124
-          else
-            wait "$pid"
-            status=$?
-          fi
-          echo "=== lib tests exited with $status ==="
-          echo "=== last 200 lines ==="
-          tail -n 200 lib-tests.log
-          echo "=== processes still alive ==="
-          ps -eo pid,ppid,pgid,stat,etime,args | grep -E 'git |krakenless|cargo' | grep -v grep | head -20
-          exit $status
+          cargo test --manifest-path src-tauri/Cargo.toml --lib config:: -- --test-threads=1
+
+      - name: "Lib: watcher (Linux)"
+        if: matrix.os == 'ubuntu-latest'
+        timeout-minutes: 5
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --lib watcher:: -- --test-threads=1
+
+      - name: "Lib: runner validation (Linux)"
+        if: matrix.os == 'ubuntu-latest'
+        timeout-minutes: 5
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --lib git_runner::tests::rejects -- --test-threads=1
+
+      - name: "Lib: runner capture (Linux)"
+        if: matrix.os == 'ubuntu-latest'
+        timeout-minutes: 6
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1             git_runner::tests::captures_stdout_and_zero_exit_code             git_runner::tests::surfaces_nonzero_exit_code_and_stderr             git_runner::tests::decode_flags_invalid_utf8_instead_of_hiding_it             git_runner::tests::an_unreadable_pipe_is_an_error_not_empty_output             git_runner::tests::redirecting_git_env_vars_are_not_inherited
+
+      - name: "Lib: runner stdin (Linux)"
+        if: matrix.os == 'ubuntu-latest'
+        timeout-minutes: 6
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1             git_runner::tests::feeds_stdin_to_the_child             git_runner::tests::without_stdin_the_child_sees_eof_immediately             git_runner::tests::a_large_stdin_payload_does_not_deadlock
+
+      - name: "Lib: external launcher (Linux)"
+        if: matrix.os == 'ubuntu-latest'
+        timeout-minutes: 6
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --lib external:: -- --test-threads=1
+
+      # The prime suspect: it deliberately makes a child hang, then kills a
+      # process group. Last on purpose, so everything before it is known good.
+      - name: "Lib: runner timeout and kill (Linux)"
+        if: matrix.os == 'ubuntu-latest'
+        timeout-minutes: 6
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1             git_runner::tests::a_zero_timeout_is_clamped_to_a_usable_floor             git_runner::tests::arguments_are_not_shell_interpreted             git_runner::tests::a_hanging_child_is_killed_and_the_call_returns
 
       - name: Binary harness (Linux)
         if: matrix.os == 'ubuntu-latest'
