@@ -190,8 +190,12 @@ async function describeStash(
     if (resolved.length > 0) sourceOid = resolved;
   }
 
+  // Scoped to the paths asked about. Listing the whole tree would walk every
+  // file in the repository, and one undecodable name anywhere in it would make
+  // the runner throw `undecodable-output` *after* the stash already took the
+  // work off disk — leaving no oid to recover from.
   const listed = await runGit(repo, {
-    args: ['ls-tree', '-r', '-z', '--name-only', sourceOid],
+    args: ['ls-tree', '-r', '-z', '--name-only', sourceOid, '--', ...requestedPaths],
   });
   return {
     stashOid,

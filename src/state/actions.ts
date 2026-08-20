@@ -242,8 +242,19 @@ export async function discard(
       notice: outcome.discarded
         ? {
             tone: 'info',
-            message: `Discarded changes to ${count} file(s).`,
-            undoHint: outcome.undoCommands.join('\n'),
+            // Anything the command cannot bring back is said here; a command
+            // shown above a path list it does not cover reads as "this
+            // restores all of them".
+            message: [
+              `Discarded changes to ${count} file(s).`,
+              ...(outcome.notes ?? []),
+            ].join(' '),
+            // Only when there is something to run: an empty hint renders as
+            // "Run this to undo:" above nothing, promising a route the code
+            // deliberately decided not to offer.
+            ...(outcome.undoCommands.length === 0
+              ? {}
+              : { undoHint: outcome.undoCommands.join('\n') }),
           }
         : {
             tone: 'warning',

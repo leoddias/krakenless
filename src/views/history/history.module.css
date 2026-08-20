@@ -185,3 +185,25 @@
   color: #9aa3ad;
   font-size: 0.8125rem;
 }
+
+.graph {
+  flex: none;
+  /* The SVG is exactly row-high so lines meet across row boundaries. */
+  display: block;
+  overflow: visible;
+}
+
+.graphEdge {
+  stroke: #3a424e;
+  stroke-width: 1.5;
+}
+
+.graphNode {
+  fill: #6aa6ff;
+}
+
+.graphNodeMerge {
+  fill: #14161a;
+  stroke: #6aa6ff;
+  stroke-width: 2;
+}

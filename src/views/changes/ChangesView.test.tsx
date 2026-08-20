@@ -88,6 +88,7 @@ beforeEach(() => {
     discarded: true,
     stashLabel: 'krakenless: discarded now',
     undoCommands: ['git restore --source=abc123 --worktree -- "a.ts"'],
+    notes: [],
   });
   commitMock.mockReset().mockResolvedValue(undefined);
   refreshMock.mockReset().mockResolvedValue(undefined);
@@ -438,6 +439,7 @@ describe('discard confirmation', () => {
       discarded: true,
       stashLabel: 'krakenless: discarded 2026-08-20',
       undoCommands: ['git restore --source=abc123 --worktree -- "a.ts"'],
+      notes: [],
     });
     const store = renderOneUnstaged();
     fireEvent.click(screen.getByRole('button', { name: 'Discard a.ts' }));
@@ -702,6 +704,7 @@ describe('discard notices over time', () => {
       discarded: true,
       stashLabel: 'krakenless: first',
       undoCommands: ['git restore --source=aaa111 --worktree -- "a.ts"'],
+      notes: [],
     });
     const store = renderWithEntries([
       entry({ path: 'a.ts', worktree: 'modified' }),
@@ -716,6 +719,7 @@ describe('discard notices over time', () => {
       discarded: true,
       stashLabel: 'krakenless: second',
       undoCommands: ['git restore --source=bbb222 --worktree -- "b.ts"'],
+      notes: [],
     });
     setEntries(store, [entry({ path: 'b.ts', worktree: 'modified' })]);
     fireEvent.click(screen.getByRole('button', { name: 'Discard b.ts' }));

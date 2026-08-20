@@ -145,6 +145,15 @@ export function discardQuestion(paths: readonly string[]): string {
  * would conflict, and `git checkout <oid> -- <path>` would overwrite the staged
  * version that the discard kept intact.
  */
+/**
+ * Wording for a discard that produced no runnable recovery command — a deleted
+ * path, say, which the stash records as a deletion. Claiming a route back would
+ * be the same lie as offering an empty command.
+ */
+export function partialRecoveryMessage(): string {
+  return 'Krakenless stashed what it could before discarding. There is no single command that restores this one — the note below says where to look:';
+}
+
 export function recoveryMessage(): string {
   return 'Krakenless stashed your unstaged changes before discarding them. Run this to bring them back — your staged version was left untouched:';
 }

@@ -11,6 +11,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
@@ -22,6 +23,8 @@ import { selectCommit } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
 import type { Loadable } from '../../state/store';
 import { formatAbsoluteDate, formatRelativeDate } from './relativeTime';
+import { GraphCell } from './GraphCell';
+import { buildGraph, type GraphRow } from './graph';
 import styles from './history.module.css';
 
 /** Height of one row in pixels; must match `.row` in the stylesheet. */
@@ -82,6 +85,9 @@ function CommitList({ commits }: { commits: Commit[] }): ReactNode {
 
   // Row 0 is the working tree; commit `i` lives at row `i + 1`.
   const total = commits.length + 1;
+  // Laid out once per list, not per rendered row: the lanes depend on every
+  // commit before them, so a windowed slice cannot compute them on its own.
+  const graph = useMemo(() => buildGraph(commits), [commits]);
   const selectedIndex = selectedOid === null ? 0 : indexOfOid(commits, selectedOid);
 
   useLayoutEffect(() => {
@@ -178,7 +184,15 @@ function CommitList({ commits }: { commits: Commit[] }): ReactNode {
     }
     const commit = commits[index - 1];
     if (commit === undefined) continue;
-    rows.push(<CommitRow key={commit.oid} commit={commit} {...shared} />);
+    rows.push(
+      <CommitRow
+        key={commit.oid}
+        commit={commit}
+        graphRow={graph.rows[index - 1]}
+        laneCount={graph.laneCount}
+        {...shared}
+      />,
+    );
   }
 
   return (
@@ -227,11 +241,17 @@ function WorkingTreeRow({ index, selected, tabbable, onSelect }: RowProps): Reac
 
 function CommitRow({
   commit,
+  graphRow,
+  laneCount,
   index,
   selected,
   tabbable,
   onSelect,
-}: RowProps & { commit: Commit }): ReactNode {
+}: RowProps & {
+  commit: Commit;
+  graphRow: GraphRow | undefined;
+  laneCount: number;
+}): ReactNode {
   const subject = commit.subject === '' ? '(no subject)' : commit.subject;
   const relative = formatRelativeDate(commit.authorDate, new Date());
   return (
@@ -242,6 +262,9 @@ function CommitRow({
       onSelect={onSelect}
       label={rowLabel(commit, subject, relative)}
     >
+      {graphRow !== undefined && (
+        <GraphCell row={graphRow} laneCount={laneCount} rowHeight={ROW_HEIGHT} />
+      )}
       <span className={styles.oid}>{commit.shortOid}</span>
       <span className={styles.subject}>{subject}</span>
       {commit.refs.length > 0 && (

@@ -43,7 +43,7 @@ If schedule slips: cut graph *polish*, never parser tests.
 ### M4 — Branches + stash (~1 week)
 - [x] Create / checkout / delete branch (delete = confirm; prefer `-d`, explicit `-D`)
 - [x] Stash push / pop / list
-- [ ] Graph edges between commits (parent lines) — functional, not beautiful
+- [x] Graph edges between commits (parent lines) — functional, not beautiful
 
 ### M5 — Polish + dogfood gate (~1 week)
 - [ ] Keyboard navigation, focus states, contrast pass

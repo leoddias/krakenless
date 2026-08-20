@@ -123,6 +123,7 @@ describe('actions', () => {
       discarded: true,
       stashLabel: 'krakenless: discarded now',
       undoCommands: ['git restore --source=abc123 --worktree -- "a.txt"'],
+      notes: [],
     });
   });
 
@@ -329,6 +330,24 @@ describe('actions', () => {
     // index too and clobber the staged snapshot the discard protected.
     expect(store.getState().notice?.undoHint).toContain('git restore --source=');
     expect(store.getState().notice?.undoHint).toContain('--worktree');
+  });
+
+  it('offers no undo hint when there is no command to run', async () => {
+    // Discarding a deletion stashes something but produces no restore command;
+    // an empty hint would render as "Run this to undo:" above nothing.
+    discardPaths.mockResolvedValue({
+      discarded: true,
+      stashLabel: 'krakenless: deletion',
+      undoCommands: [],
+      notes: ['The stash abc123 also holds "a.txt", which this command cannot restore.'],
+    });
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await discard(store, ['a.txt'], 'Discard?');
+
+    expect(store.getState().notice?.undoHint).toBeUndefined();
+    expect(store.getState().notice?.message).toContain('cannot restore');
   });
 
   it('says nothing was discarded when git created no stash', async () => {

@@ -34,6 +34,7 @@ import {
   groupEntries,
   pathsOf,
   pathsOfAll,
+  partialRecoveryMessage,
   recoveryMessage,
   STATE_LABELS,
   STATE_LETTERS,
@@ -44,6 +45,12 @@ interface Recovery {
   id: number;
   /** Commands the git layer produced; shown verbatim so they can be copied. */
   undoCommands: string[];
+  /**
+   * What those commands cannot bring back. Dropping these would show a command
+   * above a path list it does not cover, which reads as "this restores them
+   * all".
+   */
+  notes: string[];
   paths: string[];
 }
 
@@ -161,6 +168,7 @@ export function ChangesView(): ReactNode {
         {
           id: nextRecoveryId.current,
           undoCommands: result.undoCommands,
+          notes: result.notes ?? [],
           paths: current.paths,
         },
         ...previous,
@@ -348,11 +356,20 @@ function RecoveryNotice({
   return (
     <div className={styles.recovery} role="status">
       <strong className={styles.noticeTitle}>Changes discarded — recoverable</strong>
-      <p className={styles.noticeText}>{recoveryMessage()}</p>
+      <p className={styles.noticeText}>
+        {recovery.undoCommands.length === 0
+          ? partialRecoveryMessage()
+          : recoveryMessage()}
+      </p>
       {recovery.undoCommands.map((command) => (
         <pre key={command} className={styles.noticeCommand}>
           <code>{command}</code>
         </pre>
+      ))}
+      {recovery.notes.map((note) => (
+        <p key={note} className={styles.warning}>
+          {note}
+        </p>
       ))}
       <ul className={styles.pathList}>
         {recovery.paths.map((path) => (
