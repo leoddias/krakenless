@@ -466,6 +466,7 @@ function parseFileEntry(
       newPath,
       kind: facts.kind,
       binary: facts.binary,
+      conflicted: false,
       headerLines,
       hunks,
     },
@@ -536,6 +537,7 @@ function parseCombinedEntry(
       // An add/add or delete/delete conflict does say so in its header.
       kind: facts.kind,
       binary: facts.binary,
+      conflicted: true,
       headerLines,
       hunks: [],
     },
@@ -552,6 +554,7 @@ function parseUnmergedNotice(line: string): FileDiff {
     newPath: path,
     kind: 'modified',
     binary: false,
+    conflicted: true,
     headerLines: [line],
     hunks: [],
   };

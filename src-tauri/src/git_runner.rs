@@ -56,11 +56,16 @@ const GIT_ENV_TO_SCRUB: [&str; 16] = [
 /// are decided once, here, instead of per builder. `--literal-pathspecs`
 /// matters most on the write side: a file legally named `:(glob)**` would
 /// otherwise expand a `checkout -- <path>` from one file to the whole tree.
-const GIT_GLOBAL_ARGS: [&str; 4] = [
+const GIT_GLOBAL_ARGS: [&str; 6] = [
     "--no-pager",
     "--literal-pathspecs",
     "-c",
     "core.quotePath=false",
+    // Without this, a user's `i18n.logOutputEncoding` makes git emit commit
+    // messages in a legacy encoding, which the UTF-8 decode below then flags as
+    // undecodable — blinding every parser that reads commit text.
+    "-c",
+    "i18n.logOutputEncoding=UTF-8",
 ];
 
 #[derive(Debug, serde::Serialize)]

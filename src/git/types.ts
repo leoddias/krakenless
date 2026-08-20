@@ -153,6 +153,13 @@ export interface FileDiff {
   newPath: string;
   kind: FileChangeKind;
   binary: boolean;
+  /**
+   * True when git reported the path as conflicted (`diff --cc` or
+   * `* Unmerged path`). Such an entry has no hunks and no appliable patch —
+   * "no hunks" alone also describes a mode-only change or an empty new file,
+   * which *must* be staged wholesale, so staging code has to switch on this.
+   */
+  conflicted: boolean;
   /** Raw `diff --git` header lines preceding the first hunk. */
   headerLines: string[];
   hunks: Hunk[];

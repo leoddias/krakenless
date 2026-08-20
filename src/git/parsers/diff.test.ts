@@ -691,6 +691,7 @@ describe('parseDiff — entries git writes without --- / +++ lines', () => {
     expect(file).toEqual({
       oldPath: 'modeme.sh',
       newPath: 'modeme.sh',
+      conflicted: false,
       kind: 'modified',
       binary: false,
       headerLines: [
@@ -836,6 +837,9 @@ describe('parseDiff — conflicted repositories', () => {
     // The conflicted path is reported, but offers nothing to stage: an `@@@`
     // body has one marker column per parent and `git apply` will not take it.
     expect(files[0]!.hunks).toEqual([]);
+    // Staging code must switch on this: "no hunks" alone also describes a
+    // mode-only change, which is staged wholesale.
+    expect(files[0]!.conflicted).toBe(true);
     expect(files[0]!.headerLines).toEqual([
       'diff --cc mid.txt',
       'index af70335,f794161..0000000',
@@ -857,6 +861,7 @@ describe('parseDiff — conflicted repositories', () => {
       newPath: 'mid.txt',
       kind: 'modified',
       binary: false,
+      conflicted: true,
       headerLines: ['* Unmerged path mid.txt'],
       hunks: [],
     });

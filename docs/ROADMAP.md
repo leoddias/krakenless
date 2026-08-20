@@ -16,14 +16,14 @@ If schedule slips: cut graph *polish*, never parser tests.
       documented in README
 
 ### M1 — Read-only repo view (~1–2 weeks)
-- [ ] Git layer skeleton: run `git` with args array (never string interpolation),
+- [x] Git layer skeleton: run `git` with args array (never string interpolation),
       capture stdout/stderr/exit code, timeout handling
-- [ ] Detect valid repo; graceful error for non-repo folder
+- [x] Detect valid repo; graceful error for non-repo folder
 - [ ] Welcome screen: recent repos (JSON config in `%APPDATA%/krakenless`) + folder picker
-- [ ] Parse `git status --porcelain=v2 --branch` → typed model (unit tests)
-- [ ] Parse `git log` with explicit `--format` separator → commit list (unit tests)
+- [x] Parse `git status --porcelain=v2 --branch` → typed model (unit tests)
+- [x] Parse `git log` with explicit `--format` separator → commit list (unit tests)
 - [ ] Commit list UI (virtualized) with branch/tag/HEAD decorations
-- [ ] Diff viewer: `git diff` / `git show` parsed and rendered read-only (unit tests)
+- [ ] Diff viewer: `git diff` / `git show` parsed (done) and rendered read-only (UI pending)
 - [ ] Loading / empty / error states for every panel
 
 ### M2 — Staging + commit (~1–2 weeks; hardest milestone)
@@ -66,6 +66,23 @@ after 2 more weeks → proceed to v0.2. Else: keep as personal tool, stop invest
 - Mac/Linux builds if a real user wants them
 
 ## Backlog (ideas parking lot — not scheduled)
+
+Found during M1 fan-out (2026-08-20), by the workers and their reviewers:
+
+- One unparseable commit fails the whole log; consider a per-record
+  `unparseable` placeholder so a single poisoned object cannot blind the view.
+- `readLog` buffers all history into one string and has no default limit —
+  a large repo hits the runner timeout instead of paging.
+- No end-to-end integration test drives the real git binary yet; parser
+  fixtures are captured by hand. `tests/integration/` is still empty.
+- `src/git/diff.ts` and `src/git/log.ts` have no tests of their own (parsers do).
+- Status consumers must branch on `entry.conflicted` before `index`/`worktree`;
+  `untracked: 'normal'` yields collapsed `dir/` entries a discard must reject.
+- `# branch.head (detached)` is ambiguous with a branch named `(detached)`;
+  disambiguating needs a `symbolic-ref -q HEAD` cross-check.
+- `assertPath` still accepts a leading `:` — decide whether to reject it.
+- File history (`git log -- <path>`, `--follow`) is not supported by the builder.
+- Conflicted files have no diff view until a conflict-resolution UI exists.
 
 - Interactive rebase UI (drag to reorder/squash)
 - Repo tabs
