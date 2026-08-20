@@ -45,6 +45,7 @@ This file is the entry point for every session — human or agent.
 
 ## Skills & agents available here
 
+- `/commit` — commit in project style: single-line subject, no body, no trailers
 - `/handoff` — write the end-of-session state into PROGRESS.md
 - `/adr` — record or supersede a decision in DECISIONS.md
 - `/next-task` — pick up the next unblocked task from ROADMAP/PROGRESS

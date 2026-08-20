@@ -22,6 +22,8 @@
 
 - Conventional Commits: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`,
   `chore:`, `ci:`. Scope optional: `feat(staging): ...`
+- Subject line only — no body, no `Co-Authored-By` or other trailers.
+  Use the `/commit` skill.
 - Small, coherent commits; a milestone checkbox ≈ 1–3 commits.
 - Check off the matching `docs/ROADMAP.md` item in the same commit that
   completes it.
