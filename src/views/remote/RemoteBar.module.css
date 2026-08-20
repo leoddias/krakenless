@@ -58,6 +58,25 @@
   outline-offset: -1px;
 }
 
+.spinner {
+  color: var(--accent);
+  animation: spin 0.8s linear infinite;
+}
+
+/* Respects a user who asked the system for less motion: the spinner still
+   marks the running action, it just does not turn. */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* --- upstream summary ------------------------------------------------------ */
 
 .tracking {

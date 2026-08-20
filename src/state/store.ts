@@ -22,11 +22,31 @@ import type {
 export type Loadable<T> =
   | { state: 'idle' }
   | { state: 'loading' }
-  | { state: 'ready'; value: T }
+  /** `stale` marks a value that is being re-read and is about to be replaced. */
+  | { state: 'ready'; value: T; stale?: boolean }
   | { state: 'error'; message: string; kind?: string };
 
 export function idle<T>(): Loadable<T> {
   return { state: 'idle' };
+}
+
+/**
+ * The state a panel enters when it starts re-reading.
+ *
+ * A panel that already has an answer keeps showing it, marked stale, instead of
+ * dropping to `loading`. Every write — a pull, a commit, a stage, or the file
+ * watcher noticing an editor save — re-reads several panels at once, and
+ * blanking them all turns a two-second fetch into the whole window reloading,
+ * with the history, the diff and the branch list all disappearing and coming
+ * back. The user asked for a pull; they did not ask to lose their place.
+ *
+ * A panel with nothing to show still goes to `loading`: that is a first load,
+ * and there the spinner is the honest answer.
+ */
+function reloading<T>(previous: Loadable<T>): Loadable<T> {
+  return previous.state === 'ready'
+    ? { state: 'ready', value: previous.value, stale: true }
+    : { state: 'loading' };
 }
 
 export interface Selection {
@@ -160,7 +180,7 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...initialState(), config: state.config };
 
     case 'status/loading':
-      return { ...state, status: { state: 'loading' } };
+      return { ...state, status: reloading(state.status) };
     case 'status/loaded':
       return { ...state, status: { state: 'ready', value: action.status } };
     case 'status/failed':
@@ -170,7 +190,7 @@ export function reduce(state: AppState, action: Action): AppState {
       };
 
     case 'commits/loading':
-      return { ...state, commits: { state: 'loading' } };
+      return { ...state, commits: reloading(state.commits) };
     case 'commits/loaded':
       return { ...state, commits: { state: 'ready', value: action.commits } };
     case 'commits/failed':
@@ -180,7 +200,7 @@ export function reduce(state: AppState, action: Action): AppState {
       };
 
     case 'diff/loading':
-      return { ...state, diff: { state: 'loading' } };
+      return { ...state, diff: reloading(state.diff) };
     case 'diff/loaded':
       return { ...state, diff: { state: 'ready', value: action.files } };
     case 'diff/failed':
@@ -190,7 +210,7 @@ export function reduce(state: AppState, action: Action): AppState {
       };
 
     case 'branches/loading':
-      return { ...state, branches: { state: 'loading' } };
+      return { ...state, branches: reloading(state.branches) };
     case 'branches/loaded':
       return { ...state, branches: { state: 'ready', value: action.branches } };
     case 'branches/failed':
@@ -200,7 +220,7 @@ export function reduce(state: AppState, action: Action): AppState {
       };
 
     case 'remotes/loading':
-      return { ...state, remotes: { state: 'loading' } };
+      return { ...state, remotes: reloading(state.remotes) };
     case 'remotes/loaded':
       return { ...state, remotes: { state: 'ready', value: action.remotes } };
     case 'remotes/failed':
@@ -210,7 +230,7 @@ export function reduce(state: AppState, action: Action): AppState {
       };
 
     case 'stashes/loading':
-      return { ...state, stashes: { state: 'loading' } };
+      return { ...state, stashes: reloading(state.stashes) };
     case 'stashes/loaded':
       return { ...state, stashes: { state: 'ready', value: action.stashes } };
     case 'stashes/failed':

@@ -4,6 +4,7 @@
 //! "something under this path changed, and it was not just git's own churn" and
 //! lets the TypeScript layer decide what to re-read.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver};
@@ -87,22 +88,26 @@ fn is_interesting(event: notify::Result<notify::Event>) -> bool {
 /// Hands out a fresh identity for every watch that is started.
 static NEXT_TOKEN: AtomicU64 = AtomicU64::new(1);
 
-/// The watch currently in force, and the token that owns it.
+/// Every watch in force, by the token that owns it.
 ///
-/// The token exists because stopping is not "stop whatever is running": two
+/// A map rather than a single slot, for two reasons. The app keeps one open
+/// repository per tab and every one of them has to stay current, not just
+/// whichever the user is looking at. And even with one repository open, two
 /// watches overlap whenever the UI re-runs its effect (React's StrictMode does
-/// this on every mount in development) or the user opens a second repository
-/// while the first is still starting. Both call `watch_repo`, then the *first*
-/// one's teardown arrives — and without an identity it would tear down the
-/// second one's watch, leaving the app watching nothing at all and silently
-/// blind to every change made outside it.
+/// this on every mount in development): both call `watch_repo`, then the
+/// *first* one's teardown arrives, and without an identity it would tear down
+/// the watch that replaced it — leaving the app blind to every change made
+/// outside it.
 #[derive(Default)]
 pub struct WatcherState {
-    inner: Mutex<Option<(u64, RecommendedWatcher)>>,
+    inner: Mutex<HashMap<u64, RecommendedWatcher>>,
 }
 
-/// Starts watching `path`, replacing any previous watch. Emits
-/// [`REPO_CHANGED_EVENT`] to the frontend when the working tree changes.
+/// Starts watching `path`, alongside any watch already running.
+///
+/// Emits [`REPO_CHANGED_EVENT`] to the frontend when that working tree changes,
+/// carrying the watch's token as the payload: with several repositories open at
+/// once, a listener has to be able to tell whose change it just heard about.
 ///
 /// Returns the token that identifies this watch; pass it to [`unwatch_repo`].
 #[tauri::command]
@@ -116,6 +121,7 @@ pub fn watch_repo(
         return Err(WatchError::BadPath(format!("not a directory: {path}")));
     }
 
+    let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = channel();
     let mut watcher = notify::recommended_watcher(move |event| {
         // A closed receiver just means the watch was replaced; drop quietly.
@@ -130,46 +136,34 @@ pub fn watch_repo(
     std::thread::spawn(move || {
         while let Some(interesting) = coalesce(&rx) {
             if interesting {
-                let _ = app.emit(REPO_CHANGED_EVENT, ());
+                let _ = app.emit(REPO_CHANGED_EVENT, token);
             }
         }
     });
 
-    let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
-    // Dropping the previous watcher stops the previous watch.
-    *state
+    state
         .inner
         .lock()
-        .map_err(|e| WatchError::WatchFailed(e.to_string()))? = Some((token, watcher));
+        .map_err(|e| WatchError::WatchFailed(e.to_string()))?
+        .insert(token, watcher);
     Ok(token)
-}
-
-/// True when `token` still owns the watch recorded in `current`.
-///
-/// Its own function so the rule can be tested: the watcher it guards cannot be
-/// constructed without a real filesystem, and this decision is the whole reason
-/// the token exists.
-fn owns(current: Option<u64>, token: u64) -> bool {
-    current == Some(token)
 }
 
 /// Stops the watch named by `token`, and only that one.
 ///
-/// A token that no longer owns the current watch is a teardown that lost its
-/// race with a newer watch; it is a no-op rather than an error, because the
-/// caller did nothing wrong and the newer watch must survive.
+/// A token that names no watch is a teardown that lost its race with the watch
+/// that replaced it, or a second stop; it is a no-op rather than an error,
+/// because the caller did nothing wrong and every other watch must survive.
 #[tauri::command]
 pub fn unwatch_repo(
     state: tauri::State<'_, WatcherState>,
     token: u64,
 ) -> Result<(), WatchError> {
-    let mut current = state
+    state
         .inner
         .lock()
-        .map_err(|e| WatchError::WatchFailed(e.to_string()))?;
-    if owns(current.as_ref().map(|(owner, _)| *owner), token) {
-        *current = None;
-    }
+        .map_err(|e| WatchError::WatchFailed(e.to_string()))?
+        .remove(&token);
     Ok(())
 }
 
@@ -221,7 +215,7 @@ mod tests {
 
     #[test]
     fn coalesces_a_burst_into_one_notification() {
-        let (tx, rx) = channel();
+    let (tx, rx) = channel();
         for _ in 0..50 {
             tx.send(Ok(notify::Event {
                 paths: vec![PathBuf::from("C:/repos/app/src/main.rs")],
@@ -236,7 +230,7 @@ mod tests {
 
     #[test]
     fn a_burst_of_pure_noise_reports_nothing_interesting() {
-        let (tx, rx) = channel();
+    let (tx, rx) = channel();
         for name in ["index", "index.lock", "objects/ab/cd"] {
             tx.send(Ok(notify::Event {
                 paths: vec![PathBuf::from(format!("C:/repos/app/.git/{name}"))],
@@ -249,7 +243,7 @@ mod tests {
 
     #[test]
     fn one_real_change_inside_a_noisy_burst_still_counts() {
-        let (tx, rx) = channel();
+    let (tx, rx) = channel();
         tx.send(Ok(notify::Event {
             paths: vec![PathBuf::from("C:/repos/app/.git/index.lock")],
             ..Default::default()
@@ -266,7 +260,7 @@ mod tests {
     #[test]
     fn a_watcher_error_is_reported_rather_than_swallowed() {
         // Dropped events mean we may have missed a real change.
-        let (tx, rx) = channel();
+    let (tx, rx) = channel();
         tx.send(Err(notify::Error::generic("queue overflow"))).unwrap();
         assert_eq!(coalesce(&rx), Some(true));
     }
@@ -279,21 +273,30 @@ mod tests {
     }
 
     #[test]
-    fn a_token_only_stops_the_watch_it_names() {
-        // Two watches overlap whenever the UI re-runs the effect that owns them
-        // (React's StrictMode does this on every mount in development). The
-        // first teardown then arrives *after* the second watch has started, and
-        // without an identity it would stop the wrong one — leaving the app
-        // watching nothing and blind to every change made outside it.
+    fn every_watch_gets_its_own_identity() {
         let first = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
         let second = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
-        assert_ne!(first, second, "every watch needs its own identity");
+        assert_ne!(first, second);
+    }
 
-        assert!(owns(Some(second), second), "the current watch stops itself");
-        assert!(
-            !owns(Some(second), first),
-            "a late teardown must not stop the watch that replaced it"
-        );
-        assert!(!owns(None, first), "stopping twice is a no-op, not an error");
+    #[test]
+    fn stopping_one_watch_leaves_the_others_running() {
+        // One repository per tab, all of them staying current: a teardown that
+        // took the whole map with it would leave every other tab blind to
+        // changes made outside the app. The map is the decision; the watchers
+        // it holds cannot be built without a real filesystem, so the test
+        // exercises the shape rather than the notify handles.
+        let mut watches: HashMap<u64, &str> = HashMap::new();
+        watches.insert(1, "C:/repos/a");
+        watches.insert(2, "C:/repos/b");
+
+        watches.remove(&1);
+
+        assert!(!watches.contains_key(&1), "the named watch stops");
+        assert_eq!(watches.get(&2), Some(&"C:/repos/b"), "the others stay");
+
+        // A teardown that lost its race with a newer watch names nothing.
+        watches.remove(&1);
+        assert_eq!(watches.len(), 1, "stopping twice is a no-op, not an error");
     }
 }

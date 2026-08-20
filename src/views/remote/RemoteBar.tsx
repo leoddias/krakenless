@@ -24,7 +24,7 @@ import {
 } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
 import { isBusy } from '../../state/store';
-import { FetchIcon, PullIcon, PushIcon } from '../shell/icons';
+import { FetchIcon, PullIcon, PushIcon, SpinnerIcon } from '../shell/icons';
 import styles from './RemoteBar.module.css';
 import {
   candidateRemotes,
@@ -169,11 +169,16 @@ export function RemoteBar(): ReactNode {
   // text, because a disabled control cannot be focused and its tooltip is
   // never announced — the strip is where that text lives now that the buttons
   // are compact.
+  // The icon becomes a spinner while that action runs: the answer to "is it
+  // doing anything?" belongs on the control that was pressed.
+  const spinning = (kind: ActionKind, icon: ReactNode): ReactNode =>
+    running === kind ? <SpinnerIcon className={styles.spinner} /> : icon;
+
   const actions: ToolbarAction[] = [
     {
       id: 'remote-fetch',
       label: 'Fetch',
-      icon: <FetchIcon />,
+      icon: spinning('fetch', <FetchIcon />),
       reason: fetchBlock(gate),
       hint: 'Downloads new commits from every remote and prunes branches that are gone. Nothing in your working tree changes.',
       onClick: () => void run('fetch', () => fetchRemote(store)),
@@ -181,7 +186,7 @@ export function RemoteBar(): ReactNode {
     {
       id: 'remote-pull',
       label: 'Pull',
-      icon: <PullIcon />,
+      icon: spinning('pull', <PullIcon />),
       reason: pullBlock(gate),
       hint: 'Fast-forward only. If your branch and its upstream have diverged, git stops and says so instead of merging for you.',
       onClick: () => void run('pull', () => pullCurrent(store)),
@@ -189,7 +194,7 @@ export function RemoteBar(): ReactNode {
     {
       id: 'remote-push',
       label: publishing ? 'Publish branch' : 'Push',
-      icon: <PushIcon />,
+      icon: spinning(publishing ? 'publish' : 'push', <PushIcon />),
       reason: pushReason,
       hint: pushHint(upstream, publishRemote),
       onClick: onPush,

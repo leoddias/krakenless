@@ -310,6 +310,27 @@ describe('RemoteBar — refusals', () => {
 });
 
 describe('RemoteBar — honesty about failure', () => {
+  it('marks the running action on the button, not by reloading the window', () => {
+    // A pull re-reads several panels. Blanking them all is how a two-second
+    // fetch turns into the whole window reloading; the answer to "is it doing
+    // anything?" belongs on the control that was pressed.
+    let finish = (): void => {};
+    pullMock.mockImplementation(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finish = () => resolve(true);
+        }),
+    );
+    renderReady();
+
+    fireEvent.click(button('Pull'));
+
+    const spinner = button('Pull').querySelector('svg');
+    expect(spinner?.getAttribute('class')).toMatch(/spinner/);
+
+    act(() => finish());
+  });
+
   it('does not report success when the action layer returns false', async () => {
     pushMock.mockResolvedValue(false);
     renderReady({ upstream: 'origin/main', ahead: 1 });

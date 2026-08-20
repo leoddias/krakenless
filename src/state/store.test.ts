@@ -146,3 +146,40 @@ describe('createStore', () => {
     expect(second).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('re-reading a panel', () => {
+  it('keeps the last answer on screen instead of blanking the window', () => {
+    // Every write re-reads several panels at once. Dropping them all to
+    // `loading` turns a two-second pull into the whole window reloading.
+    const store = createStore();
+    store.dispatch({ type: 'commits/loaded', commits: [] });
+    store.dispatch({ type: 'commits/loading' });
+
+    const commits = store.getState().commits;
+    expect(commits.state).toBe('ready');
+    expect(commits.state === 'ready' && commits.stale).toBe(true);
+  });
+
+  it('still shows a spinner for a first load, which has nothing to keep', () => {
+    const store = createStore();
+    store.dispatch({ type: 'commits/loading' });
+    expect(store.getState().commits.state).toBe('loading');
+  });
+
+  it('drops the stale mark once the new answer arrives', () => {
+    const store = createStore();
+    store.dispatch({ type: 'commits/loaded', commits: [] });
+    store.dispatch({ type: 'commits/loading' });
+    store.dispatch({ type: 'commits/loaded', commits: [] });
+
+    const commits = store.getState().commits;
+    expect(commits.state === 'ready' && commits.stale).toBeUndefined();
+  });
+
+  it('does not keep a failed answer on screen as though it were current', () => {
+    const store = createStore();
+    store.dispatch({ type: 'commits/failed', message: 'git exploded' });
+    store.dispatch({ type: 'commits/loading' });
+    expect(store.getState().commits.state).toBe('loading');
+  });
+});

@@ -123,7 +123,11 @@ export function ChangesView(): ReactNode {
   const runDiscard = async (current: Pending): Promise<void> => {
     // Re-read the status as it is *now*, not as it was when the dialog opened.
     const latest = store.getState().status;
-    if (latest.state !== 'ready') {
+    // `stale` counts as not knowing: a re-read that is still running is
+    // showing the previous answer, and discarding against an answer that is
+    // already known to be out of date is exactly the case this guard exists
+    // for. Only a settled status can authorise taking work off disk.
+    if (latest.state !== 'ready' || latest.stale === true) {
       // Not knowing is not the same as knowing there is nothing to discard.
       setPending({ ...current, notice: 'unchecked' });
       return;

@@ -170,3 +170,30 @@ export function ChevronDownIcon(props: IconProps): ReactNode {
     </Svg>
   );
 }
+
+/**
+ * A ring with a gap, spun by CSS.
+ *
+ * Takes the place of an action's own icon while that action is running, so the
+ * button says what is happening where the user is already looking — instead of
+ * the whole window reloading to tell them.
+ */
+export function SpinnerIcon({ size = 16, className }: IconProps): ReactNode {
+  return (
+    <svg
+      className={className}
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <circle cx="8" cy="8" r="6" opacity="0.25" />
+      <path d="M14 8a6 6 0 0 0-6-6" />
+    </svg>
+  );
+}
