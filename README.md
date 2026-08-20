@@ -172,6 +172,13 @@ App settings live in `%APPDATA%/krakenless/` as human-readable JSON — the same
 file the Settings screen writes. Backup = copy that folder. Everything else is
 your repos, owned by git.
 
+## Landing page
+
+The site in [`site/`](site/) is plain static HTML with no build step, published
+to GitHub Pages by `.github/workflows/pages.yml` whenever `site/**` changes.
+Enabling it is a one-time repository setting: **Settings → Pages → Source →
+GitHub Actions**.
+
 ## Sponsoring
 
 Krakenless is free and will stay free. If it replaces a paid client for you,

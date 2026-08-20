@@ -18,6 +18,20 @@
 - Destructive-operation code paths (discard, force-push, `branch -D`) need an
   integration test proving the recoverable path (e.g. stash created).
 
+## CI
+
+- The gate is `npm run lint`, `npm run format:check`, `npm test`,
+  `npm run build`, plus clippy and `cargo test` — run over the **whole repo**,
+  not just `src/`. Formatting one directory locally is how a green local run
+  turns into a red CI one.
+- `.gitattributes` normalises line endings to LF. A file written by a tool that
+  defaults to CRLF on Windows would otherwise pass locally and fail
+  `prettier --check` in CI.
+- The desktop job builds on Windows, macOS and Linux. Windows is the only
+  shipped target for v0.1; the other two exist because the git layer has
+  platform-specific code (process groups, `reveal_folder`, path separators) and
+  a break there is a real bug even where we do not ship.
+
 ## Commits
 
 - Conventional Commits: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`,
