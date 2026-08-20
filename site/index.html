@@ -296,17 +296,54 @@
         that command was well-formed and wrong.
       </p>
 
-      <h2>Get it</h2>
+      <h2>Download</h2>
       <p>
-        There is no stable download yet, and the page will not pretend otherwise:
-        Krakenless has not been dogfooded, so nothing here has been used in anger for a
-        full day of real work. When a build is cut it is published on the releases page,
-        unsigned — Windows SmartScreen will call the publisher unknown, and macOS will
-        need an explicit allow in
-        <em>Privacy &amp; Security</em>.
+        Version <strong>0.1.0-alpha</strong>. Pre-alpha means exactly that: it has not
+        been through a full day of real work yet, so treat it as something to try on a
+        repository you have pushed, not as your only Git client.
       </p>
+
+      <div class="grid">
+        <div class="card">
+          <h3>Windows</h3>
+          <p>
+            <a
+              href="https://github.com/leoddias/krakenless/releases/download/v0.1.0-alpha/Krakenless_0.1.0_x64-setup.exe"
+              >Installer (.exe)</a
+            >
+            &nbsp;·&nbsp;
+            <a
+              href="https://github.com/leoddias/krakenless/releases/download/v0.1.0-alpha/Krakenless_0.1.0_x64_en-US.msi"
+              >MSI</a
+            >
+            <br />64-bit. Needs <code>git</code> on your PATH.
+          </p>
+        </div>
+        <div class="card">
+          <h3>macOS</h3>
+          <p>
+            <a
+              href="https://github.com/leoddias/krakenless/releases/download/v0.1.0-alpha/Krakenless_0.1.0_aarch64.dmg"
+              >Disk image (.dmg)</a
+            >
+            <br />Apple Silicon only — there is no Intel build yet.
+          </p>
+        </div>
+      </div>
+
+      <p class="callout">
+        These installers are <strong>unsigned</strong>, because code-signing certificates
+        cost money this project does not take. Windows SmartScreen will call the publisher
+        unknown — “More info” then “Run anyway”. macOS will refuse the first launch; allow
+        it in <em>System Settings → Privacy &amp; Security</em>. If you would rather not
+        click through either warning, build from source below: it is the same code and
+        takes about two minutes.
+      </p>
+
       <p>
-        <a class="cta" href="https://github.com/leoddias/krakenless/releases">Releases</a>
+        <a class="cta" href="https://github.com/leoddias/krakenless/releases"
+          >All releases</a
+        >
       </p>
 
       <h2>Or build it</h2>

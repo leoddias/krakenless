@@ -1,6 +1,9 @@
 # Krakenless
 
 > **Status: pre-alpha — usable for reading and committing, not yet dogfooded.**
+> Installers for Windows and macOS (Apple Silicon):
+> [v0.1.0-alpha](https://github.com/leoddias/krakenless/releases/tag/v0.1.0-alpha).
+> They are unsigned, so both systems will warn before opening them.
 > "Krakenless" is a development codename; the project will be renamed before
 > any public release.
 

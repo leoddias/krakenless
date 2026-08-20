@@ -20,6 +20,14 @@
   property for any future change to `stage.ts` or `recovery.ts`.
 - **Not built:** conflict *resolution* UI, interactive rebase. Both are v0.2.
 
+## Released
+
+- **v0.1.0-alpha** (2026-08-20): Windows `.exe`/`.msi` and macOS `aarch64.dmg`,
+  built by `.github/workflows/release.yml` from the `v0.1.0-alpha` tag, marked
+  prerelease. Unsigned — no certificate. Cut at the user's explicit request,
+  ahead of both the dogfood gate in `PLAN.md` and the rename in ADR-0010; both
+  were raised first and the call was theirs.
+
 ## Next up (in order)
 
 1. **The dogfood gate** (`docs/ROADMAP.md` § M5): use Krakenless as the only
