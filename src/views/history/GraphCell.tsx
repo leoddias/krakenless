@@ -1,10 +1,13 @@
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
+import { avatarFill, initials } from './avatar';
 import type { GraphRow } from './graph';
 import styles from './history.module.css';
 
-/** Horizontal distance between lanes, in pixels. */
-const LANE_WIDTH = 10;
+/** Horizontal distance between lanes, in pixels. Wide enough for a badge. */
+const LANE_WIDTH = 18;
 const NODE_RADIUS = 3.5;
+/** Radius of the author badge drawn in place of the node. */
+const AVATAR_RADIUS = 8;
 
 /**
  * Most rows a repository with many branches would otherwise reserve.
@@ -32,11 +35,27 @@ export function GraphCell({
   row,
   laneCount,
   rowHeight,
+  author,
+  avatarUrl,
 }: {
   row: GraphRow;
   laneCount: number;
   rowHeight: number;
+  /**
+   * Who wrote the commit. When given, the node is drawn as that author's
+   * badge — initials on a colour derived from their identity, computed here
+   * and never fetched (see `avatar.ts`).
+   */
+  author?: { name: string; email: string };
+  /**
+   * Picture to draw over the badge, when the user has opted into fetching one
+   * (ADR-0019). It is layered *on top of* the derived badge rather than
+   * replacing it, so a request that is blocked, offline or 404 leaves the
+   * initials showing instead of a hole.
+   */
+  avatarUrl?: string | null;
 }): ReactNode {
+  const clipId = useId();
   const drawWidth = Math.max(laneCount, 1) * LANE_WIDTH;
   const width = Math.min(drawWidth, MAX_RESERVED_LANES * LANE_WIDTH);
   const nodeX = laneX(row.lane);
@@ -69,12 +88,52 @@ export function GraphCell({
           fill="none"
         />
       ))}
-      <circle
-        className={row.isMerge ? styles.graphNodeMerge : styles.graphNode}
-        cx={nodeX}
-        cy={middle}
-        r={NODE_RADIUS}
-      />
+      {author === undefined ? (
+        <circle
+          className={row.isMerge ? styles.graphNodeMerge : styles.graphNode}
+          cx={nodeX}
+          cy={middle}
+          r={NODE_RADIUS}
+        />
+      ) : (
+        <g>
+          {/* The colour is a presentation attribute rather than a class: it is
+              per-author data, not a style the sheet could know. */}
+          <circle
+            className={row.isMerge ? styles.graphAvatarMerge : styles.graphAvatar}
+            cx={nodeX}
+            cy={middle}
+            r={AVATAR_RADIUS}
+            fill={avatarFill(author.email, author.name)}
+          />
+          <text
+            className={styles.graphInitials}
+            x={nodeX}
+            y={middle}
+            textAnchor="middle"
+            dominantBaseline="central"
+          >
+            {initials(author.name)}
+          </text>
+          {avatarUrl !== undefined && avatarUrl !== null && (
+            <>
+              <clipPath id={clipId}>
+                <circle cx={nodeX} cy={middle} r={AVATAR_RADIUS} />
+              </clipPath>
+              <image
+                className={styles.graphPhoto}
+                href={avatarUrl}
+                x={nodeX - AVATAR_RADIUS}
+                y={middle - AVATAR_RADIUS}
+                width={AVATAR_RADIUS * 2}
+                height={AVATAR_RADIUS * 2}
+                clipPath={`url(#${clipId})`}
+                preserveAspectRatio="xMidYMid slice"
+              />
+            </>
+          )}
+        </g>
+      )}
     </svg>
   );
 }

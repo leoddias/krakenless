@@ -24,11 +24,17 @@ import { useAppState, useStore } from '../../state/hooks';
 import type { Loadable } from '../../state/store';
 import { formatAbsoluteDate, formatRelativeDate } from './relativeTime';
 import { GraphCell } from './GraphCell';
+import { githubAvatarUrl } from './githubAvatar';
 import { buildGraph, type GraphRow } from './graph';
 import styles from './history.module.css';
 
 /** Height of one row in pixels; must match `.row` in the stylesheet. */
-export const ROW_HEIGHT = 44;
+export const ROW_HEIGHT = 30;
+/**
+ * Size asked of GitHub for an author picture. Twice the badge's 16px so it
+ * stays sharp on a 2x display, and the smallest step that is still cached.
+ */
+const AVATAR_PIXELS = 32;
 /** Rows kept mounted above and below the viewport, to hide scroll latency. */
 const OVERSCAN = 6;
 /**
@@ -43,7 +49,17 @@ export function HistoryView(): ReactNode {
   const commits = useAppState((state) => state.commits);
   return (
     <section className={styles.panel} aria-label="History">
-      <h2 className={styles.title}>History</h2>
+      <div className={styles.head}>
+        <h2 className={styles.srOnly}>History</h2>
+        <span className={`${styles.columnRefs} ${styles.columnLabel}`}>Branch / Tag</span>
+        <span className={`${styles.columnGraph} ${styles.columnLabel}`}>Graph</span>
+        <span className={`${styles.columnSubject} ${styles.columnLabel}`}>
+          Commit message
+        </span>
+        <span className={`${styles.columnAuthor} ${styles.columnLabel}`}>Author</span>
+        <span className={`${styles.columnOid} ${styles.columnLabel}`}>Commit</span>
+        <span className={`${styles.columnDate} ${styles.columnLabel}`}>When</span>
+      </div>
       <Body commits={commits} />
     </section>
   );
@@ -77,6 +93,9 @@ function Body({ commits }: { commits: Loadable<Commit[]> }): ReactNode {
 function CommitList({ commits }: { commits: Commit[] }): ReactNode {
   const store = useStore();
   const selectedOid = useAppState((state) => state.selection.commitOid);
+  // Off unless the user turned it on; see ADR-0019. Read once for the list
+  // rather than per row, so a re-render cannot leave half the graph fetching.
+  const photos = useAppState((state) => state.config.githubAvatars);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(FALLBACK_VIEWPORT_HEIGHT);
@@ -190,6 +209,7 @@ function CommitList({ commits }: { commits: Commit[] }): ReactNode {
         commit={commit}
         graphRow={graph.rows[index - 1]}
         laneCount={graph.laneCount}
+        photos={photos}
         {...shared}
       />,
     );
@@ -230,11 +250,17 @@ function WorkingTreeRow({ index, selected, tabbable, onSelect }: RowProps): Reac
       onSelect={onSelect}
       label="Working tree, uncommitted changes"
     >
-      <span className={styles.oid} aria-hidden="true">
+      <span className={styles.columnRefs} />
+      <span className={styles.columnGraph} />
+      <span className={styles.columnSubject}>
+        <span className={styles.wip}>Working tree</span>
+        <span className={styles.wipNote}>Uncommitted changes</span>
+      </span>
+      <span className={styles.columnAuthor} />
+      <span className={styles.columnOid} aria-hidden="true">
         —
       </span>
-      <span className={styles.subject}>Working tree</span>
-      <span className={styles.author}>Uncommitted changes</span>
+      <span className={styles.columnDate} />
     </RowButton>
   );
 }
@@ -243,6 +269,7 @@ function CommitRow({
   commit,
   graphRow,
   laneCount,
+  photos,
   index,
   selected,
   tabbable,
@@ -251,6 +278,8 @@ function CommitRow({
   commit: Commit;
   graphRow: GraphRow | undefined;
   laneCount: number;
+  /** Whether the user opted into fetching author pictures (ADR-0019). */
+  photos: boolean;
 }): ReactNode {
   const subject = commit.subject === '' ? '(no subject)' : commit.subject;
   const relative = formatRelativeDate(commit.authorDate, new Date());
@@ -262,21 +291,27 @@ function CommitRow({
       onSelect={onSelect}
       label={rowLabel(commit, subject, relative)}
     >
-      {graphRow !== undefined && (
-        <GraphCell row={graphRow} laneCount={laneCount} rowHeight={ROW_HEIGHT} />
-      )}
-      <span className={styles.oid}>{commit.shortOid}</span>
-      <span className={styles.subject}>{subject}</span>
-      {commit.refs.length > 0 && (
-        <span className={styles.refs}>
-          {commit.refs.map((ref) => (
-            <RefChip key={`${ref.kind}:${ref.name}`} commitRef={ref} />
-          ))}
-        </span>
-      )}
-      <span className={styles.author}>{commit.authorName}</span>
+      <span className={styles.columnRefs}>
+        {commit.refs.map((ref) => (
+          <RefChip key={`${ref.kind}:${ref.name}`} commitRef={ref} />
+        ))}
+      </span>
+      <span className={styles.columnGraph}>
+        {graphRow !== undefined && (
+          <GraphCell
+            row={graphRow}
+            laneCount={laneCount}
+            rowHeight={ROW_HEIGHT}
+            author={{ name: commit.authorName, email: commit.authorEmail }}
+            avatarUrl={photos ? githubAvatarUrl(commit.authorEmail, AVATAR_PIXELS) : null}
+          />
+        )}
+      </span>
+      <span className={styles.columnSubject}>{subject}</span>
+      <span className={styles.columnAuthor}>{commit.authorName}</span>
+      <span className={styles.columnOid}>{commit.shortOid}</span>
       <time
-        className={styles.date}
+        className={styles.columnDate}
         dateTime={commit.authorDate}
         title={formatAbsoluteDate(commit.authorDate)}
       >

@@ -35,6 +35,7 @@ import {
 } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
 import { isBusy } from '../../state/store';
+import { BranchIcon, RepoIcon, StashIcon } from '../shell/icons';
 import styles from './RefsView.module.css';
 import {
   applyStashQuestion,
@@ -527,7 +528,11 @@ function BranchesSection({
   return (
     <section className={styles.section} aria-label="Branches">
       <header className={styles.sectionHeader}>
+        <BranchIcon size={13} />
         <h2 className={styles.sectionTitle}>Branches</h2>
+        {branches.state === 'ready' && (
+          <span className={styles.count}>{branches.value.length}</span>
+        )}
       </header>
 
       <CreateBranchForm busy={busy} selectedOid={selectedOid} onCreate={onCreate} />
@@ -577,7 +582,10 @@ function BranchLists({
   return (
     <>
       <section className={styles.subsection} aria-label="Local branches">
-        <h3 className={styles.subsectionTitle}>Local</h3>
+        <div className={styles.subsectionHeader}>
+          <h3 className={styles.subsectionTitle}>Local</h3>
+          <span className={styles.count}>{local.length}</span>
+        </div>
         {local.length === 0 ? (
           <p className={styles.empty}>No local branches yet.</p>
         ) : (
@@ -606,7 +614,11 @@ function BranchLists({
       </section>
 
       <section className={styles.subsection} aria-label="Remote branches">
-        <h3 className={styles.subsectionTitle}>Remote</h3>
+        <div className={styles.subsectionHeader}>
+          <RepoIcon size={12} />
+          <h3 className={styles.subsectionTitle}>Remote</h3>
+          <span className={styles.count}>{remote.length}</span>
+        </div>
         {remote.length === 0 ? (
           <p className={styles.empty}>No remote-tracking branches.</p>
         ) : (
@@ -947,7 +959,11 @@ function StashesSection({
   return (
     <section className={styles.section} aria-label="Stashes">
       <header className={styles.sectionHeader}>
+        <StashIcon size={13} />
         <h2 className={styles.sectionTitle}>Stashes</h2>
+        {stashes.state === 'ready' && (
+          <span className={styles.count}>{stashes.value.length}</span>
+        )}
       </header>
 
       {stashes.state === 'idle' && (

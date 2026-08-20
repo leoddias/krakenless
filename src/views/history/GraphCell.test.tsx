@@ -13,14 +13,25 @@ function row(overrides: Partial<GraphRow> = {}): GraphRow {
   };
 }
 
-function renderCell(graphRow: GraphRow, laneCount: number): SVGSVGElement {
+function renderCell(
+  graphRow: GraphRow,
+  laneCount: number,
+  author?: { name: string; email: string },
+): SVGSVGElement {
   const { container } = render(
-    <GraphCell row={graphRow} laneCount={laneCount} rowHeight={44} />,
+    <GraphCell
+      row={graphRow}
+      laneCount={laneCount}
+      rowHeight={44}
+      {...(author === undefined ? {} : { author })}
+    />,
   );
   const svg = container.querySelector('svg');
   if (svg === null) throw new Error('no graph rendered');
   return svg;
 }
+
+const ADA = { name: 'Ada Lovelace', email: 'ada@example.com' };
 
 describe('GraphCell', () => {
   it('reserves width proportional to a narrow graph', () => {
@@ -36,13 +47,13 @@ describe('GraphCell', () => {
     const wide = Number(renderCell(row(), 40).getAttribute('width'));
     const capped = Number(renderCell(row(), 4).getAttribute('width'));
     expect(wide).toBe(capped);
-    expect(wide).toBeLessThanOrEqual(40);
+    expect(wide).toBeLessThanOrEqual(72);
   });
 
   it('still draws the full graph inside the clipped area', () => {
     // The viewBox keeps the real geometry; only the visible slice is capped.
     const svg = renderCell(row(), 40);
-    expect(svg.getAttribute('viewBox')).toBe('0 0 400 44');
+    expect(svg.getAttribute('viewBox')).toBe('0 0 720 44');
   });
 
   it('marks a merge differently from an ordinary commit', () => {
@@ -77,6 +88,29 @@ describe('GraphCell', () => {
       2,
     );
     expect(svg.querySelectorAll('path')).toHaveLength(2);
+  });
+
+  it('draws the author badge in place of the node when an author is given', () => {
+    const svg = renderCell(row(), 1, ADA);
+    expect(svg.querySelector('text')?.textContent).toBe('AL');
+  });
+
+  it('colours the badge from the identity rather than from a stylesheet', () => {
+    // The colour is per-author data, so it must survive as an attribute on the
+    // circle; a class would let the sheet's node colour win over it.
+    const ada = renderCell(row(), 1, ADA).querySelector('circle');
+    const grace = renderCell(row(), 1, {
+      name: 'Grace Hopper',
+      email: 'grace@example.com',
+    }).querySelector('circle');
+    expect(ada?.getAttribute('fill')).toMatch(/^hsl\(/);
+    expect(ada?.getAttribute('fill')).not.toBe(grace?.getAttribute('fill'));
+  });
+
+  it('still marks a merge when the node carries a badge', () => {
+    const ordinary = renderCell(row(), 1, ADA).querySelector('circle');
+    const merge = renderCell(row({ isMerge: true }), 1, ADA).querySelector('circle');
+    expect(ordinary?.getAttribute('class')).not.toBe(merge?.getAttribute('class'));
   });
 
   it('is hidden from assistive technology, since the row already says it', () => {

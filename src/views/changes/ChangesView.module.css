@@ -1,19 +1,22 @@
+/* The working-tree panel: what changed, and the box that turns it into a
+   commit. It is the detail column, so it is denser and quieter than the graph
+   next to it. */
+
 .panel {
   display: flex;
   flex-direction: column;
   min-height: 0;
   height: 100%;
-  background: var(--bg);
+  background: var(--surface);
   color: var(--fg);
 }
 
 .body {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  padding: 0.5rem;
-  overflow: auto;
   min-height: 0;
+  overflow: auto;
+  flex: 1;
 }
 
 /* --- notices --------------------------------------------------------------- */
@@ -27,12 +30,13 @@
 
 .noticeTitle {
   display: block;
-  font-size: 1rem;
+  font-size: 0.875rem;
 }
 
 .noticeText {
   margin: 0.35rem 0 0;
   color: var(--muted);
+  font-size: 0.8125rem;
   line-height: 1.45;
 }
 
@@ -40,27 +44,41 @@
   color: var(--danger);
 }
 
+.noticeCommand {
+  margin: 0.4rem 0;
+  padding: 0.35rem 0.5rem;
+  border-radius: var(--radius);
+  background: var(--bg);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
 .recovery,
 .confirm,
 .failure {
-  padding: 0.6rem 0.75rem;
+  margin: 0.5rem;
+  padding: 0.5rem 0.6rem;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-left-width: 3px;
+  border-radius: var(--radius);
   background: var(--surface-raised);
+  font-size: 0.8125rem;
 }
 
 .recovery {
-  border-color: var(--added);
+  border-left-color: var(--added);
 }
 
 .confirm,
 .failure {
-  border-color: var(--danger);
+  border-left-color: var(--danger);
 }
 
 .warning {
   margin: 0.4rem 0 0;
   color: var(--danger);
+  font-size: 0.8125rem;
   line-height: 1.45;
 }
 
@@ -81,25 +99,30 @@
 /* --- sections -------------------------------------------------------------- */
 
 .section {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
+/* Headers stay put while the file list under them scrolls, so a long list of
+   unstaged files never loses its "Unstage all" control. */
 .sectionHeader {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  padding: 0.35rem 0.5rem;
-  border-bottom: 1px solid var(--border);
+  height: 26px;
+  padding: 0 0.5rem 0 0.75rem;
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .sectionTitle {
   margin: 0;
-  font-size: 0.85rem;
+  font-size: 0.6875rem;
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--muted);
 }
@@ -107,33 +130,46 @@
 .sectionActions,
 .rowActions {
   display: flex;
-  gap: 0.35rem;
+  gap: 0.25rem;
 }
 
 .empty,
 .conflictNote {
   margin: 0;
-  padding: 0.5rem;
-  color: var(--muted);
+  padding: 0.35rem 0.75rem 0.5rem;
+  color: var(--faint);
+  font-size: 0.75rem;
   line-height: 1.45;
 }
 
 .list {
   list-style: none;
   margin: 0;
-  padding: 0.25rem;
+  padding: 0;
 }
 
 .row {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.2rem 0.35rem;
-  border-radius: 4px;
+  gap: 0.4rem;
+  min-height: 24px;
+  padding: 0 0.5rem 0 0.75rem;
 }
 
-.row:hover {
-  background: var(--surface-raised);
+.row:hover,
+.row:focus-within {
+  background: var(--surface-hover);
+}
+
+/* Per-file actions appear on hover or focus. Faded rather than hidden, so the
+   keyboard can still reach them. */
+.row .button {
+  opacity: 0;
+}
+
+.row:hover .button,
+.row:focus-within .button {
+  opacity: 1;
 }
 
 .conflictRow {
@@ -142,40 +178,49 @@
 
 .state {
   flex: none;
-  width: 1.2rem;
+  width: 1.1rem;
   text-align: center;
-  font-family: ui-monospace, 'Cascadia Mono', 'Consolas', monospace;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.conflictRow .state {
+  color: var(--danger);
 }
 
 .path {
   flex: 1 1 auto;
   min-width: 0;
-  overflow-wrap: anywhere;
-  font-family: ui-monospace, 'Cascadia Mono', 'Consolas', monospace;
-  font-size: 0.85rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
 }
 
 .stateLabel {
   flex: none;
-  color: var(--muted);
-  font-size: 0.8rem;
+  color: var(--faint);
+  font-size: 0.6875rem;
 }
 
 /* --- controls -------------------------------------------------------------- */
 
 .button {
-  padding: 0.2rem 0.55rem;
+  padding: 0.1rem 0.4rem;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius);
   background: var(--surface-raised);
   color: var(--fg);
   font: inherit;
-  font-size: 0.8rem;
+  font-size: 0.6875rem;
+  white-space: nowrap;
   cursor: pointer;
 }
 
 .button:hover:not(:disabled) {
-  border-color: var(--accent);
+  border-color: var(--accent-line);
 }
 
 .button:disabled {
@@ -184,45 +229,47 @@
 }
 
 .button:focus-visible {
+  opacity: 1;
   outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline-offset: 1px;
 }
 
 .danger {
   color: var(--danger);
-  border-color: var(--danger);
-}
-
-.primary {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
 }
 
 /* --- commit box ------------------------------------------------------------ */
 
 .commit {
+  position: sticky;
+  bottom: 0;
+  margin-top: auto;
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
-  padding: 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  padding: 0.6rem;
   background: var(--surface);
+  border-top: 1px solid var(--border);
 }
 
 .commitLabel {
-  font-size: 0.8rem;
-  color: var(--muted);
+  font-size: 0.6875rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
 }
 
 .textarea {
   width: 100%;
   padding: 0.4rem 0.5rem;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius);
   background: var(--bg);
   color: var(--fg);
   font: inherit;
+  font-size: 0.8125rem;
+  line-height: 1.5;
   resize: vertical;
 }
 
@@ -235,7 +282,8 @@
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  font-size: 0.85rem;
+  font-size: 0.75rem;
+  color: var(--muted);
 }
 
 .amend input:focus-visible {
@@ -246,14 +294,14 @@
 .amendWarning {
   margin: 0;
   color: var(--danger);
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   line-height: 1.4;
 }
 
 .commitError {
   margin: 0;
   color: var(--danger);
-  font-size: 0.85rem;
+  font-size: 0.75rem;
 }
 
 .commitActions {
@@ -264,8 +312,30 @@
 }
 
 .commitHint {
-  color: var(--muted);
-  font-size: 0.8rem;
+  color: var(--faint);
+  font-size: 0.6875rem;
+}
+
+/* The one filled control in the app: committing is the thing this panel is
+   for, and it should read as the end of the sentence. */
+.primary {
+  opacity: 1;
+  padding: 0.3rem 0.9rem;
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.primary:hover:not(:disabled) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--accent) 85%, white);
+}
+
+.primary:disabled {
+  background: var(--surface-raised);
+  color: var(--faint);
 }
 
 .srOnly {

@@ -154,3 +154,85 @@ chokepoint. The list is deliberately over-inclusive: a false positive costs one
 confirmation dialog, a false negative costs the user's work.
 **Consequences:** Read-only commands that happen to match must pass
 `confirmed: true` explicitly, which is intentional friction.
+
+## ADR-0017 — The UI follows GitKraken's layout language, driven by tokens
+**Date:** 2026-08-20 · **Status:** accepted
+**Decision:** The shell is five bands — title bar with the repository tab,
+toolbar (repository → branch on the left, the remote actions as icon-over-caption
+buttons, settings on the right), banners, workspace, status bar — and the
+workspace is three columns: refs sidebar, the graph over its diff, and the
+working tree as the detail panel. Every colour, radius and metric comes from the
+tokens in `src/index.css`; view stylesheets may not hard-code a colour. Icons are
+hand-written inline SVGs in `src/views/shell/icons.tsx` — no icon font, no
+sprite, no network request.
+**Why:** The product is positioned as the anti-GitKraken, which only works if a
+GitKraken user recognizes the app on sight. The previous layout put four panels
+side by side and captioned every toolbar button with a sentence, which read as a
+form rather than a git client. Tokens exist so the palette can be retuned once,
+and so a light theme has a single seam to cut along.
+**Consequences:** A toolbar button's hint is now described, not drawn — but the
+rule from ADR-0008's safety bar survives intact: an action that is *blocked*
+still states its reason in visible text, in the strip under the toolbar, because
+a disabled control can be neither focused nor hovered. Row actions in the
+sidebar and the working tree are faded until hover or focus, never `visibility:
+hidden`, so the keyboard still reaches them.
+
+## ADR-0018 — Author avatars are derived locally, never fetched
+**Date:** 2026-08-20 · **Status:** accepted
+**Decision:** The graph node is drawn as the author's badge: initials over a
+colour derived from a hash of their email (`src/views/history/avatar.ts`).
+Krakenless does not request avatar images from Gravatar, GitHub, or any other
+host. Adding such a lookup requires a new ADR superseding this one, and it would
+have to be off by default and named for what it is.
+**Why:** A commit carries a name and an email and no picture, so the only ways
+to show a face are to ask a third party or to make one up. Asking means sending
+a hash of the author's email — of *every* author on screen, on every scroll — to
+a company the user never chose, from a product whose entire pitch is that it
+makes no network calls except to git remotes. A derived badge gives the same
+scanning benefit (one glance tells you who wrote a run of commits) for nothing.
+**Consequences:** Two people whose emails differ get different colours even if
+they are the same human; the badge is an identity marker, not a photograph.
+Colour is derived from the email rather than the name so a contributor who
+changes how they spell their name keeps one badge.
+
+## ADR-0019 — GitHub pictures are opt-in, by account id, from the email alone
+**Date:** 2026-08-20 · **Status:** accepted
+**Decision:** A setting (`githubAvatars`, **off** by default) lets the graph
+fetch author pictures from `avatars.githubusercontent.com`. It resolves only
+`<id>+<login>@users.noreply.github.com` addresses, because the id in that address
+*is* the account — the URL is built locally, requested by number, and no email,
+hash of an email, token or account is involved. Everyone else keeps the derived
+badge from ADR-0018, which stays underneath the picture so a blocked, offline or
+missing image leaves a face rather than a hole. Refines ADR-0018; the local badge
+remains the default and the only behaviour when the setting is off.
+**Why:** The user asked for GitKraken's avatars. GitKraken gets them from
+Gravatar (a hash of every visible author's email, sent to Automattic) or from an
+OAuth integration (an account, which this product does not have). The noreply
+form is the one case where the commit already tells us who the author is on
+GitHub, so it buys most of the benefit at the smallest possible cost — one host,
+contacted only for people who already chose to hide their address.
+**Consequences:** The privacy rule now reads "no network calls except git
+remotes, and avatar requests the user switched on". The About text in Settings
+says so, and changes wording when the setting is on. Anything broader — Gravatar,
+the GitHub API, GitLab — needs a new ADR; do not add it because it looks like a
+small extension of this one. A malformed `githubAvatars` value in `config.json`
+reads as `false`, because the safe reading of a broken privacy flag is the
+private one.
+
+## ADR-0020 — Panel sizes are the user's, and live in `config.json`
+**Date:** 2026-08-20 · **Status:** accepted
+**Decision:** The three inner edges — sidebar/graph, graph/diff, graph/working
+tree — are draggable, and the sizes persist in `config.json` under `layout`.
+Each edge is an ARIA `separator` with a `tabindex` and arrow-key support, so the
+layout is not mouse-only. `clampLayout` is the single rule for what is allowed,
+applied both while dragging and when reading the file. The width-based responsive
+stacking is gone: the user resolves a narrow window by dragging.
+**Why:** Fixed panels only fit the repository they were measured against — a
+branch list of eighty names and a diff of long lines want opposite splits. Sizes
+are written once per drag, not per mouse-move, so a drag is not hundreds of file
+writes. Bounds exist so no panel can be dragged to a width it cannot be dragged
+back from; a hand-edited config is pulled back inside them on read.
+**Consequences:** `AppConfig` gained a `layout` object, so every config fixture
+in the tests builds from `defaultConfig()` rather than listing fields. A failed
+save costs the size, not the session — it is swallowed, and the layout on screen
+stands.

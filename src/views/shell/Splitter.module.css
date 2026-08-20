@@ -1,0 +1,33 @@
+/* The edges between panels. Each is a thin, quiet line until it is pointed at
+   or focused, the way a window splitter behaves everywhere else. */
+
+.vertical,
+.horizontal {
+  background: var(--border);
+  /* The hit area is the whole track; the line is the track. Anything smaller
+     than this is a target the user has to hunt for. */
+  transition: background-color 0.1s ease-in-out;
+}
+
+.vertical:hover,
+.horizontal:hover,
+.vertical:focus-visible,
+.horizontal:focus-visible {
+  background: var(--accent);
+  outline: none;
+}
+
+.vertical {
+  /* Fills the 5px grid track it is placed in. */
+  width: 100%;
+  height: 100%;
+  cursor: col-resize;
+}
+
+.horizontal {
+  /* A flex item between two panels that both grow: it must claim its own
+     height explicitly, or it collapses to nothing and cannot be grabbed. */
+  flex: none;
+  height: 5px;
+  cursor: row-resize;
+}

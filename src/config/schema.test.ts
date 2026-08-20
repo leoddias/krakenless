@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  LAYOUT_BOUNDS,
   MAX_RECENT_REPOS,
+  clampLayout,
   defaultConfig,
   parseConfig,
   serializeConfig,
@@ -128,5 +130,100 @@ describe('withoutRecentRepo', () => {
   it('is a no-op for an unknown path', () => {
     const config = withRecentRepo(defaultConfig(), 'C:/a', new Date());
     expect(withoutRecentRepo(config, 'C:/zzz').recentRepos).toHaveLength(1);
+  });
+});
+
+describe('githubAvatars', () => {
+  it('is off in a fresh config', () => {
+    expect(defaultConfig().githubAvatars).toBe(false);
+  });
+
+  it('is on only when the file says exactly true', () => {
+    expect(parseConfig('{"githubAvatars":true}').githubAvatars).toBe(true);
+  });
+
+  it('reads anything else as off, because that is the private answer', () => {
+    for (const value of ['"true"', '1', 'null', '"yes"', '{}']) {
+      expect(parseConfig(`{"githubAvatars":${value}}`).githubAvatars).toBe(false);
+    }
+    expect(parseConfig('{}').githubAvatars).toBe(false);
+  });
+});
+
+describe('layout', () => {
+  it('has sizes that fit a 1280px window out of the box', () => {
+    const { sidebarWidth, detailWidth, historyRatio } = defaultConfig().layout;
+    expect(sidebarWidth + detailWidth).toBeLessThan(1280 / 2);
+    expect(historyRatio).toBeGreaterThan(0.5);
+  });
+
+  it('reads sizes the user dragged', () => {
+    expect(
+      parseConfig('{"layout":{"sidebarWidth":320,"detailWidth":420,"historyRatio":0.4}}')
+        .layout,
+    ).toEqual({ sidebarWidth: 320, detailWidth: 420, historyRatio: 0.4 });
+  });
+
+  it('pulls a size from outside the bounds back inside them', () => {
+    // A hand-edited config must not be able to leave a panel at zero width,
+    // which is a layout the user cannot drag back.
+    const tiny = parseConfig(
+      '{"layout":{"sidebarWidth":0,"detailWidth":-40,"historyRatio":0}}',
+    ).layout;
+    expect(tiny.sidebarWidth).toBe(LAYOUT_BOUNDS.sidebarWidth.min);
+    expect(tiny.detailWidth).toBe(LAYOUT_BOUNDS.detailWidth.min);
+    expect(tiny.historyRatio).toBe(LAYOUT_BOUNDS.historyRatio.min);
+
+    const huge = parseConfig(
+      '{"layout":{"sidebarWidth":9000,"detailWidth":9000,"historyRatio":4}}',
+    ).layout;
+    expect(huge.sidebarWidth).toBe(LAYOUT_BOUNDS.sidebarWidth.max);
+    expect(huge.detailWidth).toBe(LAYOUT_BOUNDS.detailWidth.max);
+    expect(huge.historyRatio).toBe(LAYOUT_BOUNDS.historyRatio.max);
+  });
+
+  it('falls back to the default for anything that is not a real number', () => {
+    const defaults = defaultConfig().layout;
+    expect(parseConfig('{"layout":{"sidebarWidth":"320"}}').layout).toEqual(defaults);
+    expect(parseConfig('{"layout":[]}').layout).toEqual(defaults);
+    expect(parseConfig('{"layout":null}').layout).toEqual(defaults);
+    expect(parseConfig('{}').layout).toEqual(defaults);
+  });
+
+  it('keeps the fields it can read when a neighbour is broken', () => {
+    const layout = parseConfig(
+      '{"layout":{"sidebarWidth":300,"detailWidth":"wide"}}',
+    ).layout;
+    expect(layout.sidebarWidth).toBe(300);
+    expect(layout.detailWidth).toBe(defaultConfig().layout.detailWidth);
+  });
+
+  it('survives a round trip through the file', () => {
+    const config = defaultConfig();
+    config.layout = { sidebarWidth: 300, detailWidth: 400, historyRatio: 0.5 };
+    expect(parseConfig(serializeConfig(config)).layout).toEqual(config.layout);
+  });
+});
+
+describe('clampLayout', () => {
+  it('is the same rule the file is read with, so the screen cannot disagree', () => {
+    expect(
+      clampLayout({ sidebarWidth: 1, detailWidth: 99999, historyRatio: -3 }),
+    ).toEqual(
+      parseConfig('{"layout":{"sidebarWidth":1,"detailWidth":99999,"historyRatio":-3}}')
+        .layout,
+    );
+  });
+
+  it('rejects a NaN that arithmetic on a bad measurement could produce', () => {
+    const defaults = defaultConfig().layout;
+    expect(clampLayout({ ...defaults, historyRatio: Number.NaN }).historyRatio).toBe(
+      defaults.historyRatio,
+    );
+    // Infinity is not a size that was measured, so it is treated as no answer
+    // at all rather than as "the widest allowed".
+    expect(
+      clampLayout({ ...defaults, sidebarWidth: Number.POSITIVE_INFINITY }).sidebarWidth,
+    ).toBe(defaults.sidebarWidth);
   });
 });

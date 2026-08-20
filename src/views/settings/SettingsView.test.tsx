@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { defaultConfig } from '../../config/schema';
 import { SettingsView } from './SettingsView';
 import { StoreProvider } from '../../state/hooks';
 import { createStore, type Store } from '../../state/store';
@@ -36,8 +37,7 @@ describe('SettingsView', () => {
     store.dispatch({
       type: 'config/loaded',
       config: {
-        version: 1,
-        recentRepos: [],
+        ...defaultConfig(),
         editorCommand: 'code -g',
         mergetool: 'vscode',
         theme: 'light',

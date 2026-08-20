@@ -9,12 +9,17 @@
 - **Phase:** v0.1 feature-complete. Every buildable item in `docs/ROADMAP.md`
   M0–M5 is checked off; the only open item is the dogfood gate, which is two
   weeks of use, not code.
+- **UI redesigned** (2026-08-20) to GitKraken's layout language — ADR-0017,
+  with author badges on the graph nodes (ADR-0018, derived locally; ADR-0019,
+  optional GitHub pictures) and resizable panels whose sizes persist
+  (ADR-0020). Two passes of screenshot feedback are in; the graph, sidebar and
+  toolbar have been seen running, the diff, working tree and the drag have not.
 - **Verified in the running app**, by hand with screenshots: welcome + recent
   repos, history with the commit graph and ref decorations, working-tree panel
   (stage/unstage/discard/commit), diff viewer, remote bar, branches + stashes,
   conflict banner, settings, keyboard shortcuts, fs-watch refresh.
-- **Test status:** `npm test` 935 passing (40 files, stable across three
-  consecutive runs), `cargo test` 36 passing; oxlint, prettier and clippy clean.
+- **Test status:** `npm test` 997 passing (44 files), `cargo test` 36 passing
+  as of the previous session; oxlint and prettier clean.
 - The discard path — the only code that takes work off disk — has integration
   tests that **execute the recovery command the UI displays**. Keep that
   property for any future change to `stage.ts` or `recovery.ts`.
@@ -30,11 +35,14 @@
 
 ## Next up (in order)
 
-1. **The dogfood gate** (`docs/ROADMAP.md` § M5): use Krakenless as the only
+1. **Look at the panels not yet seen running**: the diff, the working tree and
+   its commit box, settings, welcome — plus dragging each edge, and the toolbar
+   at narrow widths.
+2. **The dogfood gate** (`docs/ROADMAP.md` § M5): use Krakenless as the only
    Git client for two weeks. Everything else in v0.1 is done, so this is the
    next real step and it produces the list that shapes v0.2.
-2. Fix whatever the gate surfaces, in the order it hurts.
-3. Then the validation checkpoint in `PLAN.md`: builds to 3–5 friends, and the
+3. Fix whatever the gate surfaces, in the order it hurts.
+4. Then the validation checkpoint in `PLAN.md`: builds to 3–5 friends, and the
    decision to invest in v0.2 or stop.
 
 ## Blockers / open questions
@@ -50,6 +58,75 @@
   until `buildPushCommand` emits a `<local>:<upstream>` refspec.
 
 ## Session log
+
+### 2026-08-20 (redesign, third pass) — GitHub pictures, and draggable edges
+
+- **Author pictures, opt-in** (ADR-0019). The user asked why we could not have
+  GitKraken's photos; the answer is that GitKraken uses Gravatar or an OAuth
+  integration, and both break the privacy rule. The middle path we took: a
+  setting, off by default, that resolves *only*
+  `<id>+<login>@users.noreply.github.com` — the id in that address is the account,
+  so the URL is built locally and fetched by number. No email, no hash, no token,
+  no account. The derived badge stays underneath, so a blocked or missing image
+  still shows a face. `githubAvatars` reads as `false` unless the file says
+  exactly `true`.
+- **Every inner edge drags now** (ADR-0020): sidebar/graph, graph/diff,
+  graph/working tree. `Splitter` is an ARIA `separator` with a tabindex and arrow
+  keys, so it is not a mouse-only feature. Sizes persist in `config.json` under
+  `layout`, written once per drag rather than per mouse-move, and clamped by the
+  same `clampLayout` on the screen and on the file. The responsive stacking was
+  deleted — dragging replaces it.
+- Config fixtures in the tests now build from `defaultConfig()`; two of them had
+  already broken on a new field this session.
+- Tests at handoff: `npm test` 997 passing; oxlint and prettier clean.
+- **Still not verified by eye**: the diff and working-tree panels, settings,
+  welcome, and the drag behaviour itself.
+
+### 2026-08-20 (redesign, second pass) — first look at it, and the fixes
+
+- The user ran the redesign and screenshotted two overlaps and one gap.
+- Columns were sized for text that git makes longer than assumed: the oid
+  column held 7.5ch while git abbreviates to 9+ in a large repository, and the
+  "when" column held 11ch against "14 minutes ago". Both spilled over their
+  neighbour. Widened to 12ch and 14ch, with `overflow: hidden` so the next
+  failure clips instead of overlapping.
+- The header row drifted from its columns by the width of the scrollbar. The
+  list now reserves the gutter (`scrollbar-gutter: stable`) and the header pads
+  by the same 10px, so the two agree whether or not the list scrolls.
+- Ref chips were clipped by the group rather than shrinking, which eats a chip's
+  *first* letters — "HEAD" rendered as "D". Chips now shrink to a 4ch floor and
+  ellipsize, and the column went 132px → 176px.
+- Author badges on the graph nodes, asked for after GitKraken's avatars. They
+  are computed locally — initials over a hue hashed from the author's email —
+  because the only alternative is a Gravatar request per author, which the
+  privacy rule forbids. Locked as ADR-0018. Lanes went 10px → 18px to fit.
+- Tests at handoff: `npm test` 955 passing; oxlint and prettier clean.
+
+### 2026-08-20 (redesign) — the front end, rebuilt to look like GitKraken
+
+- Pure re-design, at the user's request: no feature added, removed or rewired.
+- `src/index.css` is now a token sheet (surfaces, lines, text, accents, ref-chip
+  colours, metrics, font stacks). Every view stylesheet was rewritten onto it;
+  the hard-coded hexes that had crept into history, diff and welcome are gone.
+- New shell in `App.tsx`: title bar with the repository as a tab, a toolbar that
+  reads *repository → branch* with the remote actions as icon-over-caption
+  buttons, and a status bar carrying the path and the busy state. The workspace
+  is refs sidebar | graph over diff | working tree.
+- `RemoteBar` became that toolbar cluster. Its hints are now described rather
+  than drawn, but a *blocked* action still states its reason in visible text —
+  one line per blocked action, in the strip under the toolbar. That property has
+  tests counting the reason elements, and they still pass.
+- History rows are a real table: fixed columns (refs, graph, subject, author,
+  oid, when) under a header row, `ROW_HEIGHT` 44 → 30, selection drawn as a
+  filled row plus an accent rail.
+- Sidebar and working-tree rows fade their per-row buttons in on hover or focus
+  (opacity, never `visibility`, so the keyboard keeps them).
+- Icons are hand-written inline SVGs in `src/views/shell/icons.tsx`.
+- Dropped the branch name from the status bar rather than loosening the App test
+  it broke: the toolbar already says it, and two copies is two things to sync.
+- Recorded as ADR-0017. Tests at handoff: `npm test` 939 passing, oxlint and
+  prettier clean. `cargo test` untouched — nothing outside `src/` changed.
+- **Not verified by eye**: no screenshot was taken this session.
 
 ### 2026-08-20 (later) — v0.1 finished, final safety pass
 

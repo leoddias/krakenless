@@ -5,6 +5,8 @@
   gap: 1.25rem;
   padding: 4rem 1.5rem;
   min-height: 100vh;
+  overflow-y: auto;
+  background: var(--bg);
 }
 
 .header {
@@ -31,7 +33,7 @@
 .rowOpen,
 .rowForget {
   font: inherit;
-  border-radius: 6px;
+  border-radius: var(--radius);
   cursor: pointer;
 }
 
@@ -40,19 +42,20 @@
 .secondary:focus-visible,
 .rowOpen:focus-visible,
 .rowForget:focus-visible {
-  outline: 2px solid #7aa2f7;
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
 .primary {
-  padding: 0.6rem 1.1rem;
-  border: 1px solid #3d4550;
-  background: #232833;
-  color: var(--fg);
+  padding: 0.55rem 1.2rem;
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
 }
 
 .primary:hover:not(:disabled) {
-  background: #2b3140;
+  background: color-mix(in srgb, var(--accent) 85%, white);
 }
 
 .primary:disabled,
@@ -64,7 +67,7 @@
 .secondary {
   align-self: flex-start;
   padding: 0.35rem 0.75rem;
-  border: 1px solid #3d4550;
+  border: 1px solid var(--border);
   background: transparent;
   color: var(--fg);
 }
@@ -81,9 +84,9 @@
   margin: 0;
   width: min(46rem, 100%);
   padding: 0.9rem 1rem;
-  border: 1px solid #6b2f34;
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
   border-radius: 8px;
-  background: #2a1c1f;
+  background: var(--deleted-bg);
 }
 
 .error p {
@@ -100,7 +103,7 @@
 
 .errorDetail {
   color: var(--muted);
-  font-family: 'Cascadia Mono', 'Consolas', monospace;
+  font-family: var(--font-mono);
   font-size: 0.85rem;
   overflow-wrap: anywhere;
 }
@@ -144,15 +147,15 @@
   flex-direction: column;
   gap: 0.15rem;
   padding: 0.6rem 0.8rem;
-  border: 1px solid #2c313b;
-  background: #1a1e25;
+  border: 1px solid var(--border);
+  background: var(--surface);
   color: var(--fg);
   text-align: left;
 }
 
 .rowOpen:hover:not(:disabled) {
-  border-color: #3d4550;
-  background: #212630;
+  border-color: var(--border);
+  background: var(--surface-hover);
 }
 
 .rowName {
@@ -174,6 +177,6 @@
 }
 
 .rowForget:hover {
-  border-color: #6b2f34;
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
   color: var(--fg);
 }

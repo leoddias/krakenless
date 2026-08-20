@@ -1,17 +1,18 @@
+/* The sidebar: local branches, remote-tracking branches and stashes, drawn as
+   one continuous tree rather than a stack of cards. */
+
 .panel {
   display: flex;
   flex-direction: column;
   min-height: 0;
   height: 100%;
-  background: var(--bg);
+  background: var(--chrome);
   color: var(--fg);
 }
 
 .body {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  padding: 0.5rem;
   overflow: auto;
   min-height: 0;
 }
@@ -19,18 +20,18 @@
 /* --- notices --------------------------------------------------------------- */
 
 .notice {
-  padding: 0.75rem;
-  text-align: center;
+  padding: 0.5rem 0.75rem;
 }
 
 .noticeTitle {
   display: block;
-  font-size: 0.95rem;
+  font-size: 0.8125rem;
 }
 
 .noticeText {
-  margin: 0.35rem 0 0;
+  margin: 0.25rem 0 0;
   color: var(--muted);
+  font-size: 0.75rem;
   line-height: 1.45;
 }
 
@@ -41,46 +42,53 @@
 .noticeCommand {
   margin: 0.4rem 0;
   padding: 0.35rem 0.5rem;
-  border-radius: 4px;
+  border-radius: var(--radius);
   background: var(--bg);
   overflow-x: auto;
-  font-family: ui-monospace, 'Cascadia Mono', 'Consolas', monospace;
-  font-size: 0.8rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
 }
 
 .recovery,
 .failure,
 .outcome,
 .confirm {
-  margin: 0.5rem 0.5rem 0;
-  padding: 0.6rem 0.75rem;
+  margin: 0.5rem;
+  padding: 0.5rem 0.6rem;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-left-width: 3px;
+  border-radius: var(--radius);
   background: var(--surface-raised);
+  font-size: 0.8125rem;
 }
 
 .recovery {
-  border-color: var(--added);
+  border-left-color: var(--added);
 }
 
 .failure,
 .confirm {
-  border-color: var(--danger);
+  border-left-color: var(--danger);
+}
+
+.outcome {
+  border-left-color: var(--accent);
 }
 
 .warning {
   margin: 0.4rem 0 0;
   color: var(--danger);
+  font-size: 0.75rem;
   line-height: 1.45;
 }
 
 .noticeCause {
   margin: 0.4rem 0 0;
   padding: 0.35rem 0.5rem;
-  border-radius: 4px;
+  border-radius: var(--radius);
   background: var(--bg);
   color: var(--fg);
-  font-size: 0.85rem;
+  font-size: 0.75rem;
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
@@ -94,70 +102,105 @@
 /* --- sections -------------------------------------------------------------- */
 
 .section {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .sectionHeader {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.35rem 0.5rem;
-  border-bottom: 1px solid var(--border);
+  gap: 0.4rem;
+  height: 26px;
+  padding: 0 0.6rem;
+  color: var(--muted);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .sectionTitle {
   margin: 0;
-  font-size: 0.85rem;
+  font-size: 0.6875rem;
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--muted);
 }
 
+/* Item count, sitting at the far edge the way a tree's badge does. */
+.count {
+  margin-left: auto;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  background: var(--surface-raised);
+  color: var(--faint);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .subsection {
-  padding: 0.25rem 0;
+  padding-bottom: 0.25rem;
+}
+
+.subsectionHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.6rem 0.15rem;
+  color: var(--faint);
 }
 
 .subsectionTitle {
   margin: 0;
-  padding: 0.2rem 0.5rem;
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: var(--faint);
 }
 
 .empty,
 .hint {
   margin: 0;
-  padding: 0.35rem 0.5rem;
-  color: var(--muted);
-  font-size: 0.85rem;
+  padding: 0.25rem 0.75rem 0.4rem;
+  color: var(--faint);
+  font-size: 0.75rem;
   line-height: 1.45;
 }
 
 .list {
   list-style: none;
   margin: 0;
-  padding: 0.25rem;
+  padding: 0;
 }
 
 .row,
 .stashRow {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.2rem 0.35rem;
-  border-radius: 4px;
+  gap: 0.35rem;
+  min-height: 24px;
+  padding: 0 0.5rem 0 0.75rem;
 }
 
 .row:hover,
-.stashRow:hover {
-  background: var(--surface-raised);
+.stashRow:hover,
+.row:focus-within,
+.stashRow:focus-within {
+  background: var(--surface-hover);
+}
+
+/* Row actions stay out of the way until the row is under the pointer or the
+   keyboard. Faded rather than hidden: `visibility` would take them out of the
+   tab order, which is the only way a keyboard reaches them. */
+.row .button,
+.stashRow .button {
+  opacity: 0;
+}
+
+.row:hover .button,
+.stashRow:hover .button,
+.row:focus-within .button,
+.stashRow:focus-within .button {
+  opacity: 1;
 }
 
 /* --- branch rows ----------------------------------------------------------- */
@@ -168,25 +211,23 @@
   gap: 0.4rem;
   flex: 1 1 auto;
   min-width: 0;
-  padding: 0.15rem 0.25rem;
-  border: 1px solid transparent;
-  border-radius: 4px;
+  padding: 0.1rem 0.2rem;
+  border: 0;
+  border-radius: var(--radius);
   background: none;
   color: var(--fg);
   font: inherit;
-  font-size: 0.85rem;
+  font-size: 0.8125rem;
   text-align: left;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   cursor: pointer;
-}
-
-.name:hover:not(:disabled) {
-  border-color: var(--accent);
 }
 
 .name:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline-offset: -1px;
 }
 
 .name[aria-disabled='true'] {
@@ -200,15 +241,15 @@
 
 .marker {
   flex: none;
-  font-size: 0.7rem;
+  font-size: 0.6875rem;
 }
 
 .divergence {
   display: flex;
   flex: none;
-  gap: 0.35rem;
-  font-size: 0.8rem;
-  font-family: ui-monospace, 'Cascadia Mono', 'Consolas', monospace;
+  gap: 0.3rem;
+  font-size: 0.6875rem;
+  font-family: var(--font-mono);
 }
 
 .ahead {
@@ -225,26 +266,26 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.5rem;
-  border-bottom: 1px solid var(--border);
+  gap: 0.35rem;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .createLabel {
-  font-size: 0.8rem;
-  color: var(--muted);
+  font-size: 0.6875rem;
+  color: var(--faint);
 }
 
 .input {
   flex: 1 1 8rem;
-  min-width: 6rem;
-  padding: 0.25rem 0.4rem;
+  min-width: 5rem;
+  padding: 0.2rem 0.35rem;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius);
   background: var(--bg);
   color: var(--fg);
   font: inherit;
-  font-size: 0.85rem;
+  font-size: 0.8125rem;
 }
 
 .input:focus-visible {
@@ -261,8 +302,8 @@
   align-items: center;
   gap: 0.35rem;
   flex: 1 1 100%;
-  font-size: 0.8rem;
-  color: var(--muted);
+  color: var(--faint);
+  font-size: 0.6875rem;
 }
 
 .checkbox input:focus-visible {
@@ -274,58 +315,65 @@
   flex: 1 1 100%;
   margin: 0;
   color: var(--danger);
-  font-size: 0.8rem;
+  font-size: 0.6875rem;
   line-height: 1.4;
 }
 
 /* --- stash rows ------------------------------------------------------------ */
 
+.stashRow {
+  align-items: flex-start;
+  padding-top: 0.2rem;
+  padding-bottom: 0.2rem;
+}
+
 .stashText {
   display: flex;
   flex-direction: column;
-  gap: 0.1rem;
+  gap: 0.05rem;
   flex: 1 1 auto;
   min-width: 0;
 }
 
 .stashMessage {
-  font-size: 0.85rem;
+  font-size: 0.8125rem;
   overflow-wrap: anywhere;
 }
 
 .stashMeta {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
-  color: var(--muted);
-  font-size: 0.75rem;
+  gap: 0.4rem;
+  color: var(--faint);
+  font-size: 0.6875rem;
 }
 
 .stashRef {
-  font-family: ui-monospace, 'Cascadia Mono', 'Consolas', monospace;
+  font-family: var(--font-mono);
 }
 
 .rowActions {
   display: flex;
   flex: none;
-  gap: 0.35rem;
+  gap: 0.25rem;
 }
 
 /* --- controls -------------------------------------------------------------- */
 
 .button {
-  padding: 0.2rem 0.55rem;
+  padding: 0.1rem 0.4rem;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius);
   background: var(--surface-raised);
   color: var(--fg);
   font: inherit;
-  font-size: 0.8rem;
+  font-size: 0.6875rem;
+  white-space: nowrap;
   cursor: pointer;
 }
 
 .button:hover:not(:disabled) {
-  border-color: var(--accent);
+  border-color: var(--accent-line);
 }
 
 .button:disabled {
@@ -334,17 +382,18 @@
 }
 
 .button:focus-visible {
+  opacity: 1;
   outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline-offset: 1px;
 }
 
 .danger {
   color: var(--danger);
-  border-color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
 }
 
 .primary {
-  border-color: var(--accent);
+  border-color: var(--accent-line);
   color: var(--accent);
 }
 

@@ -23,7 +23,42 @@ export interface AppConfig {
   /** `git mergetool --tool=<x>`; empty means git's own default. */
   mergetool: string;
   theme: 'dark' | 'light' | 'system';
+  /**
+   * Opt-in: fetch author pictures from `avatars.githubusercontent.com`.
+   *
+   * Off by default, and the only setting in this file that can cause a network
+   * request to anything other than a git remote (ADR-0019). It covers only
+   * authors whose email is a GitHub noreply address, because that address
+   * already carries the account id — no API call, no token, and nobody's
+   * private email is ever sent anywhere.
+   */
+  githubAvatars: boolean;
+  layout: LayoutConfig;
 }
+
+/** Sizes of the resizable panels, in the units the shell lays them out with. */
+export interface LayoutConfig {
+  /** Width of the refs sidebar, in pixels. */
+  sidebarWidth: number;
+  /** Width of the working-tree panel, in pixels. */
+  detailWidth: number;
+  /** Share of the centre column's height given to the graph, 0 to 1. */
+  historyRatio: number;
+}
+
+/**
+ * What each panel may be dragged to.
+ *
+ * The floors are the point below which a panel stops being readable rather
+ * than merely small, and the ceilings keep any one panel from swallowing the
+ * window — a layout the user cannot undo without editing the config file by
+ * hand is a trap, not a preference.
+ */
+export const LAYOUT_BOUNDS = {
+  sidebarWidth: { min: 180, max: 560 },
+  detailWidth: { min: 240, max: 680 },
+  historyRatio: { min: 0.15, max: 0.9 },
+} as const;
 
 export const MAX_RECENT_REPOS = 20;
 
@@ -34,6 +69,8 @@ export function defaultConfig(): AppConfig {
     editorCommand: '',
     mergetool: '',
     theme: 'dark',
+    githubAvatars: false,
+    layout: { sidebarWidth: 264, detailWidth: 340, historyRatio: 0.62 },
   };
 }
 
@@ -43,6 +80,64 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function asString(value: unknown, fallback: string): string {
   return typeof value === 'string' ? value : fallback;
+}
+
+/** A finite number inside its bounds, or the default. Rejects NaN and ±∞. */
+function asBounded(
+  value: unknown,
+  fallback: number,
+  bounds: { min: number; max: number },
+): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.min(Math.max(value, bounds.min), bounds.max);
+}
+
+/**
+ * Forces a layout back inside its bounds. Exported because the shell clamps
+ * with it while dragging, so the size on screen and the size on disk can never
+ * disagree about what is allowed.
+ */
+export function clampLayout(layout: LayoutConfig): LayoutConfig {
+  const defaults = defaultConfig().layout;
+  return {
+    sidebarWidth: asBounded(
+      layout.sidebarWidth,
+      defaults.sidebarWidth,
+      LAYOUT_BOUNDS.sidebarWidth,
+    ),
+    detailWidth: asBounded(
+      layout.detailWidth,
+      defaults.detailWidth,
+      LAYOUT_BOUNDS.detailWidth,
+    ),
+    historyRatio: asBounded(
+      layout.historyRatio,
+      defaults.historyRatio,
+      LAYOUT_BOUNDS.historyRatio,
+    ),
+  };
+}
+
+function asLayout(value: unknown): LayoutConfig {
+  const defaults = defaultConfig().layout;
+  if (!isObject(value)) return defaults;
+  return clampLayout({
+    sidebarWidth: asBounded(
+      value['sidebarWidth'],
+      defaults.sidebarWidth,
+      LAYOUT_BOUNDS.sidebarWidth,
+    ),
+    detailWidth: asBounded(
+      value['detailWidth'],
+      defaults.detailWidth,
+      LAYOUT_BOUNDS.detailWidth,
+    ),
+    historyRatio: asBounded(
+      value['historyRatio'],
+      defaults.historyRatio,
+      LAYOUT_BOUNDS.historyRatio,
+    ),
+  });
 }
 
 function asRecentRepos(value: unknown): RecentRepo[] {
@@ -90,6 +185,11 @@ export function parseConfig(text: string | null): AppConfig {
       theme === 'light' || theme === 'system' || theme === 'dark'
         ? theme
         : defaults.theme,
+    // Strictly `true`: anything else on disk — a string "true", a 1, a typo —
+    // leaves the network alone, because the safe reading of a malformed
+    // privacy setting is the private one.
+    githubAvatars: raw['githubAvatars'] === true,
+    layout: asLayout(raw['layout']),
   };
 }
 

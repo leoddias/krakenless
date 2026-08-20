@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { defaultConfig } from '../../config/schema';
 import type { Commit } from '../../git/types';
 import { selectCommit } from '../../state/actions';
 import { StoreProvider } from '../../state/hooks';
@@ -289,5 +290,44 @@ describe('HistoryView windowing', () => {
     expect(lastRow).toHaveFocus();
     expect(viewport.scrollTop).toBeGreaterThan(0);
     expect(screen.queryByRole('button', { name: /Commit 0\b/ })).not.toBeInTheDocument();
+  });
+});
+
+describe('HistoryView author pictures', () => {
+  const NOREPLY = { authorEmail: '4242+ada@users.noreply.github.com' };
+
+  function renderWithConfig(githubAvatars: boolean, commits: Commit[]): void {
+    renderHistory((store) => {
+      store.dispatch({
+        type: 'config/loaded',
+        config: { ...defaultConfig(), githubAvatars },
+      });
+      store.dispatch({ type: 'commits/loaded', commits });
+    });
+  }
+
+  it('draws the derived badge and asks the network for nothing by default', () => {
+    renderWithConfig(false, [makeCommit(1, NOREPLY)]);
+    expect(document.querySelector('image')).toBeNull();
+    expect(document.querySelector('text')?.textContent).toBe('A1');
+  });
+
+  it('fetches a picture only once the user has opted in', () => {
+    renderWithConfig(true, [makeCommit(1, NOREPLY)]);
+    expect(document.querySelector('image')?.getAttribute('href')).toBe(
+      'https://avatars.githubusercontent.com/u/4242?s=32&v=4',
+    );
+  });
+
+  it('keeps the badge underneath, so a picture that never loads leaves a face', () => {
+    renderWithConfig(true, [makeCommit(1, NOREPLY)]);
+    expect(document.querySelector('text')?.textContent).toBe('A1');
+  });
+
+  it('asks for nothing when the address does not say who the author is', () => {
+    // An ordinary email would need GitHub's API to resolve, which needs an
+    // account and would send the address itself.
+    renderWithConfig(true, [makeCommit(1)]);
+    expect(document.querySelector('image')).toBeNull();
   });
 });

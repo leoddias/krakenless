@@ -2,7 +2,7 @@
   border-bottom: 1px solid var(--border);
   border-left: 3px solid var(--danger);
   background: var(--surface-raised);
-  padding: 0.6rem 0.75rem;
+  padding: 0.5rem 0.75rem;
 }
 
 .header {
@@ -11,7 +11,7 @@
 
 .title {
   display: block;
-  font-size: 0.9rem;
+  font-size: 0.8125rem;
   color: var(--danger);
 }
 
@@ -47,7 +47,7 @@
 }
 
 .path {
-  font-size: 0.82rem;
+  font-size: 0.8125rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -78,7 +78,7 @@
   flex: none;
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius);
   color: var(--fg);
   padding: 0.25rem 0.55rem;
   font-size: 0.8rem;

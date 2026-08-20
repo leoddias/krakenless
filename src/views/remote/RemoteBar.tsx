@@ -24,6 +24,7 @@ import {
 } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
 import { isBusy } from '../../state/store';
+import { FetchIcon, PullIcon, PushIcon } from '../shell/icons';
 import styles from './RemoteBar.module.css';
 import {
   candidateRemotes,
@@ -163,79 +164,109 @@ export function RemoteBar(): ReactNode {
     outcome.repoRoot === repoRoot &&
     (status.state !== 'ready' || outcome.branch === branchNow);
 
+  // Built once and rendered twice: the buttons in the toolbar row, and the
+  // reasons in the strip below it. A blocked action must state its reason in
+  // text, because a disabled control cannot be focused and its tooltip is
+  // never announced — the strip is where that text lives now that the buttons
+  // are compact.
+  const actions: ToolbarAction[] = [
+    {
+      id: 'remote-fetch',
+      label: 'Fetch',
+      icon: <FetchIcon />,
+      reason: fetchBlock(gate),
+      hint: 'Downloads new commits from every remote and prunes branches that are gone. Nothing in your working tree changes.',
+      onClick: () => void run('fetch', () => fetchRemote(store)),
+    },
+    {
+      id: 'remote-pull',
+      label: 'Pull',
+      icon: <PullIcon />,
+      reason: pullBlock(gate),
+      hint: 'Fast-forward only. If your branch and its upstream have diverged, git stops and says so instead of merging for you.',
+      onClick: () => void run('pull', () => pullCurrent(store)),
+    },
+    {
+      id: 'remote-push',
+      label: publishing ? 'Publish branch' : 'Push',
+      icon: <PushIcon />,
+      reason: pushReason,
+      hint: pushHint(upstream, publishRemote),
+      onClick: onPush,
+    },
+  ];
+
+  const blocked = actions.filter((action) => action.reason !== null);
+
   return (
     <section className={styles.bar} aria-label="Remote">
-      <div className={styles.tracking}>
-        <strong className={styles.headline}>{summary.headline}</strong>
-        <span className={styles.detail}>{summary.detail}</span>
+      <div className={styles.row}>
+        <div className={styles.actions}>
+          {actions.map((action) => (
+            <Action key={action.id} {...action} />
+          ))}
+
+          {/*
+            Shown for a single candidate too: the remote set here is
+            reconstructed from the branch list, so a repository can have remotes
+            Krakenless has never seen. Publishing to a silent default would push
+            a new branch to a remote the user was never offered.
+          */}
+          {publishing && remotes.length > 0 && (
+            <div className={styles.remotePicker}>
+              <label className={styles.remoteLabel} htmlFor="remote-target">
+                Publish to
+              </label>
+              <select
+                id="remote-target"
+                className={styles.select}
+                value={publishRemote ?? ''}
+                disabled={busy}
+                onChange={(event) => setChoice({ repoRoot, remote: event.target.value })}
+              >
+                {remotes.map((remote) => (
+                  <option key={remote} value={remote}>
+                    {remote}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+
+        <div className={styles.tracking}>
+          <strong className={styles.headline}>{summary.headline}</strong>
+          <span className={styles.detail}>{summary.detail}</span>
+        </div>
       </div>
 
-      <div className={styles.actions}>
-        <Action
-          id="remote-fetch"
-          label="Fetch"
-          reason={fetchBlock(gate)}
-          hint="Downloads new commits from every remote and prunes branches that are gone. Nothing in your working tree changes."
-          onClick={() => void run('fetch', () => fetchRemote(store))}
-        />
-        <Action
-          id="remote-pull"
-          label="Pull"
-          reason={pullBlock(gate)}
-          hint="Fast-forward only. If your branch and its upstream have diverged, git stops and says so instead of merging for you."
-          onClick={() => void run('pull', () => pullCurrent(store))}
-        />
-        <Action
-          id="remote-push"
-          label={publishing ? 'Publish branch' : 'Push'}
-          reason={pushReason}
-          hint={pushHint(upstream, publishRemote)}
-          onClick={onPush}
-        />
+      {(blocked.length > 0 ||
+        running !== null ||
+        (outcome !== null && outcomeApplies)) && (
+        <div className={styles.messages}>
+          {blocked.map((action) => (
+            <p key={action.id} id={`${action.id}-reason`} className={styles.reason}>
+              {action.reason}
+            </p>
+          ))}
 
-        {/*
-          Shown for a single candidate too: the remote set here is reconstructed
-          from the branch list, so a repository can have remotes Krakenless has
-          never seen. Publishing to a silent default would push a new branch to
-          a remote the user was never offered.
-        */}
-        {publishing && remotes.length > 0 && (
-          <div className={styles.remotePicker}>
-            <label className={styles.remoteLabel} htmlFor="remote-target">
-              Publish to
-            </label>
-            <select
-              id="remote-target"
-              className={styles.select}
-              value={publishRemote ?? ''}
-              disabled={busy}
-              onChange={(event) => setChoice({ repoRoot, remote: event.target.value })}
+          {running !== null && (
+            <p className={styles.progress} role="status">
+              {RUNNING_LABEL[running]}
+            </p>
+          )}
+
+          {running === null && outcome !== null && outcomeApplies && (
+            <p
+              className={outcome.ok ? styles.success : styles.failure}
+              role={outcome.ok ? 'status' : 'alert'}
             >
-              {remotes.map((remote) => (
-                <option key={remote} value={remote}>
-                  {remote}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-      </div>
-
-      {running !== null && (
-        <p className={styles.progress} role="status">
-          {RUNNING_LABEL[running]}
-        </p>
-      )}
-
-      {running === null && outcome !== null && outcomeApplies && (
-        <p
-          className={outcome.ok ? styles.success : styles.failure}
-          role={outcome.ok ? 'status' : 'alert'}
-        >
-          {outcome.ok
-            ? SUCCESS_LABEL[outcome.kind]
-            : `${FAILURE_LABEL[outcome.kind]} Krakenless is showing what git reported; read that message before trying again.`}
-        </p>
+              {outcome.ok
+                ? SUCCESS_LABEL[outcome.kind]
+                : `${FAILURE_LABEL[outcome.kind]} Krakenless is showing what git reported; read that message before trying again.`}
+            </p>
+          )}
+        </div>
       )}
     </section>
   );
@@ -258,20 +289,24 @@ function pushHint(
   return 'Krakenless never force-pushes; a rejected push leaves the remote untouched.';
 }
 
-/** One button plus, when it is off, the reason in text the user can read. */
-function Action({
-  id,
-  label,
-  reason,
-  hint,
-  onClick,
-}: {
+/** One toolbar action: the icon button, and the words that describe it. */
+interface ToolbarAction {
   id: string;
   label: string;
+  icon: ReactNode;
+  /** Non-null when the action is unavailable; the text says why. */
   reason: string | null;
   hint: string;
   onClick: () => void;
-}): ReactNode {
+}
+
+/**
+ * The button itself. An enabled button is described by its hint, which is read
+ * out but not drawn — the toolbar has no room for a sentence per control. A
+ * blocked one points at the reason rendered in the strip below the toolbar,
+ * where it is visible to everyone.
+ */
+function Action({ id, label, icon, reason, hint, onClick }: ToolbarAction): ReactNode {
   const reasonId = `${id}-reason`;
   const hintId = `${id}-hint`;
 
@@ -284,15 +319,12 @@ function Action({
         aria-describedby={reason !== null ? reasonId : hintId}
         onClick={onClick}
       >
-        {label}
+        {icon}
+        <span>{label}</span>
       </button>
-      {reason === null ? (
-        <span id={hintId} className={styles.hint}>
+      {reason === null && (
+        <span id={hintId} className={styles.srOnly}>
           {hint}
-        </span>
-      ) : (
-        <span id={reasonId} className={styles.reason}>
-          {reason}
         </span>
       )}
     </div>

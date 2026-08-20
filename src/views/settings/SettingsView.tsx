@@ -87,6 +87,26 @@ export function SettingsView({ onClose }: { onClose: () => void }): ReactNode {
         </span>
       </label>
 
+      <label className={styles.field}>
+        <span className={styles.checkbox}>
+          <input
+            type="checkbox"
+            checked={draft.githubAvatars}
+            onChange={(event) => update('githubAvatars', event.target.checked)}
+          />
+          <span className={styles.label}>Show author pictures from GitHub</span>
+        </span>
+        <span className={styles.hint}>
+          Off by default, and the only setting here that makes Krakenless talk to anything
+          but your git remotes. It covers only authors who commit as{' '}
+          <code>id+name@users.noreply.github.com</code>, because that address already
+          contains the account number — the picture is requested from{' '}
+          <code>avatars.githubusercontent.com</code> by number, so no email address is
+          ever sent anywhere and no account is needed. Everyone else keeps the initials
+          badge, which is drawn from their identity and never leaves this machine.
+        </span>
+      </label>
+
       <fieldset className={styles.field}>
         <legend className={styles.label}>Theme</legend>
         {(['dark', 'light', 'system'] as const).map((theme) => (
@@ -119,7 +139,12 @@ export function SettingsView({ onClose }: { onClose: () => void }): ReactNode {
         <h3 className={styles.label}>About Krakenless</h3>
         <p className={styles.hint}>
           A fast, private Git client. No account, no telemetry, no subscription — it runs
-          your own <code>git</code> and nothing leaves this machine.
+          your own <code>git</code>, and the only thing it ever contacts is your git
+          remotes
+          {draft.githubAvatars
+            ? ', plus GitHub for the author pictures you turned on above'
+            : ''}
+          .
         </p>
         <p className={styles.hint}>
           Free and open source under AGPL-3.0. If it saves you time, sponsoring the

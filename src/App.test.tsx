@@ -4,14 +4,16 @@ import App from './App';
 import { StoreProvider } from './state/hooks';
 import { createStore, type Store } from './state/store';
 import type { RepoInfo } from './git/types';
+import { LAYOUT_BOUNDS, defaultConfig } from './config/schema';
 
 const loadConfig = vi.hoisted(() => vi.fn());
+const saveConfig = vi.hoisted(() => vi.fn());
 const watchRepository = vi.hoisted(() => vi.fn());
 const refreshAllPanels = vi.hoisted(() => vi.fn());
 
 vi.mock('./config/store', () => ({
   loadConfig,
-  saveConfig: vi.fn(),
+  saveConfig,
   configFolder: vi.fn(),
 }));
 vi.mock('./state/watch', () => ({ watchRepository }));
@@ -60,13 +62,8 @@ describe('App', () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
-    loadConfig.mockResolvedValue({
-      version: 1,
-      recentRepos: [],
-      editorCommand: '',
-      mergetool: '',
-      theme: 'dark',
-    });
+    loadConfig.mockResolvedValue(defaultConfig());
+    saveConfig.mockResolvedValue(undefined);
     watchRepository.mockResolvedValue({ stop });
     refreshAllPanels.mockResolvedValue(undefined);
   });
@@ -258,5 +255,105 @@ describe('App', () => {
     renderApp(store);
 
     expect(screen.getByText('status unavailable')).toBeInTheDocument();
+  });
+});
+
+describe('App layout', () => {
+  const stop = vi.fn();
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    loadConfig.mockResolvedValue(defaultConfig());
+    saveConfig.mockResolvedValue(undefined);
+    watchRepository.mockResolvedValue({ stop });
+  });
+
+  function openRepo(): Store {
+    const store = createStore();
+    store.dispatch({ type: 'repo/opened', repo: REPO });
+    renderApp(store);
+    return store;
+  }
+
+  it('offers a draggable edge for each panel it can resize', () => {
+    openRepo();
+    expect(
+      screen.getByRole('separator', { name: 'Resize the branches panel' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('separator', { name: 'Resize the history panel' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('separator', { name: 'Resize the working tree panel' }),
+    ).toBeInTheDocument();
+  });
+
+  it('remembers a size once the drag finishes, and not on every mouse move', () => {
+    const store = openRepo();
+    const handle = screen.getByRole('separator', { name: 'Resize the branches panel' });
+
+    fireEvent.mouseDown(handle, { clientX: 264, button: 0 });
+    fireEvent.mouseMove(window, { clientX: 300 });
+    fireEvent.mouseMove(window, { clientX: 320 });
+    // Hundreds of writes per drag is what this avoids.
+    expect(saveConfig).not.toHaveBeenCalled();
+
+    fireEvent.mouseUp(window);
+    const saved = defaultConfig().layout.sidebarWidth + 56;
+    expect(store.getState().config.layout.sidebarWidth).toBe(saved);
+    expect(saveConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it('drags the working tree panel the other way, since it sits on the right', () => {
+    const store = openRepo();
+    const handle = screen.getByRole('separator', {
+      name: 'Resize the working tree panel',
+    });
+
+    fireEvent.mouseDown(handle, { clientX: 900, button: 0 });
+    fireEvent.mouseMove(window, { clientX: 960 });
+    fireEvent.mouseUp(window);
+
+    expect(store.getState().config.layout.detailWidth).toBe(
+      defaultConfig().layout.detailWidth - 60,
+    );
+  });
+
+  it('refuses to drag a panel past the point where it stops being readable', () => {
+    const store = openRepo();
+    const handle = screen.getByRole('separator', { name: 'Resize the branches panel' });
+
+    fireEvent.mouseDown(handle, { clientX: 264, button: 0 });
+    fireEvent.mouseMove(window, { clientX: 0 });
+    fireEvent.mouseUp(window);
+
+    expect(store.getState().config.layout.sidebarWidth).toBe(
+      LAYOUT_BOUNDS.sidebarWidth.min,
+    );
+  });
+
+  it('resizes from the keyboard too', () => {
+    const store = openRepo();
+    const handle = screen.getByRole('separator', { name: 'Resize the branches panel' });
+
+    fireEvent.keyDown(handle, { key: 'ArrowRight' });
+
+    expect(store.getState().config.layout.sidebarWidth).toBe(
+      defaultConfig().layout.sidebarWidth + 16,
+    );
+  });
+
+  it('keeps the layout when saving it fails, rather than snapping back', () => {
+    saveConfig.mockRejectedValue(new Error('disk is full'));
+    const store = openRepo();
+    const handle = screen.getByRole('separator', { name: 'Resize the branches panel' });
+
+    fireEvent.mouseDown(handle, { clientX: 264, button: 0 });
+    fireEvent.mouseMove(window, { clientX: 300 });
+    fireEvent.mouseUp(window);
+
+    expect(store.getState().config.layout.sidebarWidth).toBe(
+      defaultConfig().layout.sidebarWidth + 36,
+    );
   });
 });

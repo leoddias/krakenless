@@ -1,92 +1,236 @@
-/* Application shell: the frame the views live in. Each view owns its own
-   styles through a CSS module; only the layout between them lives here. */
+/* Application shell: the frame the views live in.
+ *
+ * The frame is four bands stacked in a column — title bar, toolbar, banners,
+ * workspace, status bar — and the workspace is the only one that grows. Each
+ * view owns its own styles through a CSS module; only the chrome between them
+ * lives here. */
 
 .repo-layout {
   display: flex;
   flex-direction: column;
   height: 100vh;
   min-height: 0;
+  background: var(--bg);
 }
 
-.repo-header {
+/* --- title bar ------------------------------------------------------------- */
+
+.titlebar {
+  display: flex;
+  align-items: stretch;
+  gap: 0.75rem;
+  height: 34px;
+  padding-left: 0.75rem;
+  background: var(--chrome);
+  border-bottom: 1px solid var(--border);
+}
+
+.titlebar__brand {
   display: flex;
   align-items: center;
-  gap: 1rem;
-  padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid var(--border, #2a2f37);
-  background: var(--surface, #1a1e24);
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
 }
 
-.repo-header__identity {
+.titlebar__tabs {
   display: flex;
-  flex-direction: column;
+  align-items: stretch;
   min-width: 0;
 }
 
-.repo-header__name {
-  font-weight: 600;
-}
-
-.repo-header__path {
-  font-size: 0.75rem;
-  color: var(--muted, #9aa3ad);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 40ch;
-}
-
-.repo-header__branch {
+/* The open repository, drawn as the one active tab. Krakenless opens a single
+   repository at a time; the strip exists so the name has a home, not to
+   promise tabs that do not exist. */
+.tab {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.85rem;
-  color: var(--muted, #9aa3ad);
+  min-width: 0;
+  padding: 0 0.5rem 0 0.75rem;
+  border: 0;
+  border-top: 2px solid var(--accent);
+  background: var(--surface);
+  color: var(--fg-strong);
+  font-family: inherit;
+  font-size: 0.8125rem;
 }
 
-.repo-header__conflicts {
-  color: var(--danger, #f2777a);
-  font-weight: 600;
+.tab__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 22ch;
 }
 
-.repo-header__action {
+.tab__close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius);
   background: transparent;
-  border: 1px solid var(--border, #2a2f37);
-  border-radius: 4px;
-  color: var(--fg, #e6e8eb);
-  padding: 0.3rem 0.6rem;
+  color: var(--muted);
   cursor: pointer;
 }
 
-.repo-header__action:first-of-type {
-  /* Pushes the action group to the right edge of the header. */
+.tab__close:hover {
+  background: var(--surface-hover);
+  color: var(--fg-strong);
+}
+
+.tab__close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* --- toolbar --------------------------------------------------------------- */
+
+.toolbar {
+  display: flex;
+  align-items: stretch;
+  gap: 1rem;
+  padding: 0.25rem 0.75rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.toolbar__identity {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.toolbar__field {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  max-width: 22ch;
+}
+
+.toolbar__caption {
+  font-size: 0.625rem;
+  line-height: 1.2;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+}
+
+.toolbar__value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.9375rem;
+  color: var(--fg-strong);
+}
+
+.toolbar__value--muted {
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.toolbar__separator {
+  color: var(--faint);
+}
+
+.toolbar__conflicts {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.toolbar__actions {
+  display: flex;
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.toolbar__right {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
   margin-left: auto;
 }
 
-.repo-header__action:hover {
-  border-color: var(--accent, #6ea8fe);
+/* Icon-over-caption control, the shape every toolbar action takes. */
+.tool-button {
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: center;
+  gap: 0.1rem;
+  min-width: 52px;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.6875rem;
+  cursor: pointer;
 }
 
-.repo-header__action:focus-visible {
-  outline: 2px solid var(--accent, #6ea8fe);
-  outline-offset: 2px;
+.tool-button:hover:not(:disabled) {
+  background: var(--surface-hover);
 }
+
+.tool-button:disabled {
+  color: var(--faint);
+  cursor: default;
+}
+
+.tool-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.icon-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.icon-button:hover {
+  background: var(--surface-hover);
+  color: var(--fg-strong);
+}
+
+.icon-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* --- workspace ------------------------------------------------------------- */
 
 .repo-panels {
   display: grid;
-  /* Three columns; the left one is split into history (which gets the height)
-     and refs (which is a short list). A fourth column would leave nothing
-     readable at 1280px, the minimum window width. */
-  grid-template-columns: minmax(320px, 30%) minmax(280px, 26%) 1fr;
-  grid-template-rows: 1fr auto;
+  /* Sidebar, edge, the graph and its diff, edge, the detail panel — the same
+     silhouette the whole session works in, so nothing jumps between
+     selections. The column widths are set inline from the saved layout; only
+     the two 5px edges are fixed here. */
+  grid-template-columns: var(--sidebar-width) 5px minmax(0, 1fr) 5px var(--detail-width);
   flex: 1;
   min-height: 0;
 }
 
-.repo-panels__history,
 .repo-panels__refs,
-.repo-panels__changes,
-.repo-panels__diff {
+.repo-panels__center,
+.repo-panels__changes {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -94,57 +238,65 @@
   flex-direction: column;
 }
 
-.repo-panels__history,
-.repo-panels__refs,
+.repo-panels__refs {
+  background: var(--chrome);
+}
+
+.repo-panels__center {
+  background: var(--bg);
+}
+
 .repo-panels__changes {
-  border-right: 1px solid var(--border, #2a2f37);
+  background: var(--surface);
 }
 
 .repo-panels__history {
-  grid-column: 1;
-  grid-row: 1;
-}
-
-.repo-panels__refs {
-  grid-column: 1;
-  grid-row: 2;
-  border-top: 1px solid var(--border, #2a2f37);
-  /* The history is the primary way around the repository, so the refs list
-     yields height to it and scrolls internally instead. */
-  max-height: 30vh;
-  overflow-y: auto;
-}
-
-.repo-panels__changes {
-  grid-column: 2;
-  grid-row: 1 / span 2;
+  /* `flex-grow` is set inline from the saved layout; the basis is what makes
+     the two panels share the column rather than size to their content. */
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .repo-panels__diff {
-  grid-column: 3;
-  grid-row: 1 / span 2;
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-/* Below this width three columns stop being readable; stack the working tree
-   under the history and let the diff keep the full height. */
-@media (max-width: 1100px) {
-  .repo-panels {
-    grid-template-columns: minmax(240px, 32%) 1fr;
-    grid-template-rows: 1fr auto auto;
-  }
+/* --- status bar ------------------------------------------------------------ */
 
-  .repo-panels__changes {
-    grid-column: 1;
-    grid-row: 2;
-  }
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  height: 24px;
+  padding: 0 0.75rem;
+  background: var(--chrome);
+  border-top: 1px solid var(--border);
+  color: var(--faint);
+  font-size: 0.6875rem;
+}
 
-  .repo-panels__refs {
-    grid-column: 1;
-    grid-row: 3;
-  }
+.statusbar__path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
 
-  .repo-panels__diff {
-    grid-column: 2;
-    grid-row: 1 / span 3;
-  }
+.statusbar__right {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.statusbar__busy {
+  color: var(--accent);
 }
