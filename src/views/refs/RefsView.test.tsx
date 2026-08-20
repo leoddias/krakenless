@@ -266,6 +266,32 @@ describe('branch list', () => {
     expect(switchToMock).toHaveBeenCalledWith(store, 'feature/x');
   });
 
+  it('never lets a refused switch look like a switch', async () => {
+    const store = renderLoaded();
+    switchToMock.mockImplementation(async () => {
+      store.dispatch({
+        type: 'notice',
+        notice: {
+          tone: 'error',
+          message: 'error: Your local changes to a.ts would be overwritten by checkout',
+        },
+      });
+      return false;
+    });
+    await click(screen.getByRole('button', { name: /feature\/x/ }));
+
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('Could not switch to "feature/x"');
+    expect(alert).toHaveTextContent('You are still where you were.');
+    expect(alert).toHaveTextContent('would be overwritten by checkout');
+  });
+
+  it('says nothing extra when the switch worked', async () => {
+    renderLoaded();
+    await click(screen.getByRole('button', { name: /feature\/x/ }));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it('reaches the branch with the keyboard', () => {
     renderLoaded();
     const target = screen.getByRole('button', { name: /feature\/x/ });
@@ -596,6 +622,55 @@ describe('deleting a branch', () => {
       release?.();
     });
     expect(removeBranchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not reopen a question the user dismissed while it was in flight', async () => {
+    let release: (() => void) | null = null;
+    removeBranchMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = () =>
+            resolve({ deleted: false, unmergedWarning: 'not merged anywhere' });
+        }),
+    );
+    renderLoaded();
+    await askDelete();
+    await click(screen.getByRole('button', { name: 'Delete branch' }));
+    // Cancelled before git answered: the answer must not put a destructive
+    // dialog back on screen.
+    await click(screen.getByRole('button', { name: 'Cancel' }));
+    await act(async () => {
+      release?.();
+    });
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+  });
+
+  it('forgets the question rather than resurrecting it on the way back', async () => {
+    removeBranchMock.mockResolvedValue({
+      deleted: false,
+      unmergedWarning: 'not merged anywhere',
+    });
+    const store = renderLoaded();
+    await askDelete();
+    await click(screen.getByRole('button', { name: 'Delete branch' }));
+    expect(dialog()).toHaveTextContent('not merged anywhere');
+
+    const elsewhere = {
+      root: '/other',
+      gitDir: '/other/.git',
+      bare: false,
+      empty: false,
+    };
+    act(() => store.dispatch({ type: 'repo/opened', repo: elsewhere }));
+    act(() =>
+      store.dispatch({
+        type: 'repo/opened',
+        repo: { root: '/repo', gitDir: '/repo/.git', bare: false, empty: false },
+      }),
+    );
+    // Stale evidence about a repository that has moved on since is not shown
+    // as though it were fresh.
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
   });
 
   it('does not show a message about one repository over another', async () => {

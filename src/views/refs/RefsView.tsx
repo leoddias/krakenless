@@ -179,12 +179,24 @@ export function RefsView(): ReactNode {
     void refreshStashes(store);
   }, [store, root]);
 
-  // Anything asked or said about another repository is not shown against this
-  // one. Derived rather than cleared on a repo change, so there is no render in
-  // which a question about repository A is on screen over repository B: branch
-  // names collide across repositories, and the action layer resolves the root
-  // from current state. `recovery` is exempt on purpose — it names its own
+  // Leaving a repository forgets every question and message asked about it, so
+  // coming back cannot resurrect a stale warning as though it were fresh
+  // evidence. Adjusted during render rather than in an effect: the state is
+  // derived from which repository is open, and an effect would let one paint
+  // happen first. `recovery` is exempt on purpose — it names its own
   // repository and is the only route back to work that was dropped.
+  const [lastRoot, setLastRoot] = useState(root);
+  if (root !== lastRoot) {
+    setLastRoot(root);
+    setDeletion(null);
+    setStashQuestion(null);
+    setFailure(null);
+    setOutcome(null);
+  }
+
+  // Belt and braces for the same rule: branch names collide across
+  // repositories and the action layer resolves the root from current state, so
+  // nothing asked about repository A is ever rendered over repository B.
   const openDeletion = deletion !== null && deletion.root === root ? deletion : null;
   const openStashQuestion =
     stashQuestion !== null && stashQuestion.root === root ? stashQuestion : null;
@@ -244,6 +256,21 @@ export function RefsView(): ReactNode {
     setFailure({ text, cause, root: here });
   };
 
+  /**
+   * Switches branches, saying so when git refused.
+   *
+   * A refused switch is the quietest dangerous outcome in this panel: git
+   * declines (uncommitted changes would be overwritten), the list refreshes
+   * back to the branch the user is still on, and the only cue is a one-glyph
+   * marker. Work then goes to the branch they believed they had left.
+   */
+  const runSwitch = async (name: string): Promise<void> => {
+    if (running) return;
+    const [ok, cause] = await perform(() => switchTo(store, name));
+    if (!ok)
+      reportHere(`Could not switch to "${name}". You are still where you were.`, cause);
+  };
+
   const runDelete = async (pending: Deletion): Promise<void> => {
     if (running) return;
     clearMessages();
@@ -268,11 +295,19 @@ export function RefsView(): ReactNode {
       setOutcome({ text: `Deleted branch "${name}".`, root: pending.root });
       return;
     }
-    if (result !== null && result.unmergedWarning !== undefined) {
+    const warning = result === null ? undefined : result.unmergedWarning;
+    if (warning !== undefined) {
       // Ask again — a different question, with the warning attached. Nothing
       // here calls the action layer a second time on its own, and the forcing
-      // button arrives disarmed (see DeleteConfirmation).
-      setDeletion({ ...pending, stage: 'force', warning: result.unmergedWarning });
+      // button arrives disarmed (see DeleteConfirmation). Only the question
+      // that is still on screen is escalated: a user who cancelled while the
+      // safe attempt was in flight must not have a destructive dialog reopened
+      // on them.
+      setDeletion((current) =>
+        current !== null && current.stage === 'safe' && current.name === pending.name
+          ? { ...pending, stage: 'force', warning }
+          : current,
+      );
       return;
     }
     setDeletion(null);
@@ -433,7 +468,7 @@ export function RefsView(): ReactNode {
           selectedOid={selectedOid}
           onSwitch={(name) => {
             clearMessages();
-            void switchTo(store, name);
+            void runSwitch(name);
           }}
           onCreate={async (name, startPoint) => {
             clearMessages();
