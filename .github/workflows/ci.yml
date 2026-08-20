@@ -32,6 +32,9 @@ jobs:
     # A break on Linux is a real bug even while Linux is not a shipped target.
     name: Build (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
+    # A hung step is the worst failure mode: it burns 6 hours of the default
+    # budget and produces no log, because logs only publish when the job ends.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -81,15 +84,21 @@ jobs:
           git config --global user.name "CI"
 
       - name: Frontend tests
+        timeout-minutes: 15
         run: npm test
 
       - name: Clippy
+        timeout-minutes: 20
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
       - name: Rust tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        # One thread and unbuffered output: if a test hangs, the last line in
+        # the log names it. In parallel with captured output it names nothing.
+        timeout-minutes: 20
+        run: cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1 --nocapture
 
       - name: Tauri build
+        timeout-minutes: 25
         run: npm run tauri -- build
 
       - name: Upload build

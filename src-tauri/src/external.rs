@@ -8,7 +8,7 @@
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use crate::git_runner::{GIT_ENV_TO_SCRUB, GIT_GLOBAL_ARGS};
+use crate::git_runner::{scrub_git_env, GIT_GLOBAL_ARGS};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -87,9 +87,7 @@ pub fn open_external(
 
     let mut command = Command::new(&program);
     if is_git_program(&program) {
-        for key in GIT_ENV_TO_SCRUB {
-            command.env_remove(key);
-        }
+        scrub_git_env(&mut command);
     }
 
     command
@@ -197,16 +195,14 @@ mod tests {
         // The args half of this fix is asserted above; without this the scrub
         // could quietly stop happening in a refactor and nothing would notice.
         let mut command = Command::new("git");
-        for key in GIT_ENV_TO_SCRUB {
-            command.env_remove(key);
-        }
+        scrub_git_env(&mut command);
         let removed: Vec<_> = command
             .get_envs()
             .filter(|(_, value)| value.is_none())
             .map(|(key, _)| key.to_string_lossy().into_owned())
             .collect();
 
-        for key in GIT_ENV_TO_SCRUB {
+        for key in crate::git_runner::GIT_ENV_TO_SCRUB {
             assert!(removed.contains(&key.to_string()), "{key} was not scrubbed");
         }
     }

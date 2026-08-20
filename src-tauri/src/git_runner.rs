@@ -134,6 +134,16 @@ fn validate_args(args: &[String]) -> Result<(), GitRunError> {
     Ok(())
 }
 
+/// Removes every environment variable that could redirect where git reads or
+/// writes. Separated so it can be asserted directly: the alternative — setting
+/// a real variable in the test process — mutates global state that sibling
+/// tests inherit, since `cargo test` runs them in parallel threads.
+pub fn scrub_git_env(command: &mut Command) {
+    for key in GIT_ENV_TO_SCRUB {
+        command.env_remove(key);
+    }
+}
+
 /// Kills the child *and* anything it spawned. Killing only the direct child
 /// leaves grandchildren holding the pipes and, worse, still writing to the
 /// repository while we report a timeout.
@@ -185,6 +195,7 @@ pub fn run_git(
     );
 
     let mut command = Command::new("git");
+    scrub_git_env(&mut command);
     command
         .current_dir(&cwd)
         .args(GIT_GLOBAL_ARGS)
@@ -199,9 +210,6 @@ pub fn run_git(
         // Keep output machine-stable regardless of the user's environment.
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("LC_ALL", "C");
-    for key in GIT_ENV_TO_SCRUB {
-        command.env_remove(key);
-    }
 
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
@@ -463,50 +471,26 @@ mod tests {
 
     #[test]
     fn redirecting_git_env_vars_are_not_inherited() {
-        let dir = temp_dir("env-scrub");
-        // `--git-path` only answers inside a repository.
-        let init = Command::new("git")
-            .current_dir(&dir)
-            .args(["init", "--quiet"])
-            .status()
-            .unwrap();
-        assert!(init.success(), "could not create the test repository");
-        let foreign = "C:/nowhere/foreign-index";
-        // SAFETY: single-threaded test; the variable is removed right after.
-        unsafe {
-            std::env::set_var("GIT_INDEX_FILE", foreign);
+        // Asserted on the command rather than by setting a real variable: that
+        // would leak into every sibling test, because `cargo test` runs them in
+        // parallel threads — and a stray `GIT_INDEX_FILE` sends another test's
+        // git at an index that does not exist.
+        let mut command = Command::new("git");
+        scrub_git_env(&mut command);
+
+        let removed: Vec<String> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(key, _)| key.to_string_lossy().into_owned())
+            .collect();
+
+        for key in GIT_ENV_TO_SCRUB {
+            assert!(removed.contains(&key.to_string()), "{key} is not scrubbed");
         }
-
-        // Positive control: without scrubbing, git reports the foreign path.
-        let leaked = Command::new("git")
-            .current_dir(&dir)
-            .args(["rev-parse", "--path-format=absolute", "--git-path", "index"])
-            .output()
-            .unwrap();
-        let leaked = String::from_utf8_lossy(&leaked.stdout).into_owned();
-
-        let out = run_git(
-            dir.to_str().unwrap(),
-            &s(&["rev-parse", "--path-format=absolute", "--git-path", "index"]),
-            None,
-            None,
-        )
-        .unwrap();
-
-        unsafe {
-            std::env::remove_var("GIT_INDEX_FILE");
+        // The ones that matter most, spelled out so a shrinking list is loud.
+        for key in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_CONFIG_PARAMETERS"] {
+            assert!(removed.contains(&key.to_string()), "{key} must be scrubbed");
         }
-
-        assert!(
-            leaked.contains("foreign-index"),
-            "control failed: git no longer honors GIT_INDEX_FILE ({leaked:?})"
-        );
-        assert!(
-            !out.stdout.contains("foreign-index"),
-            "child saw a redirecting env var: {:?}",
-            out.stdout
-        );
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
