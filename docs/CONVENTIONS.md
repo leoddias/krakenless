@@ -32,10 +32,14 @@
 - `.gitattributes` normalises line endings to LF. A file written by a tool that
   defaults to CRLF on Windows would otherwise pass locally and fail
   `prettier --check` in CI.
-- The desktop job builds on Windows, macOS and Linux. Windows is the only
-  shipped target for v0.1; the other two exist because the git layer has
-  platform-specific code (process groups, `reveal_folder`, path separators) and
-  a break there is a real bug even where we do not ship.
+- The desktop job builds on Windows and macOS. Windows is the shipped target
+  for v0.1; macOS keeps the unix code paths (process groups, `reveal_folder`,
+  path separators) under a real check. Linux is *not* in the gate — see
+  `docs/ROADMAP.md` § Backlog — and runs on demand via `linux.yml`.
+- A CI step that can hang needs its own `timeout-minutes` **and** output that
+  survives: a cancelled job publishes no log at all, while step conclusions stay
+  readable through the API. Splitting a suspect step into named groups turns
+  "it hung somewhere" into "it hung here" without needing logs.
 
 ## Commits
 

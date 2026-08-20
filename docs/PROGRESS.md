@@ -31,6 +31,11 @@
 
 ## Blockers / open questions
 
+- **Linux CI wedges the ubuntu runner** inside the Rust lib tests. Taken out of
+  the CI gate on 2026-08-20 (not a v0.1 target); the bisecting workflow is
+  `.github/workflows/linux.yml`, run on demand. Full findings and what was ruled
+  out are in `docs/ROADMAP.md` § Backlog. Windows and macOS build and test green.
+
 - None blocking. Two deliberate gaps, both documented in code comments:
   force-push is unreachable from the UI until the lease carries an explicit
   `<branch>:<oid>`, and pushing to a differently-named upstream is disabled

@@ -26,15 +26,16 @@ jobs:
       - run: npm run build
 
   desktop:
-    # Windows is the v0.1 target; macOS and Linux build here so the code stays
-    # portable, and because the git-layer integration tests behave differently
-    # per platform (path separators, `stash push --keep-index`, process groups).
-    # A break on Linux is a real bug even while Linux is not a shipped target.
+    # Windows is the v0.1 target; macOS builds here so the unix code paths
+    # (process groups, `reveal_folder`, path separators) keep a real check.
+    #
+    # Linux is deliberately absent: its job wedged the runner every time —
+    # 45 minutes, no log, cancelled by the infrastructure. It lives in
+    # `linux.yml`, run on demand, so an unshipped platform cannot block the
+    # shipped one. See docs/ROADMAP.md § Backlog for what was ruled out.
     name: Build (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
-    # A hung step is the worst failure mode: it burns 6 hours of the default
-    # budget and produces no log, because logs only publish when the job ends.
-    timeout-minutes: 45
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -43,8 +44,6 @@ jobs:
             label: Windows
           - os: macos-latest
             label: macOS
-          - os: ubuntu-latest
-            label: Linux
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -58,20 +57,6 @@ jobs:
         with:
           workspaces: src-tauri
           key: ${{ matrix.os }}
-
-      # Tauri links against the system webview; on Linux that is WebKitGTK,
-      # which the runner image does not ship.
-      - name: Linux system dependencies
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libglib2.0-dev \
-            libgtk-3-dev
 
       - run: npm ci
 
@@ -91,94 +76,9 @@ jobs:
         timeout-minutes: 20
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
-      # Two timeouts on purpose. GitHub's `timeout-minutes` did not fire on a
-      # hung Linux job (the step ran 35 minutes past a 20-minute limit and the
-      # log never published), so the OS one is what guarantees the step ends and
-      # the log becomes readable. One thread and unbuffered output mean the last
-      # line names the test that hung.
-      # Linux has hung here three times with no log — the job gets cancelled by
-      # the infrastructure before anything publishes, and even an OS-level
-      # `timeout` around cargo did not end the step. So this is split to say
-      # *where* it stops: resources first, then build, then the lib tests (all
-      # of ours live there), then the binary's empty harness, which links
-      # WebKitGTK and is the one part that could block on a headless machine.
-      - name: Resources before Rust tests (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          df -h /
-          free -m
-          nproc
-
-      - name: Build tests (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        timeout-minutes: 20
-        run: cargo test --manifest-path src-tauri/Cargo.toml --no-run
-
-      # Split one test group per step, ordered from harmless to most suspect.
-      #
-      # A wedged step gets the job cancelled, and a cancelled job publishes no
-      # log — but the *step conclusions* stay readable through the API. So the
-      # last step that succeeded and the one left running name the culprit,
-      # without needing any log at all.
-      - name: 'Lib: config (Linux)'
-        if: matrix.os == 'ubuntu-latest'
-        timeout-minutes: 5
-        run: |
-          cargo test --manifest-path src-tauri/Cargo.toml --lib config:: -- --test-threads=1
-
-      - name: 'Lib: watcher (Linux)'
-        if: matrix.os == 'ubuntu-latest'
-        timeout-minutes: 5
-        run: |
-          cargo test --manifest-path src-tauri/Cargo.toml --lib watcher:: -- --test-threads=1
-
-      - name: 'Lib: runner validation (Linux)'
-        if: matrix.os == 'ubuntu-latest'
-        timeout-minutes: 5
-        run: |
-          cargo test --manifest-path src-tauri/Cargo.toml --lib git_runner::tests::rejects -- --test-threads=1
-
-      - name: 'Lib: runner capture (Linux)'
-        if: matrix.os == 'ubuntu-latest'
-        timeout-minutes: 6
-        run: |
-          cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1             git_runner::tests::captures_stdout_and_zero_exit_code             git_runner::tests::surfaces_nonzero_exit_code_and_stderr             git_runner::tests::decode_flags_invalid_utf8_instead_of_hiding_it             git_runner::tests::an_unreadable_pipe_is_an_error_not_empty_output             git_runner::tests::redirecting_git_env_vars_are_not_inherited
-
-      - name: 'Lib: runner stdin (Linux)'
-        if: matrix.os == 'ubuntu-latest'
-        timeout-minutes: 6
-        run: |
-          cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1             git_runner::tests::feeds_stdin_to_the_child             git_runner::tests::without_stdin_the_child_sees_eof_immediately             git_runner::tests::a_large_stdin_payload_does_not_deadlock
-
-      - name: 'Lib: external launcher (Linux)'
-        if: matrix.os == 'ubuntu-latest'
-        timeout-minutes: 6
-        run: |
-          cargo test --manifest-path src-tauri/Cargo.toml --lib external:: -- --test-threads=1
-
-      # The prime suspect: it deliberately makes a child hang, then kills a
-      # process group. Last on purpose, so everything before it is known good.
-      - name: 'Lib: runner timeout and kill (Linux)'
-        if: matrix.os == 'ubuntu-latest'
-        timeout-minutes: 6
-        run: |
-          cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1             git_runner::tests::a_zero_timeout_is_clamped_to_a_usable_floor             git_runner::tests::arguments_are_not_shell_interpreted             git_runner::tests::a_hanging_child_is_killed_and_the_call_returns
-
-      - name: Binary harness (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        timeout-minutes: 10
-        run: |
-          set +e
-          timeout --signal=KILL 300 cargo test --manifest-path src-tauri/Cargo.toml --bins -- --test-threads=1 --nocapture > bin-tests.log 2>&1
-          status=$?
-          echo "--- binary harness exited with $status ---"
-          tail -n 50 bin-tests.log
-          exit $status
-
       - name: Rust tests
-        if: matrix.os != 'ubuntu-latest'
-        timeout-minutes: 20
-        run: cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1 --nocapture
+        timeout-minutes: 15
+        run: cargo test --manifest-path src-tauri/Cargo.toml
 
       - name: Tauri build
         timeout-minutes: 25

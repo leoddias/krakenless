@@ -69,6 +69,25 @@ after 2 more weeks → proceed to v0.2. Else: keep as personal tool, stop invest
 
 ## Backlog (ideas parking lot — not scheduled)
 
+**Linux CI wedges the runner (open, deprioritised 2026-08-20).** Linux was
+pulled out of the CI gate — it is not a v0.1 target and every attempt cost 45
+minutes and produced no log. The investigation lives in
+`.github/workflows/linux.yml`, runnable on demand, with the groups split so the
+step conclusions alone identify the culprit.
+
+Ruled out so far: compilation (`cargo test --no-run` passes in ~75s), machine
+resources (`df`/`free` healthy immediately before), the `main.rs` harness that
+links WebKitGTK (execution never reaches it), and the frontend suite (passes on
+Linux, git integration tests included). The wedge is inside the Rust *lib*
+tests, and it is severe enough that the step outlives its own `timeout-minutes`
+and an OS-level `timeout --signal=KILL`; the job ends only when the
+infrastructure cancels it. The same tests pass on real Linux under WSL in ~1.1s,
+though WSL's own service crashed under repeated runs — the same shape of
+failure. Prime suspect: `git_runner`'s timeout-and-kill path (`kill_tree` sends
+`kill -9 -<pgid>` to a process group). **If that is the cause it is a product
+bug on Linux, not just a CI one**, which is why it is written down rather than
+silenced with `#[ignore]`.
+
 Found during M3/M4 fan-out (2026-08-20), by the workers and their reviewers:
 
 - ~~`state.remotes` slice~~ — done: `git remote` is the authority, the
