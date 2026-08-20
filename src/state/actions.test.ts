@@ -1,5 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { closeRepo, forgetRepo, openRepo, refreshDiff, selectCommit } from './actions';
+import {
+  closeRepo,
+  commitStaged,
+  discard,
+  forgetRepo,
+  openRepo,
+  refreshDiff,
+  selectCommit,
+  stage,
+  stageHunks,
+  unstage,
+} from './actions';
 import { createStore } from './store';
 import { GitError } from '../git/errors';
 
@@ -10,12 +21,24 @@ const getWorktreeDiff = vi.hoisted(() => vi.fn());
 const getStagedDiff = vi.hoisted(() => vi.fn());
 const getCommitDiff = vi.hoisted(() => vi.fn());
 const saveConfig = vi.hoisted(() => vi.fn());
+const stagePaths = vi.hoisted(() => vi.fn());
+const unstagePaths = vi.hoisted(() => vi.fn());
+const applyHunks = vi.hoisted(() => vi.fn());
+const commit = vi.hoisted(() => vi.fn());
+const discardPaths = vi.hoisted(() => vi.fn());
 
 vi.mock('../git/repository', () => ({ openRepository }));
 vi.mock('../git/status', () => ({ getStatus }));
 vi.mock('../git/log', () => ({ readLog }));
 vi.mock('../git/diff', () => ({ getWorktreeDiff, getStagedDiff, getCommitDiff }));
 vi.mock('../config/store', () => ({ saveConfig }));
+vi.mock('../git/stage', () => ({
+  stagePaths,
+  unstagePaths,
+  applyHunks,
+  commit,
+  discardPaths,
+}));
 
 const REPO = {
   root: 'C:/repos/app',
@@ -55,6 +78,11 @@ describe('actions', () => {
     getStagedDiff.mockResolvedValue([]);
     getCommitDiff.mockResolvedValue([]);
     saveConfig.mockResolvedValue(undefined);
+    stagePaths.mockResolvedValue(undefined);
+    unstagePaths.mockResolvedValue(undefined);
+    applyHunks.mockResolvedValue(undefined);
+    commit.mockResolvedValue(undefined);
+    discardPaths.mockResolvedValue({ stashLabel: 'krakenless: discarded now' });
   });
 
   it('opens a repository and loads status and history', async () => {
@@ -169,5 +197,93 @@ describe('actions', () => {
 
     expect(store.getState().repo.state).toBe('idle');
     expect(store.getState().config.recentRepos).toHaveLength(1);
+  });
+
+  it('stages paths and refreshes what the change affects', async () => {
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+    getStatus.mockClear();
+
+    await stage(store, ['a.txt']);
+
+    expect(stagePaths).toHaveBeenCalledWith(REPO.root, ['a.txt']);
+    expect(getStatus).toHaveBeenCalledTimes(1);
+    expect(store.getState().busy).toBe(false);
+  });
+
+  it('ignores an empty selection instead of staging everything', async () => {
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+    await stage(store, []);
+    await unstage(store, []);
+    expect(stagePaths).not.toHaveBeenCalled();
+    expect(unstagePaths).not.toHaveBeenCalled();
+  });
+
+  it('marks the app busy while a write is in flight', async () => {
+    let release: () => void = () => {};
+    stagePaths.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    const pending = stage(store, ['a.txt']);
+    expect(store.getState().busy).toBe(true);
+    release();
+    await pending;
+    expect(store.getState().busy).toBe(false);
+  });
+
+  it('clears busy even when the git command fails', async () => {
+    stagePaths.mockRejectedValue(new GitError('command-failed', 'nope'));
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await expect(stage(store, ['a.txt'])).rejects.toThrow();
+    expect(store.getState().busy).toBe(false);
+  });
+
+  it('passes hunk selections through to the patch path', async () => {
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+    const target = file('a.txt');
+
+    await stageHunks(
+      store,
+      target,
+      [{ header: '@@', oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: [] }],
+      {
+        reverse: false,
+      },
+    );
+
+    expect(applyHunks).toHaveBeenCalledWith(REPO.root, target, expect.any(Array), {
+      reverse: false,
+    });
+  });
+
+  it('returns the stash label so the UI can explain the undo', async () => {
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    const result = await discard(store, ['a.txt']);
+
+    expect(discardPaths).toHaveBeenCalledWith(REPO.root, ['a.txt']);
+    expect(result?.stashLabel).toContain('krakenless');
+  });
+
+  it('refreshes the history after committing', async () => {
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+    readLog.mockClear();
+
+    await commitStaged(store, { message: 'feat: thing' });
+
+    expect(commit).toHaveBeenCalledWith(REPO.root, { message: 'feat: thing' });
+    expect(readLog).toHaveBeenCalled();
   });
 });

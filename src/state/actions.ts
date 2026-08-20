@@ -13,7 +13,17 @@ import { getCommitDiff, getStagedDiff, getWorktreeDiff } from '../git/diff';
 import { GitError } from '../git/errors';
 import { readLog } from '../git/log';
 import { openRepository } from '../git/repository';
+import {
+  applyHunks,
+  commit,
+  discardPaths,
+  stagePaths,
+  unstagePaths,
+  type DiscardResult,
+} from '../git/stage';
+import type { CommitOptions } from '../git/commands/stage';
 import { getStatus } from '../git/status';
+import type { FileDiff, Hunk } from '../git/types';
 import type { Store } from './store';
 
 /** Number of commits the history panel loads at once. */
@@ -126,4 +136,71 @@ export async function selectCommit(store: Store, oid: string | null): Promise<vo
 
 export function closeRepo(store: Store): void {
   store.dispatch({ type: 'repo/closed' });
+}
+
+/**
+ * Stages or unstages whole paths, then refreshes what the change affects.
+ *
+ * `busy` is set for the duration: the UI disables actions while a git command
+ * that writes is in flight, so a double click cannot queue two conflicting
+ * operations against the same index.
+ */
+async function mutate(store: Store, run: () => Promise<unknown>): Promise<void> {
+  store.dispatch({ type: 'busy', busy: true });
+  try {
+    await run();
+    await Promise.all([refreshStatus(store), refreshDiff(store)]);
+  } finally {
+    store.dispatch({ type: 'busy', busy: false });
+  }
+}
+
+export async function stage(store: Store, paths: string[]): Promise<void> {
+  const root = currentRoot(store);
+  if (root === null || paths.length === 0) return;
+  await mutate(store, () => stagePaths(root, paths));
+}
+
+export async function unstage(store: Store, paths: string[]): Promise<void> {
+  const root = currentRoot(store);
+  if (root === null || paths.length === 0) return;
+  await mutate(store, () => unstagePaths(root, paths));
+}
+
+/** Stages (or unstages, with `reverse`) a selection of hunks from one file. */
+export async function stageHunks(
+  store: Store,
+  file: FileDiff,
+  hunks: Hunk[],
+  options: { reverse: boolean },
+): Promise<void> {
+  const root = currentRoot(store);
+  if (root === null || hunks.length === 0) return;
+  await mutate(store, () => applyHunks(root, file, hunks, options));
+}
+
+/**
+ * Discards changes to `paths`. Returns the stash label so the UI can tell the
+ * user exactly how to get the changes back — the discard is only defensible
+ * because that recovery route exists.
+ */
+export async function discard(
+  store: Store,
+  paths: string[],
+): Promise<DiscardResult | null> {
+  const root = currentRoot(store);
+  if (root === null || paths.length === 0) return null;
+
+  let result: DiscardResult | null = null;
+  await mutate(store, async () => {
+    result = await discardPaths(root, paths);
+  });
+  return result;
+}
+
+export async function commitStaged(store: Store, options: CommitOptions): Promise<void> {
+  const root = currentRoot(store);
+  if (root === null) return;
+  await mutate(store, () => commit(root, options));
+  await refreshCommits(store);
 }
