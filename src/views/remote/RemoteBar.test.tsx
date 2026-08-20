@@ -129,9 +129,11 @@ describe('RemoteBar — panel states', () => {
     expect(screen.getByText(/2 ahead, 3 behind/)).toBeInTheDocument();
   });
 
-  it('says up to date rather than showing two zeroes', () => {
+  it('says what git reported rather than showing two zeroes', () => {
     renderReady({ upstream: 'origin/main' });
-    expect(screen.getByText(/Up to date with its upstream/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Git reported no commits on either side/),
+    ).toBeInTheDocument();
   });
 });
 
@@ -176,7 +178,9 @@ describe('RemoteBar — publishing a branch with no upstream', () => {
   it('offers publish and sets the upstream', async () => {
     const store = renderReady({ upstream: undefined }, [remoteBranch('origin/main')]);
     expect(screen.getByText('main — no upstream')).toBeInTheDocument();
-    expect(screen.getByText(/Creates origin\/main and sets it/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Pushes main to origin and sets origin\/main/),
+    ).toBeInTheDocument();
 
     await act(async () => {
       fireEvent.click(button('Publish branch'));
@@ -207,6 +211,35 @@ describe('RemoteBar — publishing a branch with no upstream', () => {
       branch: 'topic',
       setUpstream: true,
     });
+  });
+
+  it('always offers the remote choice, even when it knows only one', () => {
+    // The remote set is reconstructed from the branch list, so a silent default
+    // could publish to a remote the user was never shown.
+    renderReady({ upstream: undefined }, [remoteBranch('internal/main')]);
+    const select = screen.getByLabelText('Publish to');
+    expect(select).toHaveValue('internal');
+  });
+
+  it('does not blame a missing remote while the branch list is still unread', () => {
+    renderBar((store) => {
+      openRepo(store);
+      store.dispatch({ type: 'status/loaded', status: statusOf() });
+    });
+    expect(button('Publish branch')).toBeDisabled();
+    expect(screen.getByText(/Reading the list of remotes/)).toBeInTheDocument();
+    expect(screen.queryByText(/git remote add/)).not.toBeInTheDocument();
+  });
+
+  it('says the branch list failed instead of claiming there is no remote', () => {
+    renderBar((store) => {
+      openRepo(store);
+      store.dispatch({ type: 'status/loaded', status: statusOf() });
+      store.dispatch({ type: 'branches/failed', message: 'no branches for you' });
+    });
+    expect(button('Publish branch')).toBeDisabled();
+    expect(screen.getByText(/does not know which remotes exist/)).toBeInTheDocument();
+    expect(screen.queryByText(/git remote add/)).not.toBeInTheDocument();
   });
 
   it('refuses to publish when it knows of no remote', () => {
@@ -313,6 +346,38 @@ describe('RemoteBar — honesty about failure', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Fetch did not complete.');
     // The error text itself stays in the shell's notice, not duplicated here.
     expect(screen.queryByText(/unexpected/)).not.toBeInTheDocument();
+  });
+
+  it('drops the outcome when another repository is opened', async () => {
+    const store = renderReady({ upstream: 'origin/main', ahead: 1 });
+    await act(async () => {
+      fireEvent.click(button('Push'));
+    });
+    expect(screen.getByText('Push finished.')).toBeInTheDocument();
+
+    act(() => {
+      store.dispatch({
+        type: 'repo/opened',
+        repo: { root: '/other', gitDir: '/other/.git', bare: false, empty: false },
+      });
+    });
+    expect(screen.queryByText('Push finished.')).not.toBeInTheDocument();
+  });
+
+  it('drops the outcome once the panel describes a different branch', async () => {
+    const store = renderReady({ upstream: 'origin/main', ahead: 1 });
+    await act(async () => {
+      fireEvent.click(button('Push'));
+    });
+    expect(screen.getByText('Push finished.')).toBeInTheDocument();
+
+    act(() => {
+      store.dispatch({
+        type: 'status/loaded',
+        status: statusOf({ branch: 'topic', upstream: 'origin/topic' }),
+      });
+    });
+    expect(screen.queryByText('Push finished.')).not.toBeInTheDocument();
   });
 
   it('clears the previous outcome when a new operation starts', async () => {

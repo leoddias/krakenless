@@ -133,7 +133,7 @@ export function summarize(status: Loadable<RepoStatus>): Summary {
       return {
         headline: `${upstream.branch} — no upstream`,
         detail:
-          'This branch is not tracking anything yet. Publish it to create it on a remote.',
+          'This branch is not tracking anything yet. Publish it to push it to a remote and start tracking it.',
       };
     case 'unreadable-upstream':
       return {
@@ -149,8 +149,10 @@ export function summarize(status: Loadable<RepoStatus>): Summary {
 }
 
 function countsSentence(ahead: number, behind: number): string {
+  // Attributed to git, not asserted: `RepoStatus` has no way to say "unknown",
+  // so a status without a `branch.ab` record also arrives here as 0/0.
   if (ahead === 0 && behind === 0)
-    return 'Up to date with its upstream, as of the last fetch.';
+    return 'Git reported no commits on either side, as of the last fetch.';
   const parts: string[] = [];
   if (ahead > 0) parts.push(`${ahead} ahead`);
   if (behind > 0) parts.push(`${behind} behind`);
@@ -189,6 +191,12 @@ export interface Gate {
   statusState: Loadable<RepoStatus>['state'];
   hasConflicts: boolean;
   upstream: UpstreamState;
+  /**
+   * Panel state of the branch list, which is where remote names come from.
+   * "Not read yet" is not the same as "there are no remotes", and the publish
+   * button has to say which of the two it means.
+   */
+  branchesState: Loadable<Branch[]>['state'];
   /** Remote chosen for publishing a branch that has no upstream, if any. */
   publishRemote: string | null;
 }
@@ -241,9 +249,7 @@ export function pushBlock(gate: Gate): string | null {
     case 'unreadable-upstream':
       return `Krakenless cannot read the upstream "${gate.upstream.upstream}", so it will not choose a remote on a guess.`;
     case 'no-upstream':
-      return gate.publishRemote === null
-        ? 'Krakenless knows of no remote to publish to. Add one with `git remote add`, then fetch.'
-        : null;
+      return publishBlock(gate);
     case 'tracking':
       // The push builder always writes `refs/heads/<name>:refs/heads/<name>`,
       // so a branch tracking a differently-named upstream would be pushed to a
@@ -253,6 +259,26 @@ export function pushBlock(gate: Gate): string | null {
         ? null
         : `This branch tracks ${gate.upstream.upstream.remote}/${gate.upstream.upstream.branch}, which has a different name. Krakenless only pushes a branch to its own name, so push this one from the command line: git push ${gate.upstream.upstream.remote} ${gate.upstream.branch}:${gate.upstream.upstream.branch}`;
   }
+}
+
+/**
+ * Whether a branch with no upstream can be published right now.
+ *
+ * The branch list is the only source of remote names, so an unread or failed
+ * one means "Krakenless does not know", not "there is no remote". Telling a
+ * user to add a remote they already have sends them to fix the wrong thing.
+ */
+function publishBlock(gate: Gate): string | null {
+  if (gate.branchesState === 'idle' || gate.branchesState === 'loading') {
+    return 'Reading the list of remotes — the publish target is not known yet.';
+  }
+  if (gate.branchesState === 'error') {
+    return 'The branch list could not be read, so Krakenless does not know which remotes exist.';
+  }
+  if (gate.publishRemote === null) {
+    return 'Krakenless knows of no remote to publish to. Add one with git remote add, then fetch.';
+  }
+  return null;
 }
 
 function sharedBlock(gate: Gate): string | null {

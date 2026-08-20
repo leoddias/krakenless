@@ -52,6 +52,7 @@ function gate(overrides: Partial<Gate> = {}): Gate {
       ahead: 0,
       behind: 0,
     },
+    branchesState: 'ready',
     publishRemote: 'origin',
     ...overrides,
   };
@@ -168,8 +169,12 @@ describe('summarize', () => {
     expect(summary.detail).not.toContain('behind');
   });
 
-  it('says up to date when both counts are zero', () => {
-    expect(summarize(status({ upstream: 'origin/main' })).detail).toContain('Up to date');
+  it('attributes a zero-zero comparison to git rather than asserting it', () => {
+    // `RepoStatus` cannot express "unknown", so a status git returned without a
+    // `branch.ab` record also lands here as 0/0. The sentence must survive that.
+    expect(summarize(status({ upstream: 'origin/main' })).detail).toContain(
+      'Git reported no commits on either side',
+    );
   });
 
   it('names the missing upstream', () => {
@@ -280,6 +285,32 @@ describe('gates', () => {
     const fresh = gate({ upstream: { kind: 'no-upstream', branch: 'topic' } });
     expect(pullBlock(fresh)).toMatch(/no upstream/);
     expect(pushBlock(fresh)).toBeNull();
+  });
+
+  it('does not claim there is no remote while the branch list is unread', () => {
+    for (const branchesState of ['idle', 'loading'] as const) {
+      const reason = pushBlock(
+        gate({
+          upstream: { kind: 'no-upstream', branch: 'topic' },
+          branchesState,
+          publishRemote: null,
+        }),
+      );
+      expect(reason).toMatch(/Reading the list of remotes/);
+      expect(reason).not.toMatch(/git remote add/);
+    }
+  });
+
+  it('says the branch list failed rather than blaming a missing remote', () => {
+    const reason = pushBlock(
+      gate({
+        upstream: { kind: 'no-upstream', branch: 'topic' },
+        branchesState: 'error',
+        publishRemote: null,
+      }),
+    );
+    expect(reason).toMatch(/could not be read/);
+    expect(reason).not.toMatch(/git remote add/);
   });
 
   it('blocks publishing when no remote name is known', () => {
