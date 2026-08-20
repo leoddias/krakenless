@@ -128,6 +128,9 @@
 }
 
 .ref {
+  /* Never shrink a chip: a squeezed one collapses to a circle showing a single
+     letter, which is worse than being clipped by the group's overflow. */
+  flex: none;
   max-width: 14ch;
   overflow: hidden;
   text-overflow: ellipsis;
