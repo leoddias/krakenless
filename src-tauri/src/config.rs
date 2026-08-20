@@ -10,6 +10,14 @@ use tauri::Manager;
 
 const CONFIG_FILE: &str = "config.json";
 
+/// Folder name under the platform config directory.
+///
+/// Deliberately *not* Tauri's default (`app_config_dir()` appends the bundle
+/// identifier, giving `%APPDATA%/dev.krakenless.app`). The product promise is a
+/// human-readable folder the user can find and copy — `%APPDATA%/krakenless` —
+/// and the README's backup instructions name that path.
+const CONFIG_FOLDER: &str = "krakenless";
+
 #[derive(Debug, serde::Serialize)]
 #[serde(tag = "kind", content = "message")]
 pub enum ConfigError {
@@ -32,9 +40,11 @@ impl std::fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {}
 
 fn config_dir(app: &tauri::AppHandle) -> Result<PathBuf, ConfigError> {
-    app.path()
-        .app_config_dir()
-        .map_err(|e| ConfigError::NoConfigDir(e.to_string()))
+    Ok(app
+        .path()
+        .config_dir()
+        .map_err(|e| ConfigError::NoConfigDir(e.to_string()))?
+        .join(CONFIG_FOLDER))
 }
 
 /// Reads the settings file. A missing file is not an error: it means "no

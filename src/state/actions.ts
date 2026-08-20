@@ -57,7 +57,15 @@ export async function openRepo(store: Store, path: string): Promise<void> {
     const repo = await openRepository(path);
     store.dispatch({ type: 'repo/opened', repo });
     await rememberRepo(store, repo.root);
-    await Promise.all([refreshStatus(store), refreshCommits(store)]);
+    // The working tree is the default selection, so its diff is what the user
+    // expects to see immediately — an empty panel on open reads as "no changes".
+    await Promise.all([
+      refreshStatus(store),
+      refreshCommits(store),
+      refreshDiff(store),
+      refreshBranches(store),
+      refreshStashes(store),
+    ]);
   } catch (error) {
     store.dispatch({ type: 'repo/failed', ...describe(error) });
   }

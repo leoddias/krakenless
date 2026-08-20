@@ -75,7 +75,7 @@
 .repo-panels {
   display: grid;
   /* History, working tree, diff — three columns that scroll independently. */
-  grid-template-columns: minmax(260px, 26%) minmax(260px, 26%) 1fr;
+  grid-template-columns: minmax(320px, 30%) minmax(280px, 26%) 1fr;
   flex: 1;
   min-height: 0;
 }

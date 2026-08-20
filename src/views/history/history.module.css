@@ -100,7 +100,9 @@
 
 .oid {
   flex: none;
-  width: 5.5ch;
+  /* A short oid is 7 characters; anything narrower cuts it mid-hash, which
+     makes it useless for matching against a terminal. */
+  width: 7.5ch;
   color: #9aa3ad;
   font-family: ui-monospace, 'Cascadia Mono', 'Consolas', monospace;
   font-size: 0.8125rem;
@@ -115,14 +117,20 @@
 }
 
 .refs {
-  flex: none;
+  /* Refs yield space to the subject: a long branch name is less important than
+     knowing what the commit did. */
+  flex: 0 1 auto;
   display: flex;
   gap: 0.25rem;
+  min-width: 0;
   max-width: 40%;
   overflow: hidden;
 }
 
 .ref {
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
   padding: 0.0625rem 0.375rem;
   border: 1px solid transparent;
   border-radius: 999px;
@@ -167,7 +175,9 @@
 
 .date {
   flex: none;
-  width: 10ch;
+  /* "14 minutes ago" must stay on one line: wrapping doubles the row height
+     and breaks the virtualized list's fixed-height assumption. */
+  white-space: nowrap;
   text-align: right;
   color: #9aa3ad;
   font-size: 0.8125rem;

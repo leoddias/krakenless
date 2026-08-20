@@ -126,7 +126,7 @@ describe('actions', () => {
     });
   });
 
-  it('opens a repository and loads status and history', async () => {
+  it('opens a repository and loads every panel', async () => {
     const store = createStore();
     await openRepo(store, 'C:/repos/app');
 
@@ -134,6 +134,11 @@ describe('actions', () => {
     expect(state.repo).toEqual({ state: 'ready', value: REPO });
     expect(state.status.state).toBe('ready');
     expect(state.commits.state).toBe('ready');
+    // The working tree is the default selection: leaving the diff idle would
+    // read as "this repository has no changes".
+    expect(state.diff.state).toBe('ready');
+    expect(state.branches.state).toBe('ready');
+    expect(state.stashes.state).toBe('ready');
     expect(getStatus).toHaveBeenCalledWith(REPO.root);
   });
 
