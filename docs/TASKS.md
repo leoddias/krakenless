@@ -6,7 +6,48 @@ history; outcomes go to `docs/PROGRESS.md`.
 
 ## In flight
 
-_(none — fan-out 1 closed)_
+Fan-out 2 (M1 views). Shared contract — `src/state/store.ts`, `src/state/hooks.tsx`,
+`src/state/actions.ts`, `src/config/**`, the whole `src/git/**` layer — is
+committed and **read-only** for every packet. Views read state via `useAppState`
+and act only through `src/state/actions.ts`; no view calls git directly.
+Each packet owns one folder under `src/views/` plus its own CSS module, so no
+two packets share a file. `src/App.tsx` and `src/main.tsx` belong to the
+orchestrator: request wiring changes in your report.
+
+### T-M1-4 — Welcome view
+
+- **Goal:** first screen — pick a folder or reopen a recent repository.
+- **Owns:** `src/views/welcome/**`
+- **Done when:** folder picker via `@tauri-apps/plugin-dialog`; recent list from
+  `state.config.recentRepos` with "forget"; opening dispatches `openRepo`;
+  loading and error states (`not-a-repository`, `git-missing` get their own
+  wording); keyboard reachable; tests with Testing Library over a real store.
+- **Review:** conventions
+- **Status:** running
+
+### T-M1-5 — History view
+
+- **Goal:** virtualized commit list with refs, selection driving the diff panel.
+- **Owns:** `src/views/history/**`
+- **Done when:** renders `state.commits` virtualized (no library — a windowed
+  list is fine) and stays smooth at 200 rows; shows short oid, subject, author,
+  relative date, and `CommitRef` decorations styled per kind; a "Working tree"
+  row selects `null`; selection calls `selectCommit`; idle/loading/empty/error
+  states; keyboard up/down navigation; tests over a real store.
+- **Review:** conventions
+- **Status:** running
+
+### T-M1-6 — Diff view
+
+- **Goal:** read-only diff panel for the current selection.
+- **Owns:** `src/views/diff/**`
+- **Done when:** renders `state.diff` — file list plus hunks with per-side line
+  numbers, monospace, added/deleted/context styling; binary, conflicted,
+  rename, mode-only and empty-hunk entries each say what they are rather than
+  rendering blank; `undecodable-output` errors explain the file cannot be shown
+  safely; idle/loading/empty/error states; tests over a real store.
+- **Review:** conventions
+- **Status:** running
 
 <details><summary>Fan-out 1 (M1 parsers) — closed 2026-08-20</summary>
 
