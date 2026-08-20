@@ -298,6 +298,10 @@ export async function refreshStashes(store: Store): Promise<void> {
 }
 
 /** Refreshes everything a branch switch or network operation can change. */
+export async function refreshAllPanels(store: Store): Promise<void> {
+  await refreshAll(store);
+}
+
 async function refreshAll(store: Store): Promise<void> {
   await Promise.all([
     refreshStatus(store),

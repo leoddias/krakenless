@@ -46,7 +46,8 @@ If schedule slips: cut graph *polish*, never parser tests.
 - [x] Graph edges between commits (parent lines) — functional, not beautiful
 
 ### M5 — Polish + dogfood gate (~1 week)
-- [ ] Keyboard navigation, focus states, contrast pass
+- [x] Keyboard navigation (Ctrl+1..4, Ctrl+R/F5, Ctrl+Enter, Ctrl+, Ctrl+W),
+      focus states, contrast pass
 - [x] Settings screen (JSON-backed): editor command, mergetool
 - [x] Import/export = documented config file location + "Open config folder" button
 - [x] README: setup, architecture, data location, backup, limitations

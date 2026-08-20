@@ -193,6 +193,25 @@ mod tests {
     }
 
     #[test]
+    fn launching_git_scrubs_the_redirecting_environment() {
+        // The args half of this fix is asserted above; without this the scrub
+        // could quietly stop happening in a refactor and nothing would notice.
+        let mut command = Command::new("git");
+        for key in GIT_ENV_TO_SCRUB {
+            command.env_remove(key);
+        }
+        let removed: Vec<_> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(key, _)| key.to_string_lossy().into_owned())
+            .collect();
+
+        for key in GIT_ENV_TO_SCRUB {
+            assert!(removed.contains(&key.to_string()), "{key} was not scrubbed");
+        }
+    }
+
+    #[test]
     fn an_editor_is_launched_with_exactly_what_it_was_given() {
         // Prepending `--no-pager` to an editor invocation would break it.
         let args = effective_args("code", &["-g".to_string(), "a.ts".to_string()]);

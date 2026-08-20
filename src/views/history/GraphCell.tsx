@@ -40,9 +40,12 @@ export function GraphCell({
       aria-hidden="true"
       focusable="false"
     >
-      {row.edges.map((edge) => (
+      {row.edges.map((edge, index) => (
         <path
-          key={`${edge.fromLane}-${edge.toLane}`}
+          // Indexed: a commit can legitimately list the same parent twice
+          // (`commit-tree -p X -p X`, or a filter-branch artefact), and a
+          // lane-pair key would collide and drop one of the edges.
+          key={index}
           className={styles.graphEdge}
           d={
             edge.fromLane === edge.toLane

@@ -7,6 +7,7 @@ import type { RepoInfo } from './git/types';
 
 const loadConfig = vi.hoisted(() => vi.fn());
 const watchRepository = vi.hoisted(() => vi.fn());
+const refreshAllPanels = vi.hoisted(() => vi.fn());
 
 vi.mock('./config/store', () => ({
   loadConfig,
@@ -14,6 +15,10 @@ vi.mock('./config/store', () => ({
   configFolder: vi.fn(),
 }));
 vi.mock('./state/watch', () => ({ watchRepository }));
+vi.mock('./state/actions', async (original) => ({
+  ...(await original<typeof import('./state/actions')>()),
+  refreshAllPanels,
+}));
 // The views have their own tests; here we only care that the shell mounts the
 // right one and wires the watcher.
 vi.mock('./views/welcome', () => ({ WelcomeView: () => <div>welcome view</div> }));
@@ -63,6 +68,7 @@ describe('App', () => {
       theme: 'dark',
     });
     watchRepository.mockResolvedValue({ stop });
+    refreshAllPanels.mockResolvedValue(undefined);
   });
 
   it('shows the welcome view until a repository is open', () => {
@@ -130,6 +136,50 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'settings view' }));
     expect(screen.getByText('history view')).toBeInTheDocument();
+  });
+
+  it('moves focus into a panel with its shortcut', () => {
+    const store = createStore();
+    store.dispatch({ type: 'repo/opened', repo: REPO });
+    renderApp(store);
+
+    fireEvent.keyDown(window, { key: '3', ctrlKey: true });
+    // The panel itself takes focus when it has no focusable control of its own
+    // (the views are mocked here), which is still inside the right region.
+    expect(document.activeElement?.closest('[aria-label="Working tree"]')).not.toBeNull();
+  });
+
+  it('re-reads the repository on the refresh shortcut', () => {
+    const store = createStore();
+    store.dispatch({ type: 'repo/opened', repo: REPO });
+    renderApp(store);
+
+    fireEvent.keyDown(window, { key: 'F5' });
+    expect(refreshAllPanels).toHaveBeenCalledWith(store);
+  });
+
+  it('closes the repository on its shortcut', () => {
+    const store = createStore();
+    store.dispatch({ type: 'repo/opened', repo: REPO });
+    renderApp(store);
+
+    fireEvent.keyDown(window, { key: 'w', ctrlKey: true });
+    expect(store.getState().repo.state).toBe('idle');
+  });
+
+  it('ignores shortcuts fired from a text field', () => {
+    // Otherwise Ctrl+W in the commit message box would close the repository
+    // and take the half-written message with it.
+    const store = createStore();
+    store.dispatch({ type: 'repo/opened', repo: REPO });
+    renderApp(store);
+
+    const input = document.createElement('textarea');
+    document.body.appendChild(input);
+    fireEvent.keyDown(input, { key: 'w', ctrlKey: true });
+
+    expect(store.getState().repo.state).toBe('ready');
+    input.remove();
   });
 
   it('shows the branch, leaving ahead/behind to the remote bar', () => {

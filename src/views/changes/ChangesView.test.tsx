@@ -699,6 +699,45 @@ describe('discard notices over time', () => {
     expect(screen.queryByText(/no longer have unstaged changes/)).not.toBeInTheDocument();
   });
 
+  it('shows what the recovery command cannot bring back', async () => {
+    // The model layer computes this sentence; a view that drops it shows one
+    // command above a path list it does not cover, which reads as "this
+    // restores all of them". That is exactly what went wrong once already.
+    discardMock.mockResolvedValue({
+      discarded: true,
+      stashLabel: 'krakenless: mixed',
+      undoCommands: ['git restore --source=abc123 --worktree -- "a.ts"'],
+      notes: [
+        'The stash abc123 also holds "gone.ts", which this command cannot restore.',
+      ],
+    });
+    renderWithEntries([entry({ path: 'a.ts', worktree: 'modified' })]);
+    fireEvent.click(screen.getByRole('button', { name: 'Discard a.ts' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Discard 1 file' }));
+
+    const notice = await screen.findByRole('status');
+    expect(notice).toHaveTextContent('also holds "gone.ts"');
+    expect(notice).toHaveTextContent('git restore --source=abc123');
+  });
+
+  it('does not promise a command when there is none to run', async () => {
+    // Discarding a deletion creates a stash but yields no runnable restore.
+    // A heading over an empty block claims a route the code declined to offer.
+    discardMock.mockResolvedValue({
+      discarded: true,
+      stashLabel: 'krakenless: deletion',
+      undoCommands: [],
+      notes: ['The stash abc123 also holds "a.ts", which this command cannot restore.'],
+    });
+    renderWithEntries([entry({ path: 'a.ts', worktree: 'modified' })]);
+    fireEvent.click(screen.getByRole('button', { name: 'Discard a.ts' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Discard 1 file' }));
+
+    const notice = await screen.findByRole('status');
+    expect(notice).not.toHaveTextContent('Run this to bring them back');
+    expect(notice).toHaveTextContent('no single command that restores this one');
+  });
+
   it('keeps the earlier recovery notice when a second discard is confirmed', async () => {
     discardMock.mockResolvedValueOnce({
       discarded: true,

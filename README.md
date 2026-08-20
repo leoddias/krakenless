@@ -136,6 +136,19 @@ git output ships with unit tests in the same change — see
 Not there yet: a conflict-resolution UI, interactive rebase, and the commit
 graph's parent lines. See [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
+## Keyboard
+
+| Keys | Does |
+|---|---|
+| `Ctrl+1` … `Ctrl+4` | Focus history, branches, working tree, diff |
+| `Ctrl+R` or `F5` | Re-read the repository |
+| `Ctrl+Enter` | Commit what is staged (works from inside the message box) |
+| `Ctrl+,` | Open settings |
+| `Ctrl+W` | Close the repository |
+
+Nothing without a modifier is bound, and no shortcut fires while you are typing
+in a field — except `Ctrl+Enter`, which has to work exactly there.
+
 ## Safety
 
 The parts of the app that build git commands or parse git output are treated as

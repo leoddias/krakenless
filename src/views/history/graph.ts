@@ -80,8 +80,10 @@ export function buildGraph(commits: Commit[]): Graph {
       if (!wasActive && !isActive && slot !== lane) continue;
 
       if (slot === lane) {
-        // The node's own segment: from where the lane came, to where it goes.
-        edges.push({ fromLane: lane, toLane: lanes[lane] === null ? lane : lane });
+        // The node's own segment. It is always vertical: a lane that ends here
+        // still draws through the row so the node sits on a line rather than
+        // floating, and a lane that continues looks identical.
+        edges.push({ fromLane: lane, toLane: lane });
         continue;
       }
       if (wasActive || isActive) edges.push({ fromLane: slot, toLane: slot });
