@@ -1,0 +1,242 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.body {
+  display: grid;
+  grid-template-columns: minmax(12rem, 20rem) minmax(0, 1fr);
+  min-height: 0;
+  height: 100%;
+}
+
+/* --- notices --------------------------------------------------------------- */
+
+.notice {
+  margin: auto;
+  padding: 1rem 1.25rem;
+  max-width: 36rem;
+  text-align: center;
+}
+
+.noticeTitle {
+  display: block;
+  font-size: 1rem;
+}
+
+.noticeText {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.noticeError .noticeTitle {
+  color: #ff9d9d;
+}
+
+/* --- file list ------------------------------------------------------------- */
+
+.files {
+  overflow: auto;
+  border-right: 1px solid #262a31;
+  min-height: 0;
+}
+
+.fileList {
+  list-style: none;
+  margin: 0;
+  padding: 0.25rem;
+}
+
+.fileButton {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fileButton:hover {
+  background: #1c1f25;
+}
+
+.fileButton:focus-visible {
+  outline: 2px solid #6fa8ff;
+  outline-offset: -2px;
+}
+
+/* Selection is marked by border and weight too, never by color alone. */
+.fileButton[aria-current='true'] {
+  background: #232830;
+  border-color: #3d444f;
+  font-weight: 600;
+}
+
+.filePath {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: 'Cascadia Mono', 'Consolas', ui-monospace, monospace;
+  font-size: 0.85rem;
+}
+
+.fileKind {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.counts {
+  flex: 0 0 auto;
+  display: inline-flex;
+  gap: 0.35rem;
+  font-family: 'Cascadia Mono', 'Consolas', ui-monospace, monospace;
+  font-size: 0.75rem;
+}
+
+.added {
+  color: #7ee2a8;
+}
+
+.deleted {
+  color: #ff9d9d;
+}
+
+/* --- file bodies ----------------------------------------------------------- */
+
+.content {
+  overflow: auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 0.5rem;
+}
+
+.file {
+  margin-bottom: 0.75rem;
+  border: 1px solid #262a31;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.fileHeader {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  background: #1a1d23;
+  border-bottom: 1px solid #262a31;
+}
+
+.fileNote {
+  margin: 0;
+  padding: 0.6rem;
+  color: var(--muted);
+}
+
+.hunk {
+  border-top: 1px solid #262a31;
+}
+
+.hunk:first-of-type {
+  border-top: none;
+}
+
+.hunkHeader {
+  padding: 0.25rem 0.6rem;
+  background: #1a1d23;
+  color: #9db6ff;
+  font-family: 'Cascadia Mono', 'Consolas', ui-monospace, monospace;
+  font-size: 0.8rem;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+/* Long lines scroll here instead of wrapping, which would fake line breaks. */
+.lines {
+  overflow-x: auto;
+  font-family: 'Cascadia Mono', 'Consolas', ui-monospace, monospace;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  tab-size: 4;
+}
+
+.line {
+  display: flex;
+  align-items: flex-start;
+  min-width: max-content;
+}
+
+.lineNumber {
+  flex: 0 0 auto;
+  width: 3.5rem;
+  padding: 0 0.4rem;
+  color: var(--muted);
+  text-align: right;
+  user-select: none;
+}
+
+.marker {
+  flex: 0 0 auto;
+  width: 1.25rem;
+  text-align: center;
+  user-select: none;
+  white-space: pre;
+}
+
+.lineText {
+  flex: 1 1 auto;
+  padding-right: 0.6rem;
+  white-space: pre;
+}
+
+/* Background *and* the marker glyph carry the meaning — color is a bonus. */
+.lineAdded {
+  background: #16301f;
+}
+
+.lineAdded .marker {
+  color: #7ee2a8;
+}
+
+.lineDeleted {
+  background: #331a1c;
+}
+
+.lineDeleted .marker {
+  color: #ff9d9d;
+}
+
+.lineContext {
+  background: transparent;
+}
+
+.lineNoNewline {
+  background: #22252b;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
