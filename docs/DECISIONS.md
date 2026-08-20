@@ -237,6 +237,53 @@ in the tests builds from `defaultConfig()` rather than listing fields. A failed
 save costs the size, not the session — it is swallowed, and the layout on screen
 stands.
 
+## ADR-0021 — Author pictures come from Gravatar too, cached on disk, opt-in
+**Date:** 2026-08-20 · **Status:** accepted
+**Decision:** The opt-in author-picture setting is renamed `remoteAvatars` and
+now covers everyone, not just GitHub noreply addresses. With it on, each author
+is resolved once: `avatars.githubusercontent.com/u/<id>` when the commit email
+is `<id>+<login>@users.noreply.github.com`, otherwise
+`https://www.gravatar.com/avatar/<sha256 of the lowercased address>?s=32&d=404`.
+`d=404` is required, so "this identity has no picture" stays distinguishable
+from Gravatar's invented default. Every answer — the bytes, or the fact that
+there is none — is written to `%APPDATA%/krakenless/avatars/<hash>.<ext>` and
+stands for thirty days, so scrolling costs nothing. The fetch happens in the
+webview; Rust (`avatars.rs`) only stores and returns bytes under a key it
+validates as 64 hex digits. The locally derived badge (ADR-0018) stays
+underneath every picture and is the only thing drawn when the setting is off.
+**Supersedes the scope of ADR-0019** — the noreply path it defined survives
+unchanged, as the first source tried; its promise that Gravatar would never be
+contacted does not.
+**Why:** The user asked for real pictures, and ADR-0019's answer only worked for
+people who had turned on GitHub's email privacy — in their own repositories that
+is nobody, so the feature showed nothing at all. Gravatar is the only way to
+resolve an ordinary address without an account, and it costs a hash of that
+address plus the user's IP. That is a real disclosure and it is theirs to make,
+which is why the setting stays off by default, why the Settings copy names the
+host and says that a hash identifies a person to anyone who already has their
+address, and why the cache exists: the price is paid once per author, not once
+per scroll. Thirty days for pictures and for "no picture" alike, because the
+expiry is not about correctness — a month-old face is not a bug — but about how
+often a decorative feature may touch the network.
+**Consequences:** The privacy rule now reads "no network calls except git
+remotes, and the author-picture requests the user switched on". `githubAvatars`
+in an existing `config.json` is **not** inherited: an install that had the old
+switch on starts with the new one off. Dropping a setting on a rename is rude,
+and this was very nearly implemented the other way — but it is not really a
+rename. The old switch was described to the user as fetching a picture by
+account number with "no email address is ever sent anywhere"; the new one hashes
+every author's address and sends it to Automattic. Inheriting the answer would
+answer a question that was never asked, which is exactly the move this product
+exists to not make. The cost is one checkbox, ticked once, beside copy that
+says what now happens.
+A malformed value still reads as `false`. A failed request caches nothing, so
+being offline once does not cost a face for a month, while a 404 is cached.
+Redirects are not followed: following one makes the onward request, which would
+carry the hash and the IP to a host the user never agreed to, and checking
+afterwards would be too late. If either host ever starts redirecting this
+endpoint the picture is simply lost and the badge stays. Rust gained no HTTP
+client — that is a dependency and its own decision — so a webview that blocks
+the request (CORS, a proxy) simply leaves the derived badge showing.
 ## ADR-0022 — Krakenless may edit working-tree files, under a stamped write
 **Date:** 2026-08-20 · **Status:** accepted
 **Decision:** A file in the working tree can be edited in the app and written

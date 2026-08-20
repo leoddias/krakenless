@@ -133,20 +133,38 @@ describe('withoutRecentRepo', () => {
   });
 });
 
-describe('githubAvatars', () => {
+describe('remoteAvatars', () => {
   it('is off in a fresh config', () => {
-    expect(defaultConfig().githubAvatars).toBe(false);
+    expect(defaultConfig().remoteAvatars).toBe(false);
   });
 
   it('is on only when the file says exactly true', () => {
-    expect(parseConfig('{"githubAvatars":true}').githubAvatars).toBe(true);
+    expect(parseConfig('{"remoteAvatars":true}').remoteAvatars).toBe(true);
   });
 
   it('reads anything else as off, because that is the private answer', () => {
     for (const value of ['"true"', '1', 'null', '"yes"', '{}']) {
-      expect(parseConfig(`{"githubAvatars":${value}}`).githubAvatars).toBe(false);
+      expect(parseConfig(`{"remoteAvatars":${value}}`).remoteAvatars).toBe(false);
     }
-    expect(parseConfig('{}').githubAvatars).toBe(false);
+    expect(parseConfig('{}').remoteAvatars).toBe(false);
+  });
+
+  it('does not inherit the answer to the narrower question it replaced', () => {
+    // `githubAvatars` (ADR-0019) fetched a picture by account number and
+    // promised no email address was ever sent. `remoteAvatars` hashes the
+    // address and sends it to Gravatar. Carrying the old `true` across would
+    // answer a question the user was never asked (ADR-0021).
+    expect(parseConfig('{"githubAvatars":true}').remoteAvatars).toBe(false);
+    expect(
+      parseConfig('{"githubAvatars":true,"remoteAvatars":false}').remoteAvatars,
+    ).toBe(false);
+  });
+
+  it('writes only the new key, so the old one dies on the next save', () => {
+    const config = parseConfig('{"githubAvatars":true,"remoteAvatars":true}');
+    const text = serializeConfig(config);
+    expect(text).toContain('"remoteAvatars": true');
+    expect(text).not.toContain('githubAvatars');
   });
 });
 

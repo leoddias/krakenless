@@ -24,15 +24,16 @@ import { useAppState, useStore } from '../../state/hooks';
 import type { Loadable } from '../../state/store';
 import { formatAbsoluteDate, formatRelativeDate } from './relativeTime';
 import { GraphCell } from './GraphCell';
-import { githubAvatarUrl } from './githubAvatar';
+import { useAuthorPictures } from './avatarCache';
+import { avatarIdentity } from './remoteAvatar';
 import { buildGraph, type GraphRow } from './graph';
 import styles from './history.module.css';
 
 /** Height of one row in pixels; must match `.row` in the stylesheet. */
 export const ROW_HEIGHT = 30;
 /**
- * Size asked of GitHub for an author picture. Twice the badge's 16px so it
- * stays sharp on a 2x display, and the smallest step that is still cached.
+ * Size asked of the avatar host. Twice the badge's 16px so it stays sharp on a
+ * 2x display, and small enough that a cached picture is a couple of kilobytes.
  */
 const AVATAR_PIXELS = 32;
 /** Rows kept mounted above and below the viewport, to hide scroll latency. */
@@ -93,9 +94,9 @@ function Body({ commits }: { commits: Loadable<Commit[]> }): ReactNode {
 function CommitList({ commits }: { commits: Commit[] }): ReactNode {
   const store = useStore();
   const selectedOid = useAppState((state) => state.selection.commitOid);
-  // Off unless the user turned it on; see ADR-0019. Read once for the list
+  // Off unless the user turned it on; see ADR-0021. Read once for the list
   // rather than per row, so a re-render cannot leave half the graph fetching.
-  const photos = useAppState((state) => state.config.githubAvatars);
+  const remoteAvatars = useAppState((state) => state.config.remoteAvatars);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(FALLBACK_VIEWPORT_HEIGHT);
@@ -189,6 +190,19 @@ function CommitList({ commits }: { commits: Commit[] }): ReactNode {
   const tabbableIndex =
     selectedIndex >= first && selectedIndex < last ? selectedIndex : first;
 
+  // Only the authors on screen, and only when the user asked for pictures:
+  // the window is what bounds how many identities are ever looked up.
+  const visibleEmails = useMemo(
+    () =>
+      remoteAvatars
+        ? commits
+            .slice(Math.max(0, first - 1), Math.max(0, last - 1))
+            .map((commit) => commit.authorEmail)
+        : [],
+    [commits, first, last, remoteAvatars],
+  );
+  const pictures = useAuthorPictures(visibleEmails, remoteAvatars, AVATAR_PIXELS);
+
   const rows: ReactNode[] = [];
   for (let index = first; index < last; index += 1) {
     const shared = {
@@ -203,13 +217,14 @@ function CommitList({ commits }: { commits: Commit[] }): ReactNode {
     }
     const commit = commits[index - 1];
     if (commit === undefined) continue;
+    const identity = avatarIdentity(commit.authorEmail);
     rows.push(
       <CommitRow
         key={commit.oid}
         commit={commit}
         graphRow={graph.rows[index - 1]}
         laneCount={graph.laneCount}
-        photos={photos}
+        avatarUrl={identity === null ? null : (pictures.get(identity) ?? null)}
         {...shared}
       />,
     );
@@ -269,7 +284,7 @@ function CommitRow({
   commit,
   graphRow,
   laneCount,
-  photos,
+  avatarUrl,
   index,
   selected,
   tabbable,
@@ -278,8 +293,12 @@ function CommitRow({
   commit: Commit;
   graphRow: GraphRow | undefined;
   laneCount: number;
-  /** Whether the user opted into fetching author pictures (ADR-0019). */
-  photos: boolean;
+  /**
+   * The author's fetched picture, once it has arrived. `null` until then, and
+   * for good when there is none — the derived badge underneath is what the
+   * row shows in both cases (ADR-0021).
+   */
+  avatarUrl: string | null;
 }): ReactNode {
   const subject = commit.subject === '' ? '(no subject)' : commit.subject;
   const relative = formatRelativeDate(commit.authorDate, new Date());
@@ -303,7 +322,7 @@ function CommitRow({
             laneCount={laneCount}
             rowHeight={ROW_HEIGHT}
             author={{ name: commit.authorName, email: commit.authorEmail }}
-            avatarUrl={photos ? githubAvatarUrl(commit.authorEmail, AVATAR_PIXELS) : null}
+            avatarUrl={avatarUrl}
           />
         )}
       </span>

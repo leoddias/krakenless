@@ -60,6 +60,9 @@ src-tauri/              # Rust shell
     git_runner.rs       # [done] spawn git, no shell, args array, capture, timeout
     watcher.rs          # [done] debounced fs events, git-noise filtered
     config.rs           # [done] atomic JSON read/write in %APPDATA%
+    worktree.rs         # [done] read/write one working-tree file, stamped
+    avatars.rs          # [done] author-picture cache: opaque bytes under a
+                        #   validated hash key
 src/git/*.integration.test.ts   # [done] real git against disposable temp repos
 docs/                   # this harness
 ```
@@ -73,10 +76,17 @@ docs/                   # this harness
 3. Destructive commands are built by dedicated builders that require an
    explicit `confirmed: true` marker from the UI layer.
 4. The app never writes inside `.git/` directly; git does.
-5. No network calls originate from the app itself (git does its own).
+5. The app writes a file in the working tree only through `worktree.rs`, which
+   resolves the path inside the repository, refuses `.git` and symbolic links,
+   and rejects a write whose expected content stamp no longer matches
+   (ADR-0022). Everything else on disk is git's to change.
+6. The app makes no network call of its own except the author-picture requests
+   the user switched on (ADR-0021); git does its own.
 
 ## Data locations
 
 - App config: `%APPDATA%/krakenless/config.json` (human-readable, backup = copy)
+- Avatar cache: `%APPDATA%/krakenless/avatars/<sha256>.<ext>`, 30-day expiry,
+  safe to delete
 - Logs (if any): same folder, never containing file contents or secrets
 - Everything else lives in the user's repos, owned by git

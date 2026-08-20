@@ -91,19 +91,29 @@ export function SettingsView({ onClose }: { onClose: () => void }): ReactNode {
         <span className={styles.checkbox}>
           <input
             type="checkbox"
-            checked={draft.githubAvatars}
-            onChange={(event) => update('githubAvatars', event.target.checked)}
+            checked={draft.remoteAvatars}
+            onChange={(event) => update('remoteAvatars', event.target.checked)}
           />
-          <span className={styles.label}>Show author pictures from GitHub</span>
+          <span className={styles.label}>
+            Show author pictures from Gravatar and GitHub
+          </span>
         </span>
         <span className={styles.hint}>
           Off by default, and the only setting here that makes Krakenless talk to anything
-          but your git remotes. It covers only authors who commit as{' '}
-          <code>id+name@users.noreply.github.com</code>, because that address already
-          contains the account number — the picture is requested from{' '}
-          <code>avatars.githubusercontent.com</code> by number, so no email address is
-          ever sent anywhere and no account is needed. Everyone else keeps the initials
-          badge, which is drawn from their identity and never leaves this machine.
+          but your git remotes. With it on, every author whose picture is not already
+          cached costs one request: authors who commit as{' '}
+          <code>id+name@users.noreply.github.com</code> are looked up on{' '}
+          <code>avatars.githubusercontent.com</code> by the account number in that address
+          — and on Gravatar too, but only if that account no longer exists. Everyone else
+          is looked up on <code>www.gravatar.com</code>, which receives a hash of their
+          email address and your IP address. No account, no token, and no email address is
+          sent in the clear — but a hash identifies a person just as well to anyone who
+          already has their address, so this is a real thing to send and that is why it is
+          off until you say otherwise. Each answer, picture or none, is cached in the{' '}
+          <code>avatars</code> folder next to this config for thirty days, so the same
+          author is never asked about twice. Everybody without a picture keeps the
+          initials badge, which is drawn from their identity and never leaves this
+          machine.
         </span>
       </label>
 
@@ -141,8 +151,8 @@ export function SettingsView({ onClose }: { onClose: () => void }): ReactNode {
           A fast, private Git client. No account, no telemetry, no subscription — it runs
           your own <code>git</code>, and the only thing it ever contacts is your git
           remotes
-          {draft.githubAvatars
-            ? ', plus GitHub for the author pictures you turned on above'
+          {draft.remoteAvatars
+            ? ', plus Gravatar and GitHub for the author pictures you turned on above'
             : ''}
           .
         </p>

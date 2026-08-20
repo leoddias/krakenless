@@ -6,6 +6,11 @@ import { selectCommit } from '../../state/actions';
 import { StoreProvider } from '../../state/hooks';
 import { createStore, type Store } from '../../state/store';
 import { HistoryView, ROW_HEIGHT } from './HistoryView';
+import { resetAvatarCache } from './avatarCache';
+import { sha256Hex } from './remoteAvatar';
+
+const invoke = vi.hoisted(() => vi.fn());
+vi.mock('@tauri-apps/api/core', () => ({ invoke }));
 
 vi.mock('../../state/actions', () => ({
   selectCommit: vi.fn(),
@@ -295,39 +300,104 @@ describe('HistoryView windowing', () => {
 
 describe('HistoryView author pictures', () => {
   const NOREPLY = { authorEmail: '4242+ada@users.noreply.github.com' };
+  /** A one-pixel PNG's worth of bytes; only their round trip matters here. */
+  const PIXEL = [137, 80, 78, 71];
+  const PIXEL_URL = 'data:image/png;base64,iVBORw==';
 
-  function renderWithConfig(githubAvatars: boolean, commits: Commit[]): void {
+  function renderWithConfig(remoteAvatars: boolean, commits: Commit[]): void {
     renderHistory((store) => {
       store.dispatch({
         type: 'config/loaded',
-        config: { ...defaultConfig(), githubAvatars },
+        config: { ...defaultConfig(), remoteAvatars },
       });
       store.dispatch({ type: 'commits/loaded', commits });
     });
   }
 
-  it('draws the derived badge and asks the network for nothing by default', () => {
+  beforeEach(() => {
+    resetAvatarCache();
+    invoke.mockReset();
+    // Nothing is cached, and every write succeeds.
+    invoke.mockResolvedValue(null);
+  });
+
+  it('draws the derived badge and asks the network for nothing by default', async () => {
+    const fetched = vi.fn();
+    vi.stubGlobal('fetch', fetched);
+
     renderWithConfig(false, [makeCommit(1, NOREPLY)]);
+    await vi.waitFor(() => {
+      expect(document.querySelector('text')?.textContent).toBe('A1');
+    });
+
+    expect(fetched).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
     expect(document.querySelector('image')).toBeNull();
-    expect(document.querySelector('text')?.textContent).toBe('A1');
   });
 
-  it('fetches a picture only once the user has opted in', () => {
-    renderWithConfig(true, [makeCommit(1, NOREPLY)]);
-    expect(document.querySelector('image')?.getAttribute('href')).toBe(
-      'https://avatars.githubusercontent.com/u/4242?s=32&v=4',
+  it('draws the fetched picture once the user has opted in', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(new Uint8Array(PIXEL), {
+          status: 200,
+          headers: { 'content-type': 'image/png' },
+        }),
+      ),
     );
-  });
 
-  it('keeps the badge underneath, so a picture that never loads leaves a face', () => {
     renderWithConfig(true, [makeCommit(1, NOREPLY)]);
-    expect(document.querySelector('text')?.textContent).toBe('A1');
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('image')?.getAttribute('href')).toBe(PIXEL_URL);
+    });
   });
 
-  it('asks for nothing when the address does not say who the author is', () => {
-    // An ordinary email would need GitHub's API to resolve, which needs an
-    // account and would send the address itself.
-    renderWithConfig(true, [makeCommit(1)]);
+  it('keeps the badge underneath, so a picture that never loads leaves a face', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
+
+    renderWithConfig(true, [makeCommit(1, NOREPLY)]);
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('text')?.textContent).toBe('A1');
+    });
     expect(document.querySelector('image')).toBeNull();
+  });
+
+  it('draws nothing over the badge for an author with no picture anywhere', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response(null, { status: 404 })),
+    );
+
+    renderWithConfig(true, [makeCommit(1)]);
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('text')?.textContent).toBe('A1');
+    });
+    expect(document.querySelector('image')).toBeNull();
+  });
+
+  it('asks about the authors on screen and no others', async () => {
+    // The window is what bounds the lookups: a repository with ten thousand
+    // commits must not resolve ten thousand identities to draw thirty rows.
+    const fetched = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
+    vi.stubGlobal('fetch', fetched);
+
+    renderWithConfig(
+      true,
+      Array.from({ length: 2000 }, (_unused, index) => makeCommit(index)),
+    );
+
+    await vi.waitFor(() => {
+      expect(fetched.mock.calls.length).toBeGreaterThan(0);
+    });
+    const asked = fetched.mock.calls.map((call) => String(call[0])).join(' ');
+
+    expect(fetched.mock.calls.length).toBeLessThan(100);
+    // The author of the last commit is nowhere near the window, so their
+    // identity must not have been hashed onto the network.
+    expect(asked).not.toContain(await sha256Hex('author1999@example.com'));
+    expect(asked).toContain(await sha256Hex('author0@example.com'));
   });
 });

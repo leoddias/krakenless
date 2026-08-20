@@ -71,8 +71,8 @@
   `<id>+<login>@users.noreply.github.com` — the id in that address is the account,
   so the URL is built locally and fetched by number. No email, no hash, no token,
   no account. The derived badge stays underneath, so a blocked or missing image
-  still shows a face. `githubAvatars` reads as `false` unless the file says
-  exactly `true`.
+  still shows a face. The setting is `remoteAvatars` since ADR-0021, and reads
+  as `false` unless the file says exactly `true`.
 - **Every inner edge drags now** (ADR-0020): sidebar/graph, graph/diff,
   graph/working tree. `Splitter` is an ARIA `separator` with a tabindex and arrow
   keys, so it is not a mouse-only feature. Sizes persist in `config.json` under
