@@ -184,15 +184,12 @@ describe('discard wording', () => {
     expect(discardQuestion(['a.ts', 'b.ts'])).toBe('Discard changes to 2 files?');
   });
 
-  it('names the stash and the commands that bring the changes back', () => {
-    const text = recoveryMessage('krakenless: discarded 2026-08-20T10:00:00.000Z');
-    expect(text).toContain('krakenless: discarded 2026-08-20T10:00:00.000Z');
-    // `git stash list` first: git creates no stash at all when the pathspec had
-    // nothing to save, and a blind pop would restore an unrelated stash.
-    expect(text).toContain('git stash list');
-    // `--index`, because the discard sweeps the staged side in as well, and an
-    // explicit ref, because a later discard stacks another entry on top.
-    expect(text).toContain('git stash pop --index stash@{n}');
-    expect(text).toContain('nothing was discarded');
+  it('says the staged version survived, since the discard keeps the index', () => {
+    // The exact command is produced by the git layer and rendered beside this
+    // text; the wording must not contradict what that command does.
+    const text = recoveryMessage();
+    expect(text).toContain('stashed');
+    expect(text).toContain('staged version');
+    expect(text).not.toContain('git stash pop');
   });
 });

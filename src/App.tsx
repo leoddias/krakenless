@@ -5,6 +5,7 @@ import { loadConfig } from './config/store';
 import { closeRepo } from './state/actions';
 import { useAppState, useStore } from './state/hooks';
 import { watchRepository, type WatchHandle } from './state/watch';
+import { ChangesView } from './views/changes';
 import { DiffView } from './views/diff';
 import { HistoryView } from './views/history/HistoryView';
 import { WelcomeView } from './views/welcome';
@@ -108,7 +109,10 @@ function RepoView({ root }: { root: string }): ReactNode {
         <section className="repo-panels__history" aria-label="History">
           <HistoryView />
         </section>
-        <section className="repo-panels__diff" aria-label="Changes">
+        <section className="repo-panels__changes" aria-label="Working tree">
+          <ChangesView />
+        </section>
+        <section className="repo-panels__diff" aria-label="Diff">
           <DiffView />
         </section>
       </div>

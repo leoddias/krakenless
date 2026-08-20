@@ -84,7 +84,11 @@ function section(name: string): HTMLElement {
 beforeEach(() => {
   stageMock.mockReset().mockResolvedValue(undefined);
   unstageMock.mockReset().mockResolvedValue(undefined);
-  discardMock.mockReset().mockResolvedValue({ stashLabel: 'krakenless: discarded now' });
+  discardMock.mockReset().mockResolvedValue({
+    discarded: true,
+    stashLabel: 'krakenless: discarded now',
+    undoCommands: ['git restore --source=abc123 --worktree -- "a.ts"'],
+  });
   commitMock.mockReset().mockResolvedValue(undefined);
   refreshMock.mockReset().mockResolvedValue(undefined);
 });
@@ -326,10 +330,16 @@ describe('discard confirmation', () => {
     expect(within(dialog).getByText('new.ts')).toBeInTheDocument();
 
     confirm();
-    expect(discardMock).toHaveBeenCalledWith(store, ['old.ts', 'new.ts']);
+    // The third argument is the exact question the user answered; the git
+    // layer mints its confirmation token from it.
+    expect(discardMock).toHaveBeenCalledWith(
+      store,
+      ['old.ts', 'new.ts'],
+      expect.stringContaining('Discard changes to'),
+    );
   });
 
-  it('warns when the staged side of a path is swept in too', () => {
+  it('says the staged side is kept when a path has both', () => {
     renderWithEntries([
       entry({ path: 'both.ts', index: 'modified', worktree: 'modified' }),
     ]);
@@ -338,7 +348,9 @@ describe('discard confirmation', () => {
 
     const dialog = screen.getByRole('alertdialog', { name: 'Confirm discard' });
     expect(dialog).toHaveTextContent('also has staged changes');
-    expect(dialog).toHaveTextContent('git stash pop --index');
+    // The staged snapshot survives the discard (`--keep-index`), so the dialog
+    // must say so rather than warning that it is swept away.
+    expect(dialog).toHaveTextContent('staged version is kept');
   });
 
   it('cancels without discarding anything', () => {
@@ -374,8 +386,12 @@ describe('discard confirmation', () => {
 
     confirm();
 
-    expect(discardMock).toHaveBeenCalledWith(store, ['a.ts']);
-    await screen.findByText(/git stash pop/);
+    expect(discardMock).toHaveBeenCalledWith(
+      store,
+      ['a.ts'],
+      expect.stringContaining('Discard changes to'),
+    );
+    await screen.findByText(/git restore --source=/);
   });
 
   it('re-asks instead of discarding when the working tree moved underneath', () => {
@@ -397,7 +413,11 @@ describe('discard confirmation', () => {
 
     // The re-confirmed, smaller set is what actually runs.
     confirm();
-    expect(discardMock).toHaveBeenCalledWith(store, ['a.ts']);
+    expect(discardMock).toHaveBeenCalledWith(
+      store,
+      ['a.ts'],
+      expect.stringContaining('Discard changes to'),
+    );
   });
 
   it('discards nothing when every pending path has gone clean', () => {
@@ -413,16 +433,21 @@ describe('discard confirmation', () => {
     );
   });
 
-  it('keeps the recovery message on screen with the stash label', async () => {
-    discardMock.mockResolvedValue({ stashLabel: 'krakenless: discarded 2026-08-20' });
+  it('keeps the recovery command on screen after the discard', async () => {
+    discardMock.mockResolvedValue({
+      discarded: true,
+      stashLabel: 'krakenless: discarded 2026-08-20',
+      undoCommands: ['git restore --source=abc123 --worktree -- "a.ts"'],
+    });
     const store = renderOneUnstaged();
     fireEvent.click(screen.getByRole('button', { name: 'Discard a.ts' }));
     confirm();
 
     const notice = await screen.findByRole('status');
-    expect(notice).toHaveTextContent('krakenless: discarded 2026-08-20');
-    expect(notice).toHaveTextContent('git stash list');
-    expect(notice).toHaveTextContent('git stash pop --index stash@{n}');
+    // The command must be shown verbatim: it is the only route back, and it
+    // carries the stash oid the user cannot reconstruct.
+    expect(notice).toHaveTextContent('git restore --source=abc123 --worktree');
+    expect(notice).toHaveTextContent('staged version');
     expect(within(notice).getByText('a.ts')).toBeInTheDocument();
 
     // It survives whatever the status panel does next — including failing —
@@ -430,7 +455,7 @@ describe('discard confirmation', () => {
     act(() =>
       store.dispatch({ type: 'status/failed', message: 'fatal: index.lock exists' }),
     );
-    expect(screen.getByRole('status')).toHaveTextContent('git stash pop --index');
+    expect(screen.getByRole('status')).toHaveTextContent('git restore --source=');
 
     fireEvent.click(
       within(screen.getByRole('status')).getByRole('button', { name: 'Dismiss' }),
@@ -673,7 +698,11 @@ describe('discard notices over time', () => {
   });
 
   it('keeps the earlier recovery notice when a second discard is confirmed', async () => {
-    discardMock.mockResolvedValueOnce({ stashLabel: 'krakenless: first' });
+    discardMock.mockResolvedValueOnce({
+      discarded: true,
+      stashLabel: 'krakenless: first',
+      undoCommands: ['git restore --source=aaa111 --worktree -- "a.ts"'],
+    });
     const store = renderWithEntries([
       entry({ path: 'a.ts', worktree: 'modified' }),
       entry({ path: 'b.ts', worktree: 'modified' }),
@@ -681,16 +710,20 @@ describe('discard notices over time', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Discard a.ts' }));
     fireEvent.click(screen.getByRole('button', { name: 'Discard 1 file' }));
-    await screen.findByText(/krakenless: first/);
+    await screen.findByText(/aaa111/);
 
-    discardMock.mockResolvedValueOnce({ stashLabel: 'krakenless: second' });
+    discardMock.mockResolvedValueOnce({
+      discarded: true,
+      stashLabel: 'krakenless: second',
+      undoCommands: ['git restore --source=bbb222 --worktree -- "b.ts"'],
+    });
     setEntries(store, [entry({ path: 'b.ts', worktree: 'modified' })]);
     fireEvent.click(screen.getByRole('button', { name: 'Discard b.ts' }));
     fireEvent.click(screen.getByRole('button', { name: 'Discard 1 file' }));
 
-    await screen.findByText(/krakenless: second/);
+    await screen.findByText(/bbb222/);
     // The first stash still exists; dropping its instructions would strand it.
-    expect(screen.getByText(/krakenless: first/)).toBeInTheDocument();
+    expect(screen.getByText(/aaa111/)).toBeInTheDocument();
   });
 
   it('keeps the staged-side warning when the status stops being readable', () => {

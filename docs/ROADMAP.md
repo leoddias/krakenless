@@ -19,20 +19,20 @@ If schedule slips: cut graph *polish*, never parser tests.
 - [x] Git layer skeleton: run `git` with args array (never string interpolation),
       capture stdout/stderr/exit code, timeout handling
 - [x] Detect valid repo; graceful error for non-repo folder
-- [ ] Welcome screen: recent repos (JSON config in `%APPDATA%/krakenless`) + folder picker
+- [x] Welcome screen: recent repos (JSON config in `%APPDATA%/krakenless`) + folder picker
 - [x] Parse `git status --porcelain=v2 --branch` → typed model (unit tests)
 - [x] Parse `git log` with explicit `--format` separator → commit list (unit tests)
-- [ ] Commit list UI (virtualized) with branch/tag/HEAD decorations
-- [ ] Diff viewer: `git diff` / `git show` parsed (done) and rendered read-only (UI pending)
-- [ ] Loading / empty / error states for every panel
+- [x] Commit list UI (virtualized) with branch/tag/HEAD decorations
+- [x] Diff viewer: `git diff` / `git show` parsed and rendered read-only (unit tests)
+- [x] Loading / empty / error states for every panel
 
 ### M2 — Staging + commit (~1–2 weeks; hardest milestone)
-- [ ] Stage/unstage whole files (`git add` / `git restore --staged`) (integration tests)
-- [ ] Hunk model: parse unified diff into hunks (unit tests)
-- [ ] Stage/unstage hunk via `git apply --cached [-R]` round-trip (integration tests on temp repos)
-- [ ] Commit message editor + commit + amend
-- [ ] Discard changes — confirm dialog, recoverable form (stash-before-discard) (integration tests)
-- [ ] Working tree auto-refresh (fs watcher, debounced)
+- [x] Stage/unstage whole files (`git add` / `git restore --staged`) (integration tests)
+- [x] Hunk model: parse unified diff into hunks (unit tests)
+- [x] Stage/unstage hunk via `git apply --cached [-R]` round-trip (integration tests on temp repos)
+- [x] Commit message editor + commit + amend
+- [x] Discard changes — confirm dialog, recoverable form (path-limited stash with `--keep-index`) (integration tests)
+- [x] Working tree auto-refresh (fs watcher, debounced)
 
 ### M3 — Remotes (~1 week)
 - [ ] Fetch / pull / push with progress and readable error surfaces

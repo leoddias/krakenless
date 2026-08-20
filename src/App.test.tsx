@@ -21,6 +21,7 @@ vi.mock('./views/history/HistoryView', () => ({
   HistoryView: () => <div>history view</div>,
 }));
 vi.mock('./views/diff', () => ({ DiffView: () => <div>diff view</div> }));
+vi.mock('./views/changes', () => ({ ChangesView: () => <div>changes view</div> }));
 
 const REPO: RepoInfo = {
   root: 'C:/repos/app',
@@ -64,6 +65,7 @@ describe('App', () => {
     renderApp(store);
 
     expect(screen.getByText('history view')).toBeInTheDocument();
+    expect(screen.getByText('changes view')).toBeInTheDocument();
     expect(screen.getByText('diff view')).toBeInTheDocument();
     expect(screen.getByText('C:/repos/app')).toBeInTheDocument();
   });

@@ -42,7 +42,8 @@ import {
 interface Recovery {
   /** Local identity: two discards can share a label to the millisecond. */
   id: number;
-  stashLabel: string;
+  /** Commands the git layer produced; shown verbatim so they can be copied. */
+  undoCommands: string[];
   paths: string[];
 }
 
@@ -144,10 +145,14 @@ export function ChangesView(): ReactNode {
     setPending(null);
     setFailure(null);
     try {
-      const result = await discard(store, current.paths);
+      const result = await discard(store, current.paths, discardQuestion(current.paths));
       if (result === null) {
         // No repository, or nothing to discard: say so rather than imply a
         // stash exists that the user could pop.
+        setFailure('Nothing was discarded, so there is nothing to recover.');
+        return;
+      }
+      if (!result.discarded) {
         setFailure('Nothing was discarded, so there is nothing to recover.');
         return;
       }
@@ -155,7 +160,7 @@ export function ChangesView(): ReactNode {
       setRecoveries((previous) => [
         {
           id: nextRecoveryId.current,
-          stashLabel: result.stashLabel,
+          undoCommands: result.undoCommands,
           paths: current.paths,
         },
         ...previous,
@@ -342,7 +347,12 @@ function RecoveryNotice({
   return (
     <div className={styles.recovery} role="status">
       <strong className={styles.noticeTitle}>Changes discarded — recoverable</strong>
-      <p className={styles.noticeText}>{recoveryMessage(recovery.stashLabel)}</p>
+      <p className={styles.noticeText}>{recoveryMessage()}</p>
+      {recovery.undoCommands.map((command) => (
+        <pre key={command} className={styles.noticeCommand}>
+          <code>{command}</code>
+        </pre>
+      ))}
       <ul className={styles.pathList}>
         {recovery.paths.map((path) => (
           <li key={path} className={styles.path}>
@@ -401,16 +411,14 @@ function DiscardConfirmation({
       )}
       <p className={styles.noticeText}>
         These working-tree changes will be removed from the files below. Krakenless
-        stashes them first, so you will be able to bring them back with{' '}
-        <code>git stash pop --index</code>.
+        stashes them first and then shows you the exact command that brings them back.
       </p>
       {stagedToo.length > 0 && (
         <p className={styles.warning}>
           {stagedToo.length === 1
-            ? 'One of these paths also has staged changes; git stashes the staged side with it.'
-            : `${stagedToo.length} of these paths also have staged changes; git stashes the staged side with them.`}{' '}
-          Recover with <code>git stash pop --index</code> to get the staged version back
-          as well.
+            ? 'One of these paths also has staged changes.'
+            : `${stagedToo.length} of these paths also have staged changes.`}{' '}
+          The staged version is kept as it is — only the unstaged edits are discarded.
         </p>
       )}
       <ul className={styles.pathList}>

@@ -70,13 +70,14 @@
 
 .repo-panels {
   display: grid;
-  /* History left, changes right; both scroll independently. */
-  grid-template-columns: minmax(280px, 34%) 1fr;
+  /* History, working tree, diff — three columns that scroll independently. */
+  grid-template-columns: minmax(260px, 26%) minmax(260px, 26%) 1fr;
   flex: 1;
   min-height: 0;
 }
 
 .repo-panels__history,
+.repo-panels__changes,
 .repo-panels__diff {
   min-width: 0;
   min-height: 0;
@@ -85,6 +86,19 @@
   flex-direction: column;
 }
 
-.repo-panels__history {
+.repo-panels__history,
+.repo-panels__changes {
   border-right: 1px solid var(--border, #2a2f37);
+}
+
+/* Below this width three columns stop being readable; stack the working tree
+   under the history and let the diff keep the full height. */
+@media (max-width: 1100px) {
+  .repo-panels {
+    grid-template-columns: minmax(240px, 32%) 1fr;
+  }
+
+  .repo-panels__changes {
+    grid-row: 2;
+  }
 }

@@ -137,17 +137,14 @@ export function discardQuestion(paths: readonly string[]): string {
 }
 
 /**
- * The sentence that makes discard defensible: the changes went into a stash,
- * and this is the command that brings them back.
+ * Wording for the recovery notice.
  *
- * Three details are load-bearing. `git stash list` first, because git creates
- * no stash at all when the pathspec turns out to have nothing to save, and a
- * blind `pop` would then restore an older, unrelated stash on top of live work.
- * The entry is named by its own ref rather than assumed to be on top, since a
- * later discard pushes another one above it. And `--index`, because the discard
- * sweeps the staged side of those paths in too, and a plain `pop` would bring
- * everything back unstaged.
+ * The exact command comes from the git layer (`DiscardResult.undoCommands`) and
+ * is rendered next to this text, because only that layer knows the stash oid.
+ * It is deliberately `git restore --source=<oid> --worktree`: `git stash pop`
+ * would conflict, and `git checkout <oid> -- <path>` would overwrite the staged
+ * version that the discard kept intact.
  */
-export function recoveryMessage(stashLabel: string): string {
-  return `Krakenless stashed your changes as "${stashLabel}". Find that entry with \`git stash list\`, then run \`git stash pop --index stash@{n}\` for it to get them back — staged and unstaged sides alike. If the entry is not listed, git had nothing to stash and nothing was discarded.`;
+export function recoveryMessage(): string {
+  return 'Krakenless stashed your unstaged changes before discarding them. Run this to bring them back — your staged version was left untouched:';
 }
