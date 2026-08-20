@@ -1,6 +1,6 @@
 # Krakenless
 
-> **Status: pre-alpha — planning stage. Nothing to run yet.**
+> **Status: pre-alpha — scaffold only. Not usable as a Git client yet.**
 > "Krakenless" is a development codename; the project will be renamed before
 > any public release.
 
@@ -15,6 +15,23 @@ A fast, private desktop Git GUI:
 
 Optional AI features (commit message generation) are planned for later,
 bring-your-own-key only — the app stays 100% functional without any key.
+
+## Development
+
+Requirements: Node 22+, Rust (stable, via [rustup](https://rustup.rs)), and
+`git` on PATH. Rust is only needed for the desktop shell — the web frontend
+and its tests run without it.
+
+```sh
+npm install          # install frontend dependencies
+npm run tauri dev    # run the desktop app (needs Rust)
+npm run dev          # run the frontend alone in a browser
+npm test             # run the test suite (Vitest)
+npm run lint         # oxlint
+npm run format       # Prettier (code only; markdown is left alone)
+npm run build        # type-check + build the frontend
+npm run tauri build  # build the Windows desktop binary (needs Rust)
+```
 
 ## Documentation
 

@@ -7,12 +7,13 @@ If schedule slips: cut graph *polish*, never parser tests.
 ## v0.1 — dogfood build
 
 ### M0 — Scaffold (~1 session)
-- [ ] Tauri 2 + React + TypeScript + Vite project (`npm create tauri-app`)
-- [ ] ESLint + Prettier, strict tsconfig
-- [ ] Vitest wired (one trivial passing test)
-- [ ] `.gitignore` covers node/rust/tauri artifacts
-- [ ] GitHub Actions: lint + test + Windows build on push
-- [ ] App opens an empty window with app name; dev + build scripts documented in README
+- [x] Tauri 2 + React + TypeScript + Vite project
+- [x] oxlint + Prettier, strict tsconfig (ADR-0014 — oxlint replaces ESLint)
+- [x] Vitest wired (one trivial passing test)
+- [x] `.gitignore` covers node/rust/tauri artifacts
+- [x] GitHub Actions: lint + test + Windows build on push
+- [ ] App opens an empty window with app name — *blocked: Rust toolchain not
+      installed on the dev machine*; dev + build scripts documented in README (done)
 
 ### M1 — Read-only repo view (~1–2 weeks)
 - [ ] Git layer skeleton: run `git` with args array (never string interpolation),

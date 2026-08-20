@@ -110,3 +110,14 @@ passes signals a mis-specified task, not insufficient effort.
 **Consequences:** Splitting cost is paid up front (contracts committed before
 fan-out); shared files are orchestrator-only, so workers *request* those edits.
 Max 4 concurrent packets. Sequential single-agent work remains the default.
+
+## ADR-0014 — oxlint instead of ESLint
+**Date:** 2026-08-19 · **Status:** accepted
+**Decision:** Lint with oxlint (the Vite react-ts template's default); format
+with Prettier, configured to leave markdown alone so docs stay stable across
+agent sessions. Supersedes the "ESLint + Prettier" wording in ROADMAP M0.
+**Why:** oxlint is what the current template ships, needs no plugin stack for
+React/TS rules, and runs fast enough to sit in every task loop's gate. ESLint's
+extra configuration surface buys nothing this project needs.
+**Consequences:** Rules live in `.oxlintrc.json`. If a rule we need turns out to
+be ESLint-only, add ESLint alongside rather than switching back.
