@@ -65,6 +65,18 @@ jobs:
             -exec cp {} dist-release/ \;
           ls -la dist-release
 
+      # The bundler produces installers; the binary they install runs on its
+      # own. Shipping it means a user can run Krakenless without writing to
+      # Program Files or the registry — which is also the only way to try it on
+      # a machine where they are not allowed to install software.
+      - name: Collect the portable executable
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          cp src-tauri/target/release/krakenless.exe "dist-release/Krakenless_${version}_x64_portable.exe"
+          ls -la dist-release
+
       - uses: actions/upload-artifact@v4
         with:
           name: installers-${{ matrix.label }}
