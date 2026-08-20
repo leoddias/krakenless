@@ -45,14 +45,15 @@ export function groupEntries(entries: readonly StatusEntry[]): ChangeGroups {
   return groups;
 }
 
-/** Renames read as `old → new`; anything else is just the path. */
+/** Renames and copies read as `old → new`; anything else is just the path. */
 export function displayPath(entry: StatusEntry): string {
-  if (isRename(entry)) return `${entry.origPath ?? ''} → ${entry.path}`;
-  return entry.path;
+  const source = sourcePath(entry);
+  return source === null ? entry.path : `${source} → ${entry.path}`;
 }
 
-function isRename(entry: StatusEntry): boolean {
-  return entry.origPath !== undefined && entry.origPath !== entry.path;
+function sourcePath(entry: StatusEntry): string | null {
+  if (entry.origPath === undefined || entry.origPath === entry.path) return null;
+  return entry.origPath;
 }
 
 /**
@@ -62,9 +63,14 @@ function isRename(entry: StatusEntry): boolean {
  * addition of the new one. Acting on `path` alone leaves the other half behind
  * — unstaging a rename would keep `old.ts` staged as a deletion, and
  * discarding one would leave the worktree with neither file.
+ *
+ * A *copy* is the opposite case: its source is untouched, so naming it would
+ * stage or discard edits the user never pointed at.
  */
 export function pathsOf(entry: StatusEntry): string[] {
-  return isRename(entry) ? [entry.origPath ?? '', entry.path] : [entry.path];
+  const source = sourcePath(entry);
+  const renamed = entry.index === 'renamed' || entry.worktree === 'renamed';
+  return source !== null && renamed ? [source, entry.path] : [entry.path];
 }
 
 /** Paths for a whole list, in order and without repeats. */
@@ -134,12 +140,14 @@ export function discardQuestion(paths: readonly string[]): string {
  * The sentence that makes discard defensible: the changes went into a stash,
  * and this is the command that brings them back.
  *
- * Two details are load-bearing. `git stash list` first, because git creates no
- * stash at all when the pathspec turns out to have nothing to save, and a blind
- * `pop` would then restore an older, unrelated stash on top of live work.
- * `--index` second, because the discard sweeps the staged side of those paths
- * in too, and a plain `pop` would bring everything back unstaged.
+ * Three details are load-bearing. `git stash list` first, because git creates
+ * no stash at all when the pathspec turns out to have nothing to save, and a
+ * blind `pop` would then restore an older, unrelated stash on top of live work.
+ * The entry is named by its own ref rather than assumed to be on top, since a
+ * later discard pushes another one above it. And `--index`, because the discard
+ * sweeps the staged side of those paths in too, and a plain `pop` would bring
+ * everything back unstaged.
  */
 export function recoveryMessage(stashLabel: string): string {
-  return `Your changes were stashed as "${stashLabel}". Check that it is the top entry with \`git stash list\`, then run \`git stash pop --index\` to get them back — staged and unstaged sides alike.`;
+  return `Krakenless stashed your changes as "${stashLabel}". Find that entry with \`git stash list\`, then run \`git stash pop --index stash@{n}\` for it to get them back — staged and unstaged sides alike. If the entry is not listed, git had nothing to stash and nothing was discarded.`;
 }

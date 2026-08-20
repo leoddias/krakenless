@@ -2,16 +2,17 @@
  * Working-tree panel: staged and unstaged files, staging actions, and the
  * commit box.
  *
- * Three rules shape this file. First, discard never runs straight from a click:
- * it goes through an explicit confirmation that names the paths, and the stash
- * label that comes back is shown as a notice that survives whatever the status
- * panel does next, because "you can get it back" is the only reason a
- * destructive button is allowed here at all. Second, the confirmed path set is
- * re-checked against the current status before anything runs — the working tree
- * can move while the dialog is open, and discarding paths the dialog never
- * showed is exactly the mis-click this confirmation exists to prevent. Third,
- * conflicted paths get their own list with no stage or discard button: staging
- * a file full of conflict markers records a wrong resolution without saying so.
+ * Four rules shape this file. Discard never runs straight from a click: it goes
+ * through a confirmation that names the paths, and the stash label that comes
+ * back is shown as a notice that outlives whatever the status panel does next,
+ * because "you can get it back" is the only reason a destructive button is
+ * allowed here at all. The confirmed path set is re-checked against the current
+ * status before anything runs, and a status that cannot be read is treated as
+ * "unknown", never as "clean". Conflicted paths get their own list with no
+ * stage or discard button: staging a file full of conflict markers records a
+ * wrong resolution without saying so. And the commit draft lives here rather
+ * than in the commit box, because every refresh unmounts the lists and a user
+ * mid-message must not lose it.
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
@@ -37,68 +38,99 @@ interface Recovery {
   paths: string[];
 }
 
+/** Why the confirmation is being shown again instead of having run. */
+type PendingNotice = 'none' | 'changed' | 'unchecked';
+
+interface Pending {
+  paths: string[];
+  /** Confirmed paths that also carry staged changes; git stashes those too. */
+  stagedToo: string[];
+  notice: PendingNotice;
+}
+
+/** Draft of the commit the user is writing; kept above every refresh. */
+interface CommitDraft {
+  message: string;
+  amend: boolean;
+  error: string | null;
+}
+
 /** The working-tree panel. Reads the store, acts only through the action layer. */
 export function ChangesView(): ReactNode {
   const status = useAppState((state) => state.status);
   const busy = useAppState((state) => state.busy);
   const store = useStore();
 
-  const [pendingDiscard, setPendingDiscard] = useState<string[] | null>(null);
-  const [pendingChanged, setPendingChanged] = useState(false);
-  const [recovery, setRecovery] = useState<Recovery | null>(null);
+  const [pending, setPending] = useState<Pending | null>(null);
+  const [recoveries, setRecoveries] = useState<Recovery[]>([]);
   const [failure, setFailure] = useState<string | null>(null);
+  const [draft, setDraft] = useState<CommitDraft>({
+    message: '',
+    amend: false,
+    error: null,
+  });
+
+  const groups = status.state === 'ready' ? groupEntries(status.value.entries) : null;
+  const stagedPaths = new Set(groups === null ? [] : pathsOfAll(groups.staged));
 
   const askDiscard = (paths: string[]): void => {
-    setRecovery(null);
     setFailure(null);
-    setPendingChanged(false);
-    setPendingDiscard(paths);
+    setPending({
+      paths,
+      stagedToo: paths.filter((path) => stagedPaths.has(path)),
+      notice: 'none',
+    });
   };
 
-  const cancelDiscard = (): void => {
-    setPendingDiscard(null);
-    setPendingChanged(false);
-  };
+  const runDiscard = async (current: Pending): Promise<void> => {
+    // Re-read the status as it is *now*, not as it was when the dialog opened.
+    const latest = store.getState().status;
+    if (latest.state !== 'ready') {
+      // Not knowing is not the same as knowing there is nothing to discard.
+      setPending({ ...current, notice: 'unchecked' });
+      return;
+    }
 
-  const runDiscard = async (paths: string[]): Promise<void> => {
-    // Read the status as it is *now*, not as it was when the dialog opened.
-    const available = discardablePaths(store.getState().status);
-    const stillThere = paths.filter((path) => available.has(path));
-
-    if (stillThere.length !== paths.length) {
-      setPendingChanged(true);
+    const available = discardablePaths(latest);
+    const stillThere = current.paths.filter((path) => available.has(path));
+    if (stillThere.length !== current.paths.length) {
       if (stillThere.length === 0) {
-        setPendingDiscard(null);
+        setPending(null);
         setFailure(
           'Those paths no longer have unstaged changes, so nothing was discarded.',
         );
       } else {
-        setPendingDiscard(stillThere);
+        setPending({
+          paths: stillThere,
+          stagedToo: current.stagedToo.filter((path) => stillThere.includes(path)),
+          notice: 'changed',
+        });
       }
       return;
     }
 
-    setPendingDiscard(null);
-    setPendingChanged(false);
+    setPending(null);
     setFailure(null);
     try {
-      const result = await discard(store, paths);
+      const result = await discard(store, current.paths);
       if (result === null) {
         // No repository, or nothing to discard: say so rather than imply a
         // stash exists that the user could pop.
         setFailure('Nothing was discarded, so there is nothing to recover.');
         return;
       }
-      setRecovery({ stashLabel: result.stashLabel, paths });
+      setRecoveries((previous) => [
+        { stashLabel: result.stashLabel, paths: current.paths },
+        ...previous,
+      ]);
     } catch (error) {
+      // An interrupted `git stash push` can have written the entry and still
+      // reported failure, so this must not promise the changes are untouched.
       setFailure(
-        `Discard failed, so your changes are still in the working tree. ${messageOf(error)}`,
+        `Discard reported an error. Check \`git stash list\` before retrying: an interrupted stash can still have been created. ${messageOf(error)}`,
       );
     }
   };
-
-  const groups = status.state === 'ready' ? groupEntries(status.value.entries) : null;
-  const stagedPaths = new Set(groups === null ? [] : pathsOfAll(groups.staged));
 
   return (
     <section className={styles.panel} aria-label="Changes">
@@ -107,9 +139,17 @@ export function ChangesView(): ReactNode {
         purpose: a status read that fails right after a discard must not take
         the only instructions for getting the work back off the screen.
       */}
-      {recovery !== null && (
-        <RecoveryNotice recovery={recovery} onDismiss={() => setRecovery(null)} />
-      )}
+      {recoveries.map((recovery) => (
+        <RecoveryNotice
+          key={recovery.stashLabel}
+          recovery={recovery}
+          onDismiss={() =>
+            setRecoveries((previous) =>
+              previous.filter((item) => item.stashLabel !== recovery.stashLabel),
+            )
+          }
+        />
+      ))}
 
       {failure !== null && (
         <div className={styles.failure} role="alert">
@@ -124,14 +164,12 @@ export function ChangesView(): ReactNode {
         </div>
       )}
 
-      {pendingDiscard !== null && (
+      {pending !== null && (
         <DiscardConfirmation
-          paths={pendingDiscard}
-          stagedToo={pendingDiscard.filter((path) => stagedPaths.has(path))}
-          listChanged={pendingChanged}
+          pending={pending}
           busy={busy}
-          onCancel={cancelDiscard}
-          onConfirm={() => void runDiscard(pendingDiscard)}
+          onCancel={() => setPending(null)}
+          onConfirm={() => void runDiscard(pending)}
         />
       )}
 
@@ -159,6 +197,8 @@ export function ChangesView(): ReactNode {
           groups={groups}
           repoStatus={status.value}
           busy={busy}
+          draft={draft}
+          onDraft={setDraft}
           onStage={(paths) => void stage(store, paths)}
           onUnstage={(paths) => void unstage(store, paths)}
           onAskDiscard={askDiscard}
@@ -182,6 +222,8 @@ function ChangeLists({
   groups,
   repoStatus,
   busy,
+  draft,
+  onDraft,
   onStage,
   onUnstage,
   onAskDiscard,
@@ -189,6 +231,8 @@ function ChangeLists({
   groups: ReturnType<typeof groupEntries>;
   repoStatus: RepoStatus;
   busy: boolean;
+  draft: CommitDraft;
+  onDraft: (draft: CommitDraft) => void;
   onStage: (paths: string[]) => void;
   onUnstage: (paths: string[]) => void;
   onAskDiscard: (paths: string[]) => void;
@@ -244,6 +288,8 @@ function ChangeLists({
         hasConflicts={repoStatus.hasConflicts || conflicted.length > 0}
         head={repoStatus.head}
         busy={busy}
+        draft={draft}
+        onDraft={onDraft}
       />
     </div>
   );
@@ -275,20 +321,17 @@ function RecoveryNotice({
 }
 
 function DiscardConfirmation({
-  paths,
-  stagedToo,
-  listChanged,
+  pending,
   busy,
   onCancel,
   onConfirm,
 }: {
-  paths: string[];
-  stagedToo: string[];
-  listChanged: boolean;
+  pending: Pending;
   busy: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }): ReactNode {
+  const { paths, stagedToo, notice } = pending;
   const cancelRef = useRef<HTMLButtonElement>(null);
 
   // The safe choice takes focus, so a stray Enter cancels instead of discards.
@@ -306,10 +349,16 @@ function DiscardConfirmation({
       }}
     >
       <strong className={styles.noticeTitle}>{discardQuestion(paths)}</strong>
-      {listChanged && (
+      {notice === 'changed' && (
         <p className={styles.warning}>
           The working tree changed while this was open, so the list below is not what you
           first confirmed. Nothing has been discarded — review it and confirm again.
+        </p>
+      )}
+      {notice === 'unchecked' && (
+        <p className={styles.warning}>
+          The working tree is being re-read, so this list could not be checked against it.
+          Nothing has been discarded — try again in a moment.
         </p>
       )}
       <p className={styles.noticeText}>
@@ -479,35 +528,39 @@ function CommitBox({
   hasConflicts,
   head,
   busy,
+  draft,
+  onDraft,
 }: {
   stagedCount: number;
   hasConflicts: boolean;
   head: string | null;
   busy: boolean;
+  draft: CommitDraft;
+  onDraft: (draft: CommitDraft) => void;
 }): ReactNode {
   const store = useStore();
-  const [message, setMessage] = useState('');
-  const [amend, setAmend] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { message, amend, error } = draft;
 
   const empty = message.trim().length === 0;
   const disabled = busy || empty || stagedCount === 0;
   // Amending mid-merge would rewrite a commit while the operation is still
   // running, and unlike a plain commit git would not stop it.
   const canAmend = !hasConflicts && head !== null;
+  // What the button will actually do, so the flag sent to git can never differ
+  // from the label the user read.
+  const amending = amend && canAmend;
 
   const submit = async (): Promise<void> => {
-    setError(null);
     if (store.getState().repo.state !== 'ready') {
-      setError('No repository is open.');
+      onDraft({ ...draft, error: 'No repository is open.' });
       return;
     }
+    onDraft({ ...draft, error: null });
     try {
-      await commitStaged(store, { message, amend });
-      setMessage('');
-      setAmend(false);
+      await commitStaged(store, { message, amend: amending });
+      onDraft({ message: '', amend: false, error: null });
     } catch (failure) {
-      setError(messageOf(failure));
+      onDraft({ ...draft, error: messageOf(failure) });
     }
   };
 
@@ -522,15 +575,15 @@ function CommitBox({
         rows={3}
         value={message}
         disabled={busy}
-        onChange={(event) => setMessage(event.target.value)}
+        onChange={(event) => onDraft({ ...draft, message: event.target.value })}
       />
 
       <label className={styles.amend}>
         <input
           type="checkbox"
-          checked={amend && canAmend}
+          checked={amending}
           disabled={busy || !canAmend}
-          onChange={(event) => setAmend(event.target.checked)}
+          onChange={(event) => onDraft({ ...draft, amend: event.target.checked })}
         />
         Amend the last commit
       </label>
@@ -541,7 +594,7 @@ function CommitBox({
             : 'Amending is unavailable: there is no commit yet.'}
         </p>
       )}
-      {amend && canAmend && (
+      {amending && (
         <p className={styles.amendWarning} role="status">
           {`Amending rewrites the last commit${head === null ? '' : ` (${head.slice(0, 7)})`}: it gets a new hash, and anyone who already fetched it will need to reconcile. The old commit stays in the reflog. Do not amend a commit you have pushed.`}
         </p>
@@ -561,7 +614,7 @@ function CommitBox({
           disabled={disabled}
           onClick={() => void submit()}
         >
-          {amend && canAmend ? 'Amend commit' : 'Commit'}
+          {amending ? 'Amend commit' : 'Commit'}
         </button>
       </div>
     </section>

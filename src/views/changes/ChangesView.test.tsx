@@ -390,7 +390,7 @@ describe('discard confirmation', () => {
     const notice = await screen.findByRole('status');
     expect(notice).toHaveTextContent('krakenless: discarded 2026-08-20');
     expect(notice).toHaveTextContent('git stash list');
-    expect(notice).toHaveTextContent('git stash pop --index');
+    expect(notice).toHaveTextContent('git stash pop --index stash@{n}');
     expect(within(notice).getByText('a.ts')).toBeInTheDocument();
 
     // It survives whatever the status panel does next — including failing —
@@ -424,7 +424,9 @@ describe('discard confirmation', () => {
     confirm();
 
     const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent('still in the working tree');
+    // An interrupted `git stash push` can have written the entry anyway, so the
+    // message must not promise the working tree is untouched.
+    expect(alert).toHaveTextContent('Check `git stash list` before retrying');
     expect(alert).toHaveTextContent('fatal: cannot save the current worktree');
   });
 });
@@ -586,6 +588,88 @@ describe('commit box', () => {
       message: 'fix: correct the previous commit',
       amend: true,
     });
+  });
+  it('keeps the draft when a refresh unmounts the lists', () => {
+    const store = renderWithEntries([entry({ path: 'a.ts', index: 'modified' })]);
+    typeMessage('feat: a long message the user is still writing');
+
+    act(() => store.dispatch({ type: 'status/loading' }));
+    setEntries(store, [entry({ path: 'a.ts', index: 'modified' })]);
+
+    expect(screen.getByLabelText('Commit message')).toHaveValue(
+      'feat: a long message the user is still writing',
+    );
+  });
+
+  it('never sends amend once amending has been withheld', () => {
+    const store = renderWithEntries([entry({ path: 'a.ts', index: 'modified' })]);
+    typeMessage('feat: add a thing');
+    fireEvent.click(screen.getByLabelText('Amend the last commit'));
+
+    // A merge starts underneath: amending would rewrite a commit mid-operation.
+    setEntries(store, [
+      entry({ path: 'a.ts', index: 'modified' }),
+      entry({
+        path: 'merge.ts',
+        index: 'unmerged',
+        worktree: 'unmerged',
+        conflicted: true,
+        conflictKind: 'UU',
+      }),
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: 'Commit' }));
+
+    expect(commitMock).toHaveBeenCalledWith(store, {
+      message: 'feat: add a thing',
+      amend: false,
+    });
+  });
+});
+
+describe('discard notices over time', () => {
+  it('does not check, and does not claim, while the status is reloading', () => {
+    const store = renderWithEntries([entry({ path: 'a.ts', worktree: 'modified' })]);
+    fireEvent.click(screen.getByRole('button', { name: 'Discard a.ts' }));
+
+    act(() => store.dispatch({ type: 'status/loading' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Discard 1 file' }));
+
+    expect(discardMock).not.toHaveBeenCalled();
+    const dialog = screen.getByRole('alertdialog', { name: 'Confirm discard' });
+    expect(dialog).toHaveTextContent('The working tree is being re-read');
+    expect(screen.queryByText(/no longer have unstaged changes/)).not.toBeInTheDocument();
+  });
+
+  it('keeps the earlier recovery notice when a second discard is confirmed', async () => {
+    discardMock.mockResolvedValueOnce({ stashLabel: 'krakenless: first' });
+    const store = renderWithEntries([
+      entry({ path: 'a.ts', worktree: 'modified' }),
+      entry({ path: 'b.ts', worktree: 'modified' }),
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Discard a.ts' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Discard 1 file' }));
+    await screen.findByText(/krakenless: first/);
+
+    discardMock.mockResolvedValueOnce({ stashLabel: 'krakenless: second' });
+    setEntries(store, [entry({ path: 'b.ts', worktree: 'modified' })]);
+    fireEvent.click(screen.getByRole('button', { name: 'Discard b.ts' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Discard 1 file' }));
+
+    await screen.findByText(/krakenless: second/);
+    // The first stash still exists; dropping its instructions would strand it.
+    expect(screen.getByText(/krakenless: first/)).toBeInTheDocument();
+  });
+
+  it('keeps the staged-side warning when the status stops being readable', () => {
+    const store = renderWithEntries([
+      entry({ path: 'both.ts', index: 'modified', worktree: 'modified' }),
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: 'Discard both.ts' }));
+
+    act(() => store.dispatch({ type: 'status/loading' }));
+
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('also has staged changes');
   });
 });
 

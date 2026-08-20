@@ -88,6 +88,12 @@ describe('displayPath', () => {
     ).toBe('old.ts → new.ts');
   });
 
+  it('shows a copy as source → copy', () => {
+    expect(
+      displayPath(entry({ path: 'copy.ts', origPath: 'orig.ts', index: 'copied' })),
+    ).toBe('orig.ts → copy.ts');
+  });
+
   it('shows only the path when there is no rename', () => {
     expect(displayPath(entry({ path: 'a.ts', worktree: 'modified' }))).toBe('a.ts');
   });
@@ -107,6 +113,14 @@ describe('pathsOf', () => {
   it('names one path for everything else', () => {
     expect(pathsOf(entry({ path: 'a.ts', worktree: 'modified' }))).toEqual(['a.ts']);
     expect(pathsOf(entry({ path: 'a.ts', origPath: 'a.ts' }))).toEqual(['a.ts']);
+  });
+
+  it('leaves the source of a copy alone', () => {
+    // A copy does not change its source, so naming it would stage or discard
+    // edits the user never pointed at.
+    expect(
+      pathsOf(entry({ path: 'copy.ts', origPath: 'orig.ts', index: 'copied' })),
+    ).toEqual(['copy.ts']);
   });
 
   it('collects a list in order and without repeats', () => {
@@ -176,7 +190,9 @@ describe('discard wording', () => {
     // `git stash list` first: git creates no stash at all when the pathspec had
     // nothing to save, and a blind pop would restore an unrelated stash.
     expect(text).toContain('git stash list');
-    // `--index`, because the discard sweeps the staged side in as well.
-    expect(text).toContain('git stash pop --index');
+    // `--index`, because the discard sweeps the staged side in as well, and an
+    // explicit ref, because a later discard stacks another entry on top.
+    expect(text).toContain('git stash pop --index stash@{n}');
+    expect(text).toContain('nothing was discarded');
   });
 });
