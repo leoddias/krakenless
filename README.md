@@ -172,6 +172,18 @@ App settings live in `%APPDATA%/krakenless/` as human-readable JSON — the same
 file the Settings screen writes. Backup = copy that folder. Everything else is
 your repos, owned by git.
 
+## Releases
+
+Pushing a tag (`v0.1.0-alpha`, say) triggers `.github/workflows/release.yml`,
+which runs the full test suite on Windows and macOS, builds the installers, and
+attaches them to a **draft** GitHub Release. Draft on purpose: the binaries are
+unsigned, so someone has to read the notes and decide they are ready to hand to
+people before it goes public.
+
+Note ADR-0010 — the name is a development codename that references someone
+else's trademark. Publishing downloadable binaries under it is exactly the step
+that ADR says to take only after the rename.
+
 ## Landing page
 
 The site in [`site/`](site/) is plain static HTML with no build step, published

@@ -1,0 +1,100 @@
+name: Release
+
+# Cutting a release is a deliberate act: push a tag like `v0.1.0-alpha` and this
+# builds the installers and publishes them as a GitHub Release. Nothing here
+# runs on an ordinary push — CI artifacts are auth-gated and expire in 14 days,
+# which is why they cannot serve as a public download.
+#
+# The release is created as a **draft**: the binaries are unsigned, so Windows
+# SmartScreen and macOS Gatekeeper will both warn about them, and whoever
+# publishes should have written that into the release notes first.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows
+          - os: macos-latest
+            label: macOS
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: release-${{ matrix.os }}
+
+      - run: npm ci
+
+      # A release must not be cut from code that does not pass its own gate.
+      - name: Git identity for integration tests
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI"
+      - run: npm test
+      - run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Build installers
+        run: npm run tauri -- build
+
+      - name: Collect installers
+        shell: bash
+        run: |
+          mkdir -p dist-release
+          # Only the installable artefacts; the bundle directory also holds
+          # intermediate app directories that are useless to a downloader.
+          find src-tauri/target/release/bundle \
+            \( -name '*.msi' -o -name '*.exe' -o -name '*.dmg' -o -name '*.app.tar.gz' \) \
+            -exec cp {} dist-release/ \;
+          ls -la dist-release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.label }}
+          path: dist-release/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish draft release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: installers
+          merge-multiple: true
+
+      - run: ls -la installers
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: installers/*
+          # Draft, not published: someone has to read the notes and decide the
+          # binaries are ready to hand to people.
+          draft: true
+          generate_release_notes: true
+          body: |
+            **Pre-alpha.** Krakenless has not been dogfooded yet — see the
+            README for what works and what does not.
+
+            These installers are **unsigned**. Windows SmartScreen will say the
+            publisher is unknown, and macOS Gatekeeper will refuse to open the
+            app until you allow it in System Settings → Privacy & Security.
+            Building from source avoids both.

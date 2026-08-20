@@ -296,8 +296,24 @@
         that command was well-formed and wrong.
       </p>
 
-      <h2>Try it</h2>
-      <p>There are no installers yet. Building it takes Node 22, Rust, and git:</p>
+      <h2>Get it</h2>
+      <p>
+        There is no stable download yet, and the page will not pretend otherwise:
+        Krakenless has not been dogfooded, so nothing here has been used in anger for a
+        full day of real work. When a build is cut it is published on the releases page,
+        unsigned — Windows SmartScreen will call the publisher unknown, and macOS will
+        need an explicit allow in
+        <em>Privacy &amp; Security</em>.
+      </p>
+      <p>
+        <a class="cta" href="https://github.com/leoddias/krakenless/releases">Releases</a>
+      </p>
+
+      <h2>Or build it</h2>
+      <p>
+        Building avoids the unsigned-binary warnings entirely and takes Node 22, Rust and
+        git:
+      </p>
       <pre><code>git clone https://github.com/leoddias/krakenless.git
 cd krakenless
 npm install
