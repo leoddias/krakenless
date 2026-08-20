@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Krakenless — a fast, private Git client</title>
+    <meta
+      name="description"
+      content="A desktop Git GUI with no account, no telemetry and no subscription. Runs your own git. Free and open source, AGPL-3.0."
+    />
+    <meta property="og:title" content="Krakenless — a fast, private Git client" />
+    <meta
+      property="og:description"
+      content="No account. No telemetry. No subscription. It runs your own git."
+    />
+    <meta property="og:type" content="website" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🐙</text></svg>"
+    />
+    <style>
+      :root {
+        --bg: #14161a;
+        --surface: #1a1e24;
+        --border: #2a2f37;
+        --fg: #e6e8eb;
+        --muted: #9aa3ad;
+        --accent: #6ea8fe;
+        --added: #4ec9a0;
+        --danger: #f2777a;
+        color-scheme: dark;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-family:
+          'Segoe UI',
+          system-ui,
+          -apple-system,
+          sans-serif;
+        line-height: 1.6;
+      }
+
+      .wrap {
+        max-width: 60rem;
+        margin: 0 auto;
+        padding: 0 1.25rem;
+      }
+
+      header {
+        padding: 4rem 0 2rem;
+        text-align: center;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(2.2rem, 6vw, 3.4rem);
+        letter-spacing: -0.03em;
+      }
+
+      .tagline {
+        margin: 0.5rem 0 0;
+        font-size: clamp(1rem, 2.5vw, 1.25rem);
+        color: var(--muted);
+      }
+
+      .status {
+        display: inline-block;
+        margin-top: 1.25rem;
+        padding: 0.35rem 0.75rem;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        font-size: 0.8rem;
+        color: var(--muted);
+      }
+
+      .shot {
+        margin: 2.5rem 0;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+        background: var(--surface);
+      }
+
+      .shot img {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+
+      .shot figcaption {
+        padding: 0.6rem 0.9rem;
+        border-top: 1px solid var(--border);
+        font-size: 0.8rem;
+        color: var(--muted);
+      }
+
+      h2 {
+        margin: 3rem 0 1rem;
+        font-size: 1.4rem;
+        letter-spacing: -0.01em;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+        gap: 1rem;
+      }
+
+      .card {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 1rem;
+        background: var(--surface);
+      }
+
+      .card h3 {
+        margin: 0 0 0.35rem;
+        font-size: 1rem;
+      }
+
+      .card p {
+        margin: 0;
+        font-size: 0.9rem;
+        color: var(--muted);
+      }
+
+      ul.plain {
+        padding-left: 1.1rem;
+        color: var(--muted);
+      }
+
+      ul.plain li {
+        margin-bottom: 0.4rem;
+      }
+
+      ul.plain strong {
+        color: var(--fg);
+      }
+
+      code,
+      pre {
+        font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+        font-size: 0.85rem;
+      }
+
+      pre {
+        background: #0f1114;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 0.85rem 1rem;
+        overflow-x: auto;
+      }
+
+      .cta {
+        display: inline-block;
+        margin-top: 0.5rem;
+        padding: 0.55rem 1.1rem;
+        border: 1px solid var(--accent);
+        border-radius: 6px;
+        color: var(--accent);
+        text-decoration: none;
+        font-weight: 600;
+      }
+
+      .cta:hover,
+      a:hover {
+        text-decoration: underline;
+      }
+
+      a {
+        color: var(--accent);
+      }
+
+      .callout {
+        border-left: 3px solid var(--danger);
+        background: var(--surface);
+        padding: 0.85rem 1rem;
+        border-radius: 0 6px 6px 0;
+        font-size: 0.9rem;
+      }
+
+      footer {
+        margin: 4rem 0 3rem;
+        padding-top: 1.5rem;
+        border-top: 1px solid var(--border);
+        font-size: 0.85rem;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <h1>Krakenless</h1>
+        <p class="tagline">
+          A fast, private desktop Git client. No account. No telemetry. No subscription.
+        </p>
+        <p class="status">Pre-alpha · not yet dogfooded · AGPL-3.0</p>
+      </header>
+
+      <figure class="shot">
+        <img
+          src="screenshot.png"
+          width="1296"
+          height="839"
+          alt="The Krakenless window: commit history with a graph on the left, branches and stashes below it, the working tree in the middle, and a file diff on the right."
+        />
+        <figcaption>
+          The actual app, opened on its own repository. Not a mockup.
+        </figcaption>
+      </figure>
+
+      <h2>Why this exists</h2>
+      <p>
+        GitKraken is a good client attached to an account, a subscription and a telemetry
+        pipeline. None of those make the client better at Git. Krakenless is the same job
+        with none of that: it opens, it reads your repository, and it shells out to the
+        <code>git</code> you already have.
+      </p>
+
+      <div class="grid">
+        <div class="card">
+          <h3>No account</h3>
+          <p>Open the app, open a folder, work. There is nothing to sign into.</p>
+        </div>
+        <div class="card">
+          <h3>No telemetry</h3>
+          <p>
+            The app makes no network calls of its own. Git talks to your remotes; nothing
+            else leaves the machine.
+          </p>
+        </div>
+        <div class="card">
+          <h3>Your own git</h3>
+          <p>
+            Your credential helper, hooks and LFS setup keep working, because it
+            <em>is</em> git underneath — not a reimplementation.
+          </p>
+        </div>
+        <div class="card">
+          <h3>Small</h3>
+          <p>
+            A Tauri shell using the system webview, not a bundled browser. Settings are
+            one readable JSON file you can copy.
+          </p>
+        </div>
+      </div>
+
+      <h2>What it does today</h2>
+      <ul class="plain">
+        <li>
+          <strong>Read:</strong> history with a commit graph, branch and tag decorations,
+          and a diff viewer.
+        </li>
+        <li>
+          <strong>Stage:</strong> whole files or individual hunks, then commit or amend.
+        </li>
+        <li>
+          <strong>Discard, recoverably:</strong> every discard stashes first, and the app
+          hands you the exact command that brings the change back.
+        </li>
+        <li>
+          <strong>Remotes:</strong> fetch, fast-forward pull, and push — never a force
+          push.
+        </li>
+        <li>
+          <strong>Branches and stashes:</strong> create, switch, delete (safe form first),
+          apply, pop, drop.
+        </li>
+        <li>
+          <strong>Conflicts:</strong> an honest banner that lists what is conflicted and
+          opens your editor or merge tool.
+        </li>
+      </ul>
+
+      <h2>What it does not do</h2>
+      <p class="callout">
+        It does not resolve conflicts for you, and it has no interactive rebase. It will
+        not pretend otherwise in the UI — a client that quietly stages a file full of
+        conflict markers is worse than one that says it cannot help.
+      </p>
+
+      <h2>How it treats your work</h2>
+      <p>
+        Every command that could lose work is built from an argument array, checked
+        against a deny-list derived from the arguments themselves, and refused unless
+        something actually asked you. Discards go through a stash, and the recovery
+        command is covered by tests that <em>run it</em> — because the first version of
+        that command was well-formed and wrong.
+      </p>
+
+      <h2>Try it</h2>
+      <p>There are no installers yet. Building it takes Node 22, Rust, and git:</p>
+      <pre><code>git clone https://github.com/leoddias/krakenless.git
+cd krakenless
+npm install
+npm run tauri dev</code></pre>
+      <p>
+        <a class="cta" href="https://github.com/leoddias/krakenless"
+          >Read the source on GitHub</a
+        >
+      </p>
+
+      <footer>
+        <p>
+          “Krakenless” is a development codename and will change before any public release
+          — the name references a trademark that is not ours.
+        </p>
+        <p>
+          Free and open source under
+          <a href="https://github.com/leoddias/krakenless/blob/main/LICENSE">AGPL-3.0</a>.
+          © Leonardo Dias.
+        </p>
+      </footer>
+    </div>
+  </body>
+</html>

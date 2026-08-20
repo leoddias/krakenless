@@ -1,0 +1,11 @@
+# Normalise line endings so a file written by a tool that defaults to CRLF on
+# Windows cannot fail `prettier --check` in CI while looking fine locally.
+* text=auto eol=lf
+
+# Binary assets are never converted.
+*.png binary
+*.ico binary
+*.icns binary
+*.jpg binary
+*.woff binary
+*.woff2 binary

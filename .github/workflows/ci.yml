@@ -26,8 +26,22 @@ jobs:
       - run: npm run build
 
   desktop:
-    name: Build (Windows desktop)
-    runs-on: windows-latest
+    # Windows is the v0.1 target; macOS and Linux build here so the code stays
+    # portable, and because the git-layer integration tests behave differently
+    # per platform (path separators, `stash push --keep-index`, process groups).
+    # A break on Linux is a real bug even while Linux is not a shipped target.
+    name: Build (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows
+          - os: macos-latest
+            label: macOS
+          - os: ubuntu-latest
+            label: Linux
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -40,10 +54,52 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          key: ${{ matrix.os }}
+
+      # Tauri links against the system webview; on Linux that is WebKitGTK,
+      # which the runner image does not ship.
+      - name: Linux system dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libglib2.0-dev \
+            libgtk-3-dev
+
       - run: npm ci
+
+      # The suite drives the real git binary; it must be identifiable and
+      # configured, because `git commit` in a fresh temp repo needs an identity.
+      - name: Git identity for integration tests
+        run: |
+          git --version
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI"
+
+      - name: Frontend tests
+        run: npm test
+
       - name: Clippy
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
       - name: Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
       - name: Tauri build
         run: npm run tauri -- build
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: krakenless-${{ matrix.label }}
+          # Only the installers and binaries, not the whole target directory.
+          path: |
+            src-tauri/target/release/bundle/**
+            src-tauri/target/release/krakenless
+            src-tauri/target/release/krakenless.exe
+          if-no-files-found: warn
+          retention-days: 14
