@@ -6,23 +6,67 @@
 
 ## Current state
 
-- **Phase:** **M0 complete.** The desktop app builds and runs on the dev machine.
-- Frontend: Vite + React 19 + TS (strict, `noUncheckedIndexedAccess`), Vitest +
-  Testing Library (1 test, green), oxlint, Prettier (markdown excluded).
-- Desktop: `src-tauri/` (crate `krakenless`, identifier `dev.krakenless.app`,
-  1280x800 window). Compiles clean; clippy clean; `npm run tauri dev` opens the
-  window. Toolchain here: Rust 1.97.1 + MSVC (VS 2022 Community).
-- CI: `.github/workflows/ci.yml` — frontend lint/format/test/build job +
-  Windows job (clippy, cargo test, `tauri build`).
-- Agent harness now covers parallel work: `docs/PARALLEL.md`, `docs/TASKS.md`,
-  `/fanout`, `/task-loop`, agents `task-worker` + `conventions-reviewer`
-  (ADR-0013). Linter choice recorded in ADR-0014.
+- **Phase:** M0–M4 complete; M5 mostly done. The app runs and was driven by hand
+  (screenshots) against this repository, not only through tests.
+- **Verified working in the real app:** welcome + recent repos, history with ref
+  decorations, working-tree panel (stage/unstage/discard/commit), diff panel,
+  remote bar (fetch/pull/push), branches + stashes panel, conflict banner,
+  settings, fs-watch refresh.
+- **Test status:** `npm test` 881 passing (35 files), `cargo test` 32 passing;
+  oxlint, prettier and clippy clean. Integration tests drive the real `git`
+  binary on disposable repos for patch round-trips and destructive paths.
+- Settings live in `%APPDATA%/krakenless/config.json` — the path the docs
+  promise (Tauri's default would have been `dev.krakenless.app`).
+- **Not built:** conflict *resolution* UI, graph parent lines, interactive
+  rebase. `state.remotes` is reconstructed from branches, not read directly.
+
+## Next up (in order)
+
+1. **Close M5** (`docs/ROADMAP.md` § M5): keyboard navigation and focus pass
+   across the four panels, contrast check, then the dogfood gate — use
+   Krakenless as the only Git client for two weeks.
+2. **Graph parent lines** (M4's last item): commit edges between rows in
+   `src/views/history`. Functional, not beautiful.
+3. Work the backlog the reviewers filed, highest value first: a real
+   `state.remotes` slice (unfetched remotes are invisible today), `busy` as a
+   depth counter rather than a boolean, and an integration test for the
+   stash-drop recovery route.
 
 ## Blockers / open questions
 
-- None.
+- None blocking. Two deliberate gaps, both documented in code comments:
+  force-push is unreachable from the UI until the lease carries an explicit
+  `<branch>:<oid>`, and pushing to a differently-named upstream is disabled
+  until `buildPushCommand` emits a `<local>:<upstream>` refspec.
 
 ## Session log
+
+### 2026-08-20 — M1–M4 built with parallel packets and capped loops
+
+- Ran six task packets through `/fanout` (status/log/diff parsers; welcome,
+  history and diff views; changes panel; remote bar; refs panel), each in its
+  own worktree with `conventions-reviewer` and, where it touched git, the
+  `safety-reviewer`. Every packet needed 2–3 loop passes before its gate passed.
+- Built: the git layer contract, staging (including hunk-level via
+  `git apply --cached`), remotes, branches, stashes, the fs watcher, config,
+  store and actions, the app shell, settings, and the conflict banner.
+- ADRs added: 0013 (capped loops + parallel packets), 0014 (oxlint), 0015 (path
+  encoding decided at the runner), 0016 (destructiveness derived from args).
+- The safety reviewer blocked three times and was right each time. Fixed, each
+  with a test: the log record separator let a commit message forge a whole fake
+  commit; discard destroyed the *staged* snapshot while advertising a
+  `stash pop` that could not restore it; the replacement undo command
+  (`git checkout <oid> --`) clobbered that same snapshot; force-push
+  self-approved through a module-level `CONFIRMED` constant; stash operations
+  addressed entries by a shifting index; the Rust runner reported a truncated
+  read as an empty success.
+- Running the app by hand found three things no test caught: settings were
+  written to `dev.krakenless.app` rather than the documented folder, the diff
+  panel opened empty, and history rows cut oids mid-hash.
+- Also fixed a test-harness bug: `beforeEach(() => mock.mockReset())` returns
+  the mock, and Vitest calls a returned function as teardown — so mocks were
+  being invoked after every test. Six occurrences.
+- Tests at handoff: `npm test` 881 passing, `cargo test` 32 passing.
 
 ### 2026-08-19 — Parallel harness + M0 scaffold (complete)
 
