@@ -24,6 +24,16 @@ import type { GitCommand } from '../types';
  *   *submodule's* object store while the path reads as a superproject path.
  *   Handing that to `git apply --cached` in the superproject stages bytes the
  *   path does not own. `short` restores the plain `160000` gitlink hunk.
+ * - `--ignore-submodules=none`: the sharper half of the same problem.
+ *   `diff.ignoreSubmodules = all` makes git emit *nothing at all* for a changed
+ *   gitlink, so no parser can notice it and the user commits believing the
+ *   submodule is untouched (verified against git 2.39).
+ * - `--inter-hunk-context=0`: `diff.interHunkContext` decides when two nearby
+ *   hunks are merged into one, i.e. how coarse the user's staging choices are.
+ *
+ * One config is not fixable from here: `diff.suppressBlankEmpty` prints an
+ * empty context line with no leading space, and there is no command-line
+ * override. The parser accepts that shape instead.
  *
  * The runner already prepends `--no-pager -c core.quotePath=false`; those are
  * deliberately not repeated here.
@@ -36,6 +46,8 @@ const DIFF_FLAGS = [
   '--src-prefix=a/',
   '--dst-prefix=b/',
   '--submodule=short',
+  '--ignore-submodules=none',
+  '--inter-hunk-context=0',
   '-U3',
   '--find-renames',
   '--find-copies',

@@ -348,6 +348,36 @@ index c91a7c1..1363d97 100644
 +trailing\x20\x20
 `;
 
+// An empty context line, the normal way: a lone space. Written as `\x20` so
+// the marker cannot be trimmed away by tooling.
+const BLANK_CONTEXT = `diff --git a/b.txt b/b.txt
+index d5e6432..a0ba5e0 100644
+--- a/b.txt
++++ b/b.txt
+@@ -1,5 +1,5 @@
+ one
+\x20
+-two
++TWO
+\x20
+ three
+`;
+
+// The same change with `diff.suppressBlankEmpty = true`, which drops that
+// space. There is no command-line override for it, so the parser must cope.
+const SUPPRESSED_BLANK_CONTEXT = `diff --git a/b.txt b/b.txt
+index d5e6432..a0ba5e0 100644
+--- a/b.txt
++++ b/b.txt
+@@ -1,5 +1,5 @@
+ one
+
+-two
++TWO
+
+ three
+`;
+
 // A diff of a file that itself contains a patch: every content line carries a
 // marker, so `diff --git` and `@@` inside the payload stay unambiguous.
 const PATCH_INSIDE_PATCH = `diff --git a/sample.patch b/sample.patch
@@ -375,6 +405,8 @@ describe('diff command builders', () => {
     '--src-prefix=a/',
     '--dst-prefix=b/',
     '--submodule=short',
+    '--ignore-submodules=none',
+    '--inter-hunk-context=0',
     '-U3',
     '--find-renames',
     '--find-copies',
@@ -383,7 +415,8 @@ describe('diff command builders', () => {
   it('pins every config that would reshape the patch', () => {
     // Each of these has a config that changes the output format:
     // color.diff, diff.external, a diff=<driver> attribute, diff.relative,
-    // diff.noprefix / diff.mnemonicPrefix, diff.submodule, diff.context.
+    // diff.noprefix / diff.mnemonicPrefix, diff.submodule,
+    // diff.ignoreSubmodules, diff.interHunkContext, diff.context.
     for (const flag of shared) {
       expect(buildWorktreeDiffCommand().args).toContain(flag);
       expect(buildStagedDiffCommand().args).toContain(flag);
@@ -711,6 +744,35 @@ describe('parseDiff — content is never normalised', () => {
   });
 });
 
+describe('parseDiff — empty context lines', () => {
+  const expected = [
+    { kind: 'context', text: 'one', oldLine: 1, newLine: 1 },
+    { kind: 'context', text: '', oldLine: 2, newLine: 2 },
+    { kind: 'deleted', text: 'two', oldLine: 3 },
+    { kind: 'added', text: 'TWO', newLine: 3 },
+    { kind: 'context', text: '', oldLine: 4, newLine: 4 },
+    { kind: 'context', text: 'three', oldLine: 5, newLine: 5 },
+  ];
+
+  it('reads the normal form, a lone space', () => {
+    expect(parseDiff(BLANK_CONTEXT)[0]!.hunks[0]!.lines).toEqual(expected);
+  });
+
+  it('reads the diff.suppressBlankEmpty form, a bare empty line', () => {
+    // Same file, same change, only the empty context lines lost their space.
+    // Both must yield identical line numbering on both sides.
+    expect(parseDiff(SUPPRESSED_BLANK_CONTEXT)[0]!.hunks[0]!.lines).toEqual(expected);
+  });
+
+  it('normalises the suppressed form back to the canonical one', () => {
+    // The one place the byte-for-byte round trip does not hold. `git apply`
+    // accepts both shapes, and the space-prefixed one is what git writes by
+    // default, so rebuilding produces the canonical patch rather than a
+    // config-dependent one.
+    expect(reassemble(SUPPRESSED_BLANK_CONTEXT)).toBe(BLANK_CONTEXT);
+  });
+});
+
 describe('parseDiff — git show', () => {
   it('reads a merge shown against its first parent', () => {
     const files = parseDiff(MERGE_FIRST_PARENT);
@@ -872,6 +934,7 @@ describe('parseDiff — round-tripping', () => {
     ['a patch inside a patch', PATCH_INSIDE_PATCH],
     ['significant leading and trailing whitespace', TRAILING_WHITESPACE],
     ['a submodule gitlink hunk', SUBMODULE_SHORT],
+    ['empty context lines', BLANK_CONTEXT],
     ['an unmerged-path notice among ordinary entries', CONFLICT_STAGED],
     ['a first-parent merge diff', MERGE_FIRST_PARENT],
   ])('reproduces %s byte for byte', (_name, fixture) => {

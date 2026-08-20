@@ -271,6 +271,20 @@ function parseHunkBody(
       fail(`Hunk ends before its declared line count: ${JSON.stringify(counts)}`);
     }
     if (takeNoNewlineMarker()) continue;
+    // `diff.suppressBlankEmpty = true` drops the leading space of an empty
+    // context line, and there is no flag to turn it off (verified against git
+    // 2.39; `git apply` accepts either shape). Inside a hunk that still owes
+    // lines to both sides, a bare empty line can only be empty context.
+    if (line.length === 0) {
+      if (oldLeft === 0 || newLeft === 0) fail('Blank context line past the hunk counts');
+      body.push({ kind: 'context', text: '', oldLine: oldNo, newLine: newNo });
+      oldNo += 1;
+      newNo += 1;
+      oldLeft -= 1;
+      newLeft -= 1;
+      i += 1;
+      continue;
+    }
     const text = line.slice(1);
     switch (line[0]) {
       case ' ':
