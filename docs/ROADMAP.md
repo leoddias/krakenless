@@ -12,8 +12,8 @@ If schedule slips: cut graph *polish*, never parser tests.
 - [x] Vitest wired (one trivial passing test)
 - [x] `.gitignore` covers node/rust/tauri artifacts
 - [x] GitHub Actions: lint + test + Windows build on push
-- [ ] App opens an empty window with app name — *blocked: Rust toolchain not
-      installed on the dev machine*; dev + build scripts documented in README (done)
+- [x] App opens an empty window with app name; setup, dev + build scripts
+      documented in README
 
 ### M1 — Read-only repo view (~1–2 weeks)
 - [ ] Git layer skeleton: run `git` with args array (never string interpolation),

@@ -6,11 +6,12 @@
 
 ## Current state
 
-- **Phase:** M0 scaffold landed. App code exists; the desktop shell is unverified.
+- **Phase:** **M0 complete.** The desktop app builds and runs on the dev machine.
 - Frontend: Vite + React 19 + TS (strict, `noUncheckedIndexedAccess`), Vitest +
   Testing Library (1 test, green), oxlint, Prettier (markdown excluded).
-- Desktop: `src-tauri/` initialized (crate `krakenless`, identifier
-  `dev.krakenless.app`, 1280x800 window). **Never compiled** — no Rust locally.
+- Desktop: `src-tauri/` (crate `krakenless`, identifier `dev.krakenless.app`,
+  1280x800 window). Compiles clean; clippy clean; `npm run tauri dev` opens the
+  window. Toolchain here: Rust 1.97.1 + MSVC (VS 2022 Community).
 - CI: `.github/workflows/ci.yml` — frontend lint/format/test/build job +
   Windows job (clippy, cargo test, `tauri build`).
 - Agent harness now covers parallel work: `docs/PARALLEL.md`, `docs/TASKS.md`,
@@ -19,15 +20,17 @@
 
 ## Blockers / open questions
 
-- **Rust toolchain missing on the dev machine** (`cargo`/`rustc` not on PATH).
-  Blocks: running or building the desktop app, `cargo test`, clippy. Fix:
-  install rustup + MSVC build tools. Nothing in the frontend is blocked.
-- Everything Tauri-side (`src-tauri/`) is therefore unverified code — treat the
-  first successful `tauri dev` as the real M0 completion.
+- None.
 
 ## Session log
 
-### 2026-08-19 — Parallel harness + M0 scaffold
+### 2026-08-19 — Parallel harness + M0 scaffold (complete)
+
+- Installed the Rust toolchain locally (rustup via winget; MSVC C++ tools were
+  already present from VS 2022). `cargo build`, `cargo clippy -D warnings` and
+  `cargo test` all pass; `npm run tauri dev` opens the window — M0 closed.
+- README gained a full contributor setup section: prerequisite table, winget
+  commands, non-Windows notes, the pre-PR gate, and troubleshooting.
 
 - Added the parallel-work harness: `docs/PARALLEL.md` (task packets with
   disjoint owned globs, worktree isolation, orchestrator-only integration),

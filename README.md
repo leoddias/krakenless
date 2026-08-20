@@ -16,14 +16,62 @@ A fast, private desktop Git GUI:
 Optional AI features (commit message generation) are planned for later,
 bring-your-own-key only — the app stays 100% functional without any key.
 
-## Development
+## Setup (contributors)
 
-Requirements: Node 22+, Rust (stable, via [rustup](https://rustup.rs)), and
-`git` on PATH. Rust is only needed for the desktop shell — the web frontend
-and its tests run without it.
+The frontend runs anywhere; the desktop shell needs a Windows C/C++ toolchain
+because Tauri compiles a native binary. Install in this order.
+
+### 1. Prerequisites
+
+| Dependency | Version | Why |
+|---|---|---|
+| [Git](https://git-scm.com/download/win) | 2.39+ | the app *is* a git client — it shells out to your `git` |
+| [Node.js](https://nodejs.org) | 22 LTS+ | frontend, tests, Tauri CLI |
+| [Rust](https://rustup.rs) (stable) | 1.90+ | compiles the Tauri shell |
+| MSVC C++ build tools | VS 2022+ | linker for the Rust build |
+| WebView2 runtime | any | the window's renderer — preinstalled on Windows 11 |
+
+On Windows, everything except the C++ workload can come from winget:
+
+```powershell
+winget install Git.Git
+winget install OpenJS.NodeJS.LTS
+winget install Rustlang.Rustup
+```
+
+For the C++ toolchain, install **Visual Studio Build Tools** and tick the
+*"Desktop development with C++"* workload (if you already have Visual Studio
+with that workload, you're done):
+
+```powershell
+winget install Microsoft.VisualStudio.2022.BuildTools
+```
+
+Then open a **new** terminal so `cargo` and `node` are on PATH, and verify:
+
+```powershell
+git --version; node --version; cargo --version
+```
+
+macOS/Linux: install git, Node 22+, and rustup from your package manager, plus
+the platform's Tauri system dependencies (`build-essential`, `libwebkit2gtk-4.1-dev`,
+`libssl-dev`, `librsvg2-dev` on Debian/Ubuntu; Xcode command line tools on macOS).
+Only Windows is targeted for v0.1, so non-Windows builds are untested.
+
+### 2. Project
 
 ```sh
-npm install          # install frontend dependencies
+git clone <repo-url>
+cd krakenless
+npm install
+```
+
+First `npm run tauri dev` compiles ~500 Rust crates and takes a few minutes;
+later runs are incremental.
+
+## Development
+
+```sh
 npm run tauri dev    # run the desktop app (needs Rust)
 npm run dev          # run the frontend alone in a browser
 npm test             # run the test suite (Vitest)
@@ -32,6 +80,28 @@ npm run format       # Prettier (code only; markdown is left alone)
 npm run build        # type-check + build the frontend
 npm run tauri build  # build the Windows desktop binary (needs Rust)
 ```
+
+Rust side (same checks CI runs):
+
+```sh
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+Before opening a PR, the whole gate must be green: `npm run lint`,
+`npm run format:check`, `npm test`, `npm run build`, plus the two cargo
+commands if you touched `src-tauri/`. Code that builds git commands or parses
+git output ships with unit tests in the same change — see
+[`docs/CONVENTIONS.md`](docs/CONVENTIONS.md).
+
+### Troubleshooting
+
+- **`cargo: command not found`** — reopen the terminal after installing
+  rustup, or add `%USERPROFILE%\.cargoin` to PATH.
+- **`link.exe not found` / linker errors** — the C++ workload is missing;
+  install Visual Studio Build Tools with *Desktop development with C++*.
+- **Port 1420 in use** — a previous `tauri dev` is still running; the dev
+  server uses a strict port and will refuse to start.
 
 ## Documentation
 
