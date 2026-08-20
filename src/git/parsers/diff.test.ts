@@ -219,6 +219,106 @@ index af70335..8bcb16a 100644
  c
 `;
 
+// `git diff` while a merge conflict is pending: the conflicted path comes back
+// as a combined entry, and every *other* changed file is still in the same
+// output. Refusing the batch would make the whole repo unviewable.
+const CONFLICT_UNSTAGED = `diff --cc mid.txt
+index af70335,f794161..0000000
+--- a/mid.txt
++++ b/mid.txt
+@@@ -1,3 -1,3 +1,7 @@@
+  a
+++<<<<<<< HEAD
+ +MAIN
+++=======
++ SIDE
+++>>>>>>> side
+  c
+diff --git a/aaa.txt b/aaa.txt
+index 4a58007..ec20141 100644
+--- a/aaa.txt
++++ b/aaa.txt
+@@ -1 +1 @@
+-alpha
++alpha changed
+diff --git a/zzz.txt b/zzz.txt
+index 2c27abe..82bd35d 100644
+--- a/zzz.txt
++++ b/zzz.txt
+@@ -1 +1 @@
+-omega
++omega changed
+`;
+
+// `git diff --cached` in the same state: a bare notice line, mid-stream,
+// where a `diff --git` entry would be.
+const CONFLICT_STAGED = `diff --git a/aaa.txt b/aaa.txt
+index 4a58007..ec20141 100644
+--- a/aaa.txt
++++ b/aaa.txt
+@@ -1 +1 @@
+-alpha
++alpha changed
+* Unmerged path mid.txt
+diff --git a/zzz.txt b/zzz.txt
+index 2c27abe..82bd35d 100644
+--- a/zzz.txt
++++ b/zzz.txt
+@@ -1 +1 @@
+-omega
++omega changed
+`;
+
+// `diff.submodule = log`: the changed gitlink becomes a prose block. A parser
+// that skips what it does not know reports one changed file instead of two.
+const SUBMODULE_LOG = `Submodule asub 0edfd69..70e731b:
+  > s2
+diff --git a/zfile.txt b/zfile.txt
+index bf1a1fd..d682e8a 100644
+--- a/zfile.txt
++++ b/zfile.txt
+@@ -1 +1 @@
+-top
++top changed
+`;
+
+// `diff.submodule = diff`: worse — `asub/inner.txt` reads like a superproject
+// path but its blobs live in the submodule's object store.
+const SUBMODULE_DIFF = `Submodule asub 0edfd69..70e731b:
+diff --git a/asub/inner.txt b/asub/inner.txt
+index 79945f2..927e4a4 100644
+--- a/asub/inner.txt
++++ b/asub/inner.txt
+@@ -1 +1,2 @@
+ inner1
++inner2
+diff --git a/zfile.txt b/zfile.txt
+index bf1a1fd..d682e8a 100644
+--- a/zfile.txt
++++ b/zfile.txt
+@@ -1 +1 @@
+-top
++top changed
+`;
+
+// The same repository state with `--submodule=short`, which the builders pin:
+// a plain 160000 gitlink hunk that belongs to the superproject.
+const SUBMODULE_SHORT = `diff --git a/asub b/asub
+index 0edfd69..70e731b 160000
+--- a/asub
++++ b/asub
+@@ -1 +1 @@
+-Subproject commit 0edfd697751644fcfcd306fdd6cf401d75229588
++Subproject commit 70e731b247f9f6375fefb548158204c8deec9065
+diff --git a/zfile.txt b/zfile.txt
+index bf1a1fd..d682e8a 100644
+--- a/zfile.txt
++++ b/zfile.txt
+@@ -1 +1 @@
+-top
++top changed
+`;
+
 const SHOW_WITH_COMMIT_HEADER = `commit 7aeccd354301fa76c283cc43e9457f9df53dc1a9
 Author: T <t@e.x>
 Date:   Tue Jan 2 03:04:05 2024 +0000
@@ -232,6 +332,20 @@ index 9c59e24..66a52ee 100644
 @@ -1 +1,2 @@
  first
 +second
+`;
+
+// Significant whitespace: an embedded tab, leading spaces, and a line that
+// only lost a trailing space. The trailing spaces are written as `\x20` so no
+// editor or formatter can quietly delete them and turn this into a false pass.
+const TRAILING_WHITESPACE = `diff --git a/whitespace.txt b/whitespace.txt
+index c91a7c1..1363d97 100644
+--- a/whitespace.txt
++++ b/whitespace.txt
+@@ -1,3 +1,3 @@
+ tab\there
+\x20\x20 leading spaces
+-trailing\x20\x20\x20
++trailing\x20\x20
 `;
 
 // A diff of a file that itself contains a patch: every content line carries a
@@ -260,10 +374,22 @@ describe('diff command builders', () => {
     '--no-relative',
     '--src-prefix=a/',
     '--dst-prefix=b/',
+    '--submodule=short',
     '-U3',
     '--find-renames',
     '--find-copies',
   ];
+
+  it('pins every config that would reshape the patch', () => {
+    // Each of these has a config that changes the output format:
+    // color.diff, diff.external, a diff=<driver> attribute, diff.relative,
+    // diff.noprefix / diff.mnemonicPrefix, diff.submodule, diff.context.
+    for (const flag of shared) {
+      expect(buildWorktreeDiffCommand().args).toContain(flag);
+      expect(buildStagedDiffCommand().args).toContain(flag);
+      expect(buildCommitDiffCommand('HEAD').args).toContain(flag);
+    }
+  });
 
   it('builds the worktree diff', () => {
     expect(buildWorktreeDiffCommand().args).toEqual(['diff', ...shared]);
@@ -277,9 +403,12 @@ describe('diff command builders', () => {
     expect(buildCommitDiffCommand('a1b2c3d').args).toEqual([
       'show',
       '--format=',
+      '--no-show-signature',
       '--diff-merges=first-parent',
       ...shared,
       'a1b2c3d',
+      // Ends the revision list so a ref that also names a file is unambiguous.
+      '--',
     ]);
   });
 
@@ -300,6 +429,7 @@ describe('diff command builders', () => {
     expect(buildCommitDiffCommand('HEAD', { paths: ['x.txt'] }).args).toEqual([
       'show',
       '--format=',
+      '--no-show-signature',
       '--diff-merges=first-parent',
       ...shared,
       'HEAD',
@@ -308,8 +438,9 @@ describe('diff command builders', () => {
     ]);
   });
 
-  it('omits the separator when no path was given', () => {
+  it('omits the separator for a diff, which takes no revision', () => {
     expect(buildStagedDiffCommand({ paths: [] }).args).not.toContain('--');
+    expect(buildWorktreeDiffCommand().args).not.toContain('--');
   });
 
   it('rejects a revision that would be read as an option', () => {
@@ -568,17 +699,19 @@ describe('parseDiff — paths', () => {
   });
 });
 
-describe('parseDiff — git show', () => {
-  it('skips the commit header git prints before the patch', () => {
-    const files = parseDiff(SHOW_WITH_COMMIT_HEADER);
-    expect(files).toHaveLength(1);
-    expect(files[0]!.newPath).toBe('readme.txt');
-    expect(files[0]!.hunks[0]!.lines).toEqual([
-      { kind: 'context', text: 'first', oldLine: 1, newLine: 1 },
-      { kind: 'added', text: 'second', newLine: 2 },
+describe('parseDiff — content is never normalised', () => {
+  it('keeps tabs and leading and trailing spaces exactly as git wrote them', () => {
+    const [file] = parseDiff(TRAILING_WHITESPACE);
+    expect(file!.hunks[0]!.lines).toEqual([
+      { kind: 'context', text: 'tab\there', oldLine: 1, newLine: 1 },
+      { kind: 'context', text: '  leading spaces', oldLine: 2, newLine: 2 },
+      { kind: 'deleted', text: 'trailing   ', oldLine: 3 },
+      { kind: 'added', text: 'trailing  ', newLine: 3 },
     ]);
   });
+});
 
+describe('parseDiff — git show', () => {
   it('reads a merge shown against its first parent', () => {
     const files = parseDiff(MERGE_FIRST_PARENT);
     expect(files[0]!.hunks[0]!.lines).toEqual([
@@ -589,16 +722,91 @@ describe('parseDiff — git show', () => {
     ]);
   });
 
-  it('refuses a combined merge diff instead of silently dropping it', () => {
-    expect(() => parseDiff(COMBINED_MERGE)).toThrow(GitError);
-    try {
-      parseDiff(COMBINED_MERGE);
-      expect.unreachable('parseDiff must reject a combined diff');
-    } catch (error) {
-      expect(error).toBeInstanceOf(GitError);
-      expect((error as GitError).kind).toBe('parse-failed');
-      expect((error as GitError).message).toMatch(/combined/i);
-    }
+  it('refuses a commit header instead of skipping to the first patch', () => {
+    // The builder passes `--format=`, so a header means the caller built the
+    // command by hand. Skipping unknown leading lines is how a
+    // `Submodule …:` block disappears, so nothing is skipped.
+    expect(() => parseDiff(SHOW_WITH_COMMIT_HEADER)).toThrow(GitError);
+  });
+});
+
+describe('parseDiff — conflicted repositories', () => {
+  it('keeps every other file when git emits a combined entry', () => {
+    const files = parseDiff(CONFLICT_UNSTAGED);
+    expect(files.map((file) => file.newPath)).toEqual(['mid.txt', 'aaa.txt', 'zzz.txt']);
+    // The conflicted path is reported, but offers nothing to stage: an `@@@`
+    // body has one marker column per parent and `git apply` will not take it.
+    expect(files[0]!.hunks).toEqual([]);
+    expect(files[0]!.headerLines).toEqual([
+      'diff --cc mid.txt',
+      'index af70335,f794161..0000000',
+      '--- a/mid.txt',
+      '+++ b/mid.txt',
+    ]);
+    expect(files[1]!.hunks[0]!.lines).toEqual([
+      { kind: 'deleted', text: 'alpha', oldLine: 1 },
+      { kind: 'added', text: 'alpha changed', newLine: 1 },
+    ]);
+    expect(files[2]!.hunks).toHaveLength(1);
+  });
+
+  it('reports a mid-stream "* Unmerged path" notice as its own entry', () => {
+    const files = parseDiff(CONFLICT_STAGED);
+    expect(files.map((file) => file.newPath)).toEqual(['aaa.txt', 'mid.txt', 'zzz.txt']);
+    expect(files[1]).toEqual({
+      oldPath: 'mid.txt',
+      newPath: 'mid.txt',
+      kind: 'modified',
+      binary: false,
+      headerLines: ['* Unmerged path mid.txt'],
+      hunks: [],
+    });
+    // The notice must not have been swallowed into the previous entry.
+    expect(files[0]!.headerLines).toEqual([
+      'diff --git a/aaa.txt b/aaa.txt',
+      'index 4a58007..ec20141 100644',
+      '--- a/aaa.txt',
+      '+++ b/aaa.txt',
+    ]);
+    expect(files[2]!.hunks).toHaveLength(1);
+  });
+
+  it('still reads a combined entry that stands alone', () => {
+    const files = parseDiff(COMBINED_MERGE);
+    expect(files).toHaveLength(1);
+    expect(files[0]!.newPath).toBe('f.txt');
+    expect(files[0]!.hunks).toEqual([]);
+  });
+});
+
+describe('parseDiff — submodules', () => {
+  it('rejects the prose block diff.submodule=log produces', () => {
+    // Skipping it would report one changed file where git found two.
+    expect(() => parseDiff(SUBMODULE_LOG)).toThrow(GitError);
+  });
+
+  it('rejects diff.submodule=diff, whose paths do not own their content', () => {
+    // `asub/inner.txt` reads as a superproject path but the blobs are the
+    // submodule's; applying that hunk in the superproject stages foreign bytes.
+    expect(() => parseDiff(SUBMODULE_DIFF)).toThrow(GitError);
+  });
+
+  it('reads the gitlink hunk --submodule=short produces', () => {
+    const files = parseDiff(SUBMODULE_SHORT);
+    expect(files.map((file) => file.newPath)).toEqual(['asub', 'zfile.txt']);
+    expect(files[0]!.headerLines).toContain('index 0edfd69..70e731b 160000');
+    expect(files[0]!.hunks[0]!.lines).toEqual([
+      {
+        kind: 'deleted',
+        text: 'Subproject commit 0edfd697751644fcfcd306fdd6cf401d75229588',
+        oldLine: 1,
+      },
+      {
+        kind: 'added',
+        text: 'Subproject commit 70e731b247f9f6375fefb548158204c8deec9065',
+        newLine: 1,
+      },
+    ]);
   });
 });
 
@@ -662,6 +870,9 @@ describe('parseDiff — round-tripping', () => {
     ['a path with a trailing space', TRAILING_SPACE_PATH],
     ['a quoted unicode path', QUOTED_PATH],
     ['a patch inside a patch', PATCH_INSIDE_PATCH],
+    ['significant leading and trailing whitespace', TRAILING_WHITESPACE],
+    ['a submodule gitlink hunk', SUBMODULE_SHORT],
+    ['an unmerged-path notice among ordinary entries', CONFLICT_STAGED],
     ['a first-parent merge diff', MERGE_FIRST_PARENT],
   ])('reproduces %s byte for byte', (_name, fixture) => {
     expect(reassemble(fixture)).toBe(fixture);
@@ -752,6 +963,65 @@ index 0000000..4f598e3
     expectParseFailure(`diff --git a/one b/two b/three
 old mode 100644
 new mode 100755
+`);
+  });
+
+  it('rejects an unknown extended header line rather than absorbing it', () => {
+    expectParseFailure(`diff --git a/a.txt b/a.txt
+index 1111111..2222222 100644
+something git never wrote
+--- a/a.txt
++++ b/a.txt
+@@ -1 +1 @@
+-one
++two
+`);
+  });
+
+  it('rejects a header that claims two different kinds of change', () => {
+    expectParseFailure(`diff --git a/a.txt b/b.txt
+new file mode 100644
+rename from a.txt
+rename to b.txt
+`);
+  });
+
+  it('rejects hunks that walk backwards over each other', () => {
+    expectParseFailure(`diff --git a/a.txt b/a.txt
+index 1111111..2222222 100644
+--- a/a.txt
++++ b/a.txt
+@@ -1,2 +1,2 @@
+ one
+-two
++TWO
+@@ -1,2 +1,2 @@
+ one
+-two
++TWO
+`);
+  });
+
+  it('rejects a hunk header whose line numbers are out of range', () => {
+    expectParseFailure(`diff --git a/a.txt b/a.txt
+index 1111111..2222222 100644
+--- a/a.txt
++++ b/a.txt
+@@ -1 +99999999999999999999,1 @@
+-one
++two
+`);
+  });
+
+  it('rejects a bare backslash where a no-newline marker belongs', () => {
+    expectParseFailure(`diff --git a/a.txt b/a.txt
+index 1111111..2222222 100644
+--- a/a.txt
++++ b/a.txt
+@@ -1 +1 @@
+-one
+\\backslash without the marker space
++two
 `);
   });
 });

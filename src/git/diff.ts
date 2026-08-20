@@ -6,7 +6,7 @@ import {
 } from './commands/diff';
 import { parseDiff } from './parsers/diff';
 import { runGit } from './runner';
-import type { FileDiff } from './types';
+import type { FileDiff, GitCommand } from './types';
 
 export type { DiffOptions } from './commands/diff';
 
@@ -22,10 +22,7 @@ export type { DiffOptions } from './commands/diff';
  * than a plausible-looking lie. Binary files are unaffected: without
  * `--binary` git only prints `Binary files … differ`, which is pure ASCII.
  */
-async function diff(
-  repo: string,
-  command: ReturnType<typeof buildWorktreeDiffCommand>,
-): Promise<FileDiff[]> {
+async function diff(repo: string, command: GitCommand): Promise<FileDiff[]> {
   const output = await runGit(repo, command);
   return parseDiff(output.stdout);
 }

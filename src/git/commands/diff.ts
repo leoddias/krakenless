@@ -17,6 +17,13 @@ import type { GitCommand } from '../types';
  * - `--no-relative`: `diff.relative` would report paths relative to the
  *   working directory instead of the repository root.
  * - `-U3`: `diff.context` would otherwise decide the context size.
+ * - `--submodule=short`: this one is not cosmetic. Verified against git 2.39,
+ *   `diff.submodule = log` replaces a changed gitlink with a prose
+ *   `Submodule <name> <a>..<b>:` block, and `diff.submodule = diff` follows it
+ *   with `diff --git a/<sub>/<file>` entries whose content lives in the
+ *   *submodule's* object store while the path reads as a superproject path.
+ *   Handing that to `git apply --cached` in the superproject stages bytes the
+ *   path does not own. `short` restores the plain `160000` gitlink hunk.
  *
  * The runner already prepends `--no-pager -c core.quotePath=false`; those are
  * deliberately not repeated here.
@@ -28,6 +35,7 @@ const DIFF_FLAGS = [
   '--no-relative',
   '--src-prefix=a/',
   '--dst-prefix=b/',
+  '--submodule=short',
   '-U3',
   '--find-renames',
   '--find-copies',
@@ -44,6 +52,16 @@ function pathArgs(options: DiffOptions): string[] {
   return paths.length === 0 ? [] : pathspec(paths);
 }
 
+/**
+ * Same, but always ends the revision list. After a revision argument a bare
+ * `--` is what stops git from having to guess whether the next word is a ref
+ * or a file, and it is harmless when there is nothing after it.
+ */
+function terminatedPathArgs(options: DiffOptions): string[] {
+  const args = pathArgs(options);
+  return args.length === 0 ? ['--'] : args;
+}
+
 /** Unstaged changes: working tree against the index. */
 export function buildWorktreeDiffCommand(options: DiffOptions = {}): GitCommand {
   return { args: ['diff', ...DIFF_FLAGS, ...pathArgs(options)] };
@@ -57,10 +75,11 @@ export function buildStagedDiffCommand(options: DiffOptions = {}): GitCommand {
 /**
  * The patch a single commit introduced.
  *
- * `--format=` drops the commit header so stdout is nothing but the patch.
- * `--diff-merges=first-parent` matters: without it `git show` of a merge emits
- * a *combined* diff (`diff --cc`, `@@@` headers), which is a different format
- * that `git apply` cannot consume — the parser rejects it outright.
+ * `--format=` drops the commit header so stdout is nothing but the patch, and
+ * `--no-show-signature` keeps `log.showSignature` from putting a gpg report
+ * back in front of it. `--diff-merges=first-parent` matters most: without it
+ * `git show` of a merge emits a *combined* diff (`diff --cc`, `@@@` headers),
+ * which is a different format that `git apply` cannot consume.
  */
 export function buildCommitDiffCommand(
   rev: string,
@@ -70,10 +89,11 @@ export function buildCommitDiffCommand(
     args: [
       'show',
       '--format=',
+      '--no-show-signature',
       '--diff-merges=first-parent',
       ...DIFF_FLAGS,
       assertRevision(rev),
-      ...pathArgs(options),
+      ...terminatedPathArgs(options),
     ],
   };
 }

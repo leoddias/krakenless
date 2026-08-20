@@ -19,9 +19,24 @@ import type { DiffLine, FileChangeKind, FileDiff, Hunk } from '../types';
 
 const FILE_HEADER = 'diff --git ';
 const COMBINED_HEADERS = ['diff --cc ', 'diff --combined '];
+/** What `git diff --cached` prints instead of a patch for a conflicted path. */
+const UNMERGED_NOTICE = '* Unmerged path ';
 
 function fail(message: string): never {
   throw new GitError('parse-failed', message, { args: ['diff'] });
+}
+
+/**
+ * A short, quotable excerpt of a structural line for an error message.
+ *
+ * Truncated deliberately: a malformed patch can put a line of the user's own
+ * source where a git marker was expected, and `GitError.message` may end up in
+ * a log. Enough to recognise `Submodule …` or `* Unmerged path`, not enough to
+ * be a leak. Hunk-body lines are never passed here at all.
+ */
+function excerpt(line: string): string {
+  const head = line.slice(0, 40);
+  return JSON.stringify(head.length < line.length ? `${head}…` : head);
 }
 
 // --- c-style quoting --------------------------------------------------------
@@ -197,17 +212,27 @@ interface HunkCounts {
   newLines: number;
 }
 
+/** A count git could plausibly have written. Anything else is not a line number. */
+function toCount(digits: string | undefined, line: string): number {
+  // A missing count means one line: `@@ -1 +1 @@`.
+  if (digits === undefined) return 1;
+  const value = Number(digits);
+  if (!Number.isSafeInteger(value)) {
+    fail(`Hunk header line number is out of range: ${JSON.stringify(line)}`);
+  }
+  return value;
+}
+
 function parseHunkHeader(line: string): HunkCounts {
   const match = HUNK_HEADER.exec(line);
   if (match === null) {
     fail(`Malformed hunk header: ${JSON.stringify(line)}`);
   }
-  // A missing count means one line: `@@ -1 +1 @@`.
   return {
-    oldStart: Number(match[1]),
-    oldLines: match[2] === undefined ? 1 : Number(match[2]),
-    newStart: Number(match[3]),
-    newLines: match[4] === undefined ? 1 : Number(match[4]),
+    oldStart: toCount(match[1], line),
+    oldLines: toCount(match[2], line),
+    newStart: toCount(match[3], line),
+    newLines: toCount(match[4], line),
   };
 }
 
@@ -231,8 +256,10 @@ function parseHunkBody(
 
   const takeNoNewlineMarker = (): boolean => {
     const line = lines[i];
-    if (line === undefined || !line.startsWith('\\')) return false;
-    // The message after `\ ` is git's, not ours; keep it verbatim.
+    if (line === undefined || !line.startsWith('\\ ')) return false;
+    // The message after `\ ` is git's, not ours; keep it verbatim. Matching on
+    // the marker rather than the sentence keeps this working if git ever
+    // translates it.
     body.push({ kind: 'no-newline', text: line.slice(2) });
     i += 1;
     return true;
@@ -267,7 +294,12 @@ function parseHunkBody(
         oldLeft -= 1;
         break;
       default:
-        fail(`Unexpected line inside a hunk: ${JSON.stringify(line)}`);
+        // Deliberately reports the position and the marker, never the text:
+        // a hunk body line is the user's file content.
+        fail(
+          `Unexpected line ${i + 1} inside a hunk: marker ` +
+            `${JSON.stringify(line[0] ?? '')}`,
+        );
     }
     i += 1;
   }
@@ -286,23 +318,53 @@ interface HeaderFacts {
   newPath?: string;
 }
 
+/**
+ * Extended header lines that carry no fact we need, but are known and legal.
+ * Together with the branches below this is git's complete set for a two-side
+ * patch; a mode change is deliberately left as `kind: 'modified'` with the
+ * `old mode`/`new mode` lines preserved in `headerLines`.
+ */
+const INERT_HEADERS = [
+  'index ',
+  'old mode ',
+  'new mode ',
+  'similarity index ',
+  'dissimilarity index ',
+];
+
+function setKind(facts: HeaderFacts, kind: FileChangeKind, line: string): void {
+  if (facts.kind !== 'modified' && facts.kind !== kind) {
+    fail(`Diff header claims both "${facts.kind}" and "${kind}": ${line}`);
+  }
+  facts.kind = kind;
+}
+
+/**
+ * Reads one extended header line.
+ *
+ * This is a whitelist on purpose. Accepting unknown lines is how a
+ * `Submodule <name> <a>..<b>:` marker or a `* Unmerged path <p>` notice gets
+ * absorbed into the previous file's `headerLines` — the change it announced
+ * disappears from the result and its text is later replayed into an apply
+ * payload it does not belong to.
+ */
 function readHeaderLine(line: string, facts: HeaderFacts): void {
-  if (line.startsWith('new file mode ')) {
-    facts.kind = 'added';
-  } else if (line.startsWith('deleted file mode ')) {
-    facts.kind = 'deleted';
-  } else if (line.startsWith('rename from ')) {
-    facts.kind = 'renamed';
+  if (line.startsWith('rename from ')) {
+    setKind(facts, 'renamed', line);
     facts.oldPath = decodePath(line.slice('rename from '.length));
   } else if (line.startsWith('rename to ')) {
-    facts.kind = 'renamed';
+    setKind(facts, 'renamed', line);
     facts.newPath = decodePath(line.slice('rename to '.length));
   } else if (line.startsWith('copy from ')) {
-    facts.kind = 'copied';
+    setKind(facts, 'copied', line);
     facts.oldPath = decodePath(line.slice('copy from '.length));
   } else if (line.startsWith('copy to ')) {
-    facts.kind = 'copied';
+    setKind(facts, 'copied', line);
     facts.newPath = decodePath(line.slice('copy to '.length));
+  } else if (line.startsWith('new file mode ')) {
+    setKind(facts, 'added', line);
+  } else if (line.startsWith('deleted file mode ')) {
+    setKind(facts, 'deleted', line);
   } else if (line.startsWith('Binary files ') || line.startsWith('GIT binary patch')) {
     facts.binary = true;
   } else if (line.startsWith('--- ')) {
@@ -311,20 +373,173 @@ function readHeaderLine(line: string, facts: HeaderFacts): void {
   } else if (line.startsWith('+++ ')) {
     const path = parseSidePath(line, 'b/');
     if (path !== null) facts.newPath = path;
+  } else if (!INERT_HEADERS.some((header) => line.startsWith(header))) {
+    fail(`Unrecognised line in a diff header: ${excerpt(line)}`);
   }
 }
 
-function rejectCombined(line: string): void {
-  if (COMBINED_HEADERS.some((header) => line.startsWith(header))) {
-    fail(
-      'Combined (merge) diffs are not supported; ask git for a two-side patch ' +
-        `instead: ${JSON.stringify(line)}`,
-    );
+function isCombinedHeader(line: string): boolean {
+  return COMBINED_HEADERS.some((header) => line.startsWith(header));
+}
+
+/** True for any line that begins a new entry in git's diff output. */
+function startsEntry(line: string): boolean {
+  return (
+    line.startsWith(FILE_HEADER) ||
+    line.startsWith(UNMERGED_NOTICE) ||
+    isCombinedHeader(line)
+  );
+}
+
+/** Reads one `diff --git` entry, hunks included. */
+function parseFileEntry(
+  lines: string[],
+  start: number,
+): { file: FileDiff; next: number } {
+  const headerLine = lines[start] as string;
+  const headerLines: string[] = [headerLine];
+  const facts: HeaderFacts = { kind: 'modified', binary: false };
+  let i = start + 1;
+
+  while (i < lines.length) {
+    const line = lines[i] as string;
+    if (startsEntry(line) || line.startsWith('@@')) break;
+    readHeaderLine(line, facts);
+    headerLines.push(line);
+    i += 1;
   }
+
+  const hunks: Hunk[] = [];
+  while (i < lines.length && (lines[i] as string).startsWith('@@ ')) {
+    const header = lines[i] as string;
+    const counts = parseHunkHeader(header);
+    const previous = hunks[hunks.length - 1];
+    // Hunks are emitted in file order and never overlap. Accepting a header
+    // that walks backwards would hand M2 two patches for the same lines.
+    if (
+      previous !== undefined &&
+      (counts.oldStart < previous.oldStart + previous.oldLines ||
+        counts.newStart < previous.newStart + previous.newLines)
+    ) {
+      fail(`Hunk header overlaps the previous hunk: ${JSON.stringify(header)}`);
+    }
+    const body = parseHunkBody(lines, i + 1, counts);
+    hunks.push({ header, ...counts, lines: body.lines });
+    i = body.next;
+  }
+
+  if (i < lines.length && !startsEntry(lines[i] as string)) {
+    fail(`Unexpected line ${i + 1} between diff entries`);
+  }
+
+  // No `---`/`+++` lines for mode-only changes, pure renames, binary files
+  // and empty new files; the `diff --git` line is the only path source left.
+  // Read it only when something is still missing — it is the ambiguous one.
+  let oldPath = facts.oldPath;
+  let newPath = facts.newPath;
+  if (oldPath === undefined || newPath === undefined) {
+    const fallback = parseFileHeaderPaths(headerLine);
+    oldPath ??= fallback.oldPath;
+    newPath ??= fallback.newPath;
+  }
+
+  return {
+    file: {
+      oldPath,
+      newPath,
+      kind: facts.kind,
+      binary: facts.binary,
+      headerLines,
+      hunks,
+    },
+    next: i,
+  };
 }
 
 /**
- * Turns unified diff text into one {@link FileDiff} per file.
+ * Reads one combined (`diff --cc`) entry.
+ *
+ * `git diff` emits these for every unmerged path while a merge is in progress,
+ * mixed in with ordinary entries. Refusing the whole output would make no
+ * unstaged change in the repository viewable until the conflict is resolved,
+ * so the file is reported — but with **no hunks**, because an `@@@` body has
+ * one marker column per parent and is not something `git apply` accepts. A
+ * caller that offers "stage this hunk" therefore has nothing to offer, which
+ * is the correct answer for a conflicted path.
+ */
+function parseCombinedEntry(
+  lines: string[],
+  start: number,
+): { file: FileDiff; next: number } {
+  const headerLine = lines[start] as string;
+  const headerLines: string[] = [headerLine];
+  const facts: HeaderFacts = { kind: 'modified', binary: false };
+  let i = start + 1;
+
+  while (i < lines.length) {
+    const line = lines[i] as string;
+    if (startsEntry(line) || line.startsWith('@@')) break;
+    readHeaderLine(line, facts);
+    headerLines.push(line);
+    i += 1;
+  }
+
+  // Consume the `@@@` bodies. Every combined content line still begins with a
+  // marker column, so anything else ends the entry.
+  while (i < lines.length) {
+    const line = lines[i] as string;
+    const first = line[0] ?? '';
+    if (first !== '@' && first !== ' ' && first !== '+' && first !== '-') break;
+    i += 1;
+  }
+
+  if (i < lines.length && !startsEntry(lines[i] as string)) {
+    fail(`Unexpected line ${i + 1} after a combined diff entry`);
+  }
+
+  const path =
+    facts.newPath ??
+    facts.oldPath ??
+    decodePath(headerLine.slice(headerLine.indexOf(' ', 'diff --'.length) + 1));
+
+  return {
+    file: {
+      oldPath: facts.oldPath ?? path,
+      newPath: path,
+      kind: 'modified',
+      binary: facts.binary,
+      headerLines,
+      hunks: [],
+    },
+    next: i,
+  };
+}
+
+/** Reads a `* Unmerged path <p>` notice, which carries no patch at all. */
+function parseUnmergedNotice(line: string): FileDiff {
+  const path = decodePath(line.slice(UNMERGED_NOTICE.length));
+  if (path.length === 0) fail('Empty path in an "* Unmerged path" notice');
+  return {
+    oldPath: path,
+    newPath: path,
+    kind: 'modified',
+    binary: false,
+    headerLines: [line],
+    hunks: [],
+  };
+}
+
+/**
+ * Turns unified diff text into one {@link FileDiff} per entry.
+ *
+ * Entries with no hunks are normal and mean different things depending on
+ * `headerLines`: a mode-only change, a 100% rename, an empty new file, a
+ * binary file, or a conflicted path (`diff --cc` / `* Unmerged path`). In every
+ * one of those cases there is nothing a caller may hand to `git apply`.
+ *
+ * `oldPath` and `newPath` are always filled, so for an added file `oldPath`
+ * repeats the new name and for a deleted file `newPath` repeats the old one.
+ * Switch on `kind` before treating either as "the file that exists on disk".
  *
  * Note on `type-changed`: git's patch format has no single entry for it. A
  * symlink that becomes a regular file is emitted as a delete followed by an
@@ -341,60 +556,29 @@ export function parseDiff(text: string): FileDiff[] {
   const files: FileDiff[] = [];
   let i = 0;
 
-  // `git show` without `--format=` prints the commit header first. Skipping it
-  // is safe: a content line never starts at column 0 without a marker.
-  while (i < lines.length && !(lines[i] as string).startsWith(FILE_HEADER)) {
-    rejectCombined(lines[i] as string);
-    i += 1;
-  }
-
   while (i < lines.length) {
-    const headerLine = lines[i] as string;
-    const headerLines: string[] = [headerLine];
-    const facts: HeaderFacts = { kind: 'modified', binary: false };
-    i += 1;
-
-    while (i < lines.length) {
-      const line = lines[i] as string;
-      if (line.startsWith(FILE_HEADER) || line.startsWith('@@ ')) break;
-      rejectCombined(line);
-      readHeaderLine(line, facts);
-      headerLines.push(line);
+    const line = lines[i] as string;
+    if (line.startsWith(FILE_HEADER)) {
+      const entry = parseFileEntry(lines, i);
+      files.push(entry.file);
+      i = entry.next;
+    } else if (isCombinedHeader(line)) {
+      const entry = parseCombinedEntry(lines, i);
+      files.push(entry.file);
+      i = entry.next;
+    } else if (line.startsWith(UNMERGED_NOTICE)) {
+      files.push(parseUnmergedNotice(line));
       i += 1;
+    } else if (line.length === 0) {
+      // Git never writes a blank line between entries; tolerating one only at
+      // the very top keeps `git show` usable without a `--format=`.
+      i += 1;
+    } else {
+      // Everything else is rejected rather than skipped: a skipped line is a
+      // change the user never sees. `Submodule <name> <a>..<b>:` from
+      // `diff.submodule` is the case that motivated this — see commands/diff.ts.
+      fail(`Unrecognised line ${i + 1} in diff output: ${excerpt(line)}`);
     }
-
-    const hunks: Hunk[] = [];
-    while (i < lines.length && (lines[i] as string).startsWith('@@ ')) {
-      const header = lines[i] as string;
-      const counts = parseHunkHeader(header);
-      const body = parseHunkBody(lines, i + 1, counts);
-      hunks.push({ header, ...counts, lines: body.lines });
-      i = body.next;
-    }
-
-    if (i < lines.length && !(lines[i] as string).startsWith(FILE_HEADER)) {
-      fail(`Unexpected line between files: ${JSON.stringify(lines[i])}`);
-    }
-
-    // No `---`/`+++` lines for mode-only changes, pure renames, binary files
-    // and empty new files; the `diff --git` line is the only path source left.
-    // Read it only when something is still missing — it is the ambiguous one.
-    let oldPath = facts.oldPath;
-    let newPath = facts.newPath;
-    if (oldPath === undefined || newPath === undefined) {
-      const fallback = parseFileHeaderPaths(headerLine);
-      oldPath ??= fallback.oldPath;
-      newPath ??= fallback.newPath;
-    }
-
-    files.push({
-      oldPath,
-      newPath,
-      kind: facts.kind,
-      binary: facts.binary,
-      headerLines,
-      hunks,
-    });
   }
 
   return files;
