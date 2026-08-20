@@ -91,9 +91,18 @@ jobs:
         timeout-minutes: 20
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
-      - name: Rust tests
-        # One thread and unbuffered output: if a test hangs, the last line in
-        # the log names it. In parallel with captured output it names nothing.
+      # Two timeouts on purpose. GitHub's `timeout-minutes` did not fire on a
+      # hung Linux job (the step ran 35 minutes past a 20-minute limit and the
+      # log never published), so the OS one is what guarantees the step ends and
+      # the log becomes readable. One thread and unbuffered output mean the last
+      # line names the test that hung.
+      - name: Rust tests (unix)
+        if: matrix.os != 'windows-latest'
+        timeout-minutes: 20
+        run: timeout --signal=KILL 900 cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1 --nocapture
+
+      - name: Rust tests (windows)
+        if: matrix.os == 'windows-latest'
         timeout-minutes: 20
         run: cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1 --nocapture
 

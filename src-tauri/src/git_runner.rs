@@ -424,17 +424,21 @@ mod tests {
 
     #[test]
     fn a_hanging_child_is_killed_and_the_call_returns() {
-        use std::net::TcpListener;
+        use std::net::{TcpListener, TcpStream};
 
         let dir = temp_dir("timeout");
         // A local listener that accepts and never answers makes git's own
         // protocol hang deterministically, with no network and no sleep binary.
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        let accepted = std::thread::spawn(move || {
-            // Hold the connection open without writing anything.
+        let (release, wait_for_release) = mpsc::channel::<()>();
+
+        let server = std::thread::spawn(move || {
+            // Hold whatever connects until the test says it is done. Sleeping a
+            // fixed span instead would leave a thread running past the test and,
+            // on a loaded machine, past the whole binary.
             if let Ok((stream, _)) = listener.accept() {
-                std::thread::sleep(Duration::from_secs(20));
+                let _ = wait_for_release.recv_timeout(Duration::from_secs(30));
                 drop(stream);
             }
         });
@@ -450,13 +454,19 @@ mod tests {
         .unwrap();
         let elapsed = started.elapsed();
 
+        // Release the server and make sure it is finished before returning: a
+        // thread still blocked in `accept()` outlives the test, and the harness
+        // has no way to know about it.
+        let _ = release.send(());
+        let _ = TcpStream::connect(("127.0.0.1", port));
+        let _ = server.join();
+
         assert!(out.timed_out, "a hanging child must be reported as timed out");
         assert_eq!(out.code, None, "a killed child has no exit code");
         assert!(
             elapsed < timeout + PIPE_GRACE + Duration::from_secs(3),
             "call took {elapsed:?}, so the kill or the pipe wait is unbounded"
         );
-        drop(accepted);
         std::fs::remove_dir_all(&dir).ok();
     }
 
