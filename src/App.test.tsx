@@ -258,6 +258,20 @@ describe('App', () => {
   });
 });
 
+it('offers a refresh the user can find, not only a shortcut', async () => {
+  // A filesystem watch can miss a change — a network share, an editor that
+  // writes through a temporary file, a burst that overflows the OS buffer.
+  // Ctrl+R has always re-read the repository; discovering it at the moment
+  // you need it is the hard part.
+  const store = createStore();
+  store.dispatch({ type: 'repo/opened', repo: REPO });
+  renderApp(store);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+  await waitFor(() => expect(refreshAllPanels).toHaveBeenCalledWith(store));
+});
+
 describe('App layout', () => {
   const stop = vi.fn();
 

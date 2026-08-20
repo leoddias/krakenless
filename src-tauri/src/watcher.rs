@@ -5,6 +5,7 @@
 //! lets the TypeScript layer decide what to re-read.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -83,19 +84,33 @@ fn is_interesting(event: notify::Result<notify::Event>) -> bool {
     }
 }
 
+/// Hands out a fresh identity for every watch that is started.
+static NEXT_TOKEN: AtomicU64 = AtomicU64::new(1);
+
+/// The watch currently in force, and the token that owns it.
+///
+/// The token exists because stopping is not "stop whatever is running": two
+/// watches overlap whenever the UI re-runs its effect (React's StrictMode does
+/// this on every mount in development) or the user opens a second repository
+/// while the first is still starting. Both call `watch_repo`, then the *first*
+/// one's teardown arrives — and without an identity it would tear down the
+/// second one's watch, leaving the app watching nothing at all and silently
+/// blind to every change made outside it.
 #[derive(Default)]
 pub struct WatcherState {
-    inner: Mutex<Option<RecommendedWatcher>>,
+    inner: Mutex<Option<(u64, RecommendedWatcher)>>,
 }
 
 /// Starts watching `path`, replacing any previous watch. Emits
 /// [`REPO_CHANGED_EVENT`] to the frontend when the working tree changes.
+///
+/// Returns the token that identifies this watch; pass it to [`unwatch_repo`].
 #[tauri::command]
 pub fn watch_repo(
     app: tauri::AppHandle,
     state: tauri::State<'_, WatcherState>,
     path: String,
-) -> Result<(), WatchError> {
+) -> Result<u64, WatchError> {
     let root = PathBuf::from(&path);
     if !root.is_dir() {
         return Err(WatchError::BadPath(format!("not a directory: {path}")));
@@ -120,21 +135,41 @@ pub fn watch_repo(
         }
     });
 
+    let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
     // Dropping the previous watcher stops the previous watch.
     *state
         .inner
         .lock()
-        .map_err(|e| WatchError::WatchFailed(e.to_string()))? = Some(watcher);
-    Ok(())
+        .map_err(|e| WatchError::WatchFailed(e.to_string()))? = Some((token, watcher));
+    Ok(token)
 }
 
-/// Stops watching. Safe to call when nothing is being watched.
+/// True when `token` still owns the watch recorded in `current`.
+///
+/// Its own function so the rule can be tested: the watcher it guards cannot be
+/// constructed without a real filesystem, and this decision is the whole reason
+/// the token exists.
+fn owns(current: Option<u64>, token: u64) -> bool {
+    current == Some(token)
+}
+
+/// Stops the watch named by `token`, and only that one.
+///
+/// A token that no longer owns the current watch is a teardown that lost its
+/// race with a newer watch; it is a no-op rather than an error, because the
+/// caller did nothing wrong and the newer watch must survive.
 #[tauri::command]
-pub fn unwatch_repo(state: tauri::State<'_, WatcherState>) -> Result<(), WatchError> {
-    *state
+pub fn unwatch_repo(
+    state: tauri::State<'_, WatcherState>,
+    token: u64,
+) -> Result<(), WatchError> {
+    let mut current = state
         .inner
         .lock()
-        .map_err(|e| WatchError::WatchFailed(e.to_string()))? = None;
+        .map_err(|e| WatchError::WatchFailed(e.to_string()))?;
+    if owns(current.as_ref().map(|(owner, _)| *owner), token) {
+        *current = None;
+    }
     Ok(())
 }
 
@@ -241,5 +276,24 @@ mod tests {
         let (tx, rx) = channel::<notify::Result<notify::Event>>();
         drop(tx);
         assert_eq!(coalesce(&rx), None);
+    }
+
+    #[test]
+    fn a_token_only_stops_the_watch_it_names() {
+        // Two watches overlap whenever the UI re-runs the effect that owns them
+        // (React's StrictMode does this on every mount in development). The
+        // first teardown then arrives *after* the second watch has started, and
+        // without an identity it would stop the wrong one — leaving the app
+        // watching nothing and blind to every change made outside it.
+        let first = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
+        let second = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
+        assert_ne!(first, second, "every watch needs its own identity");
+
+        assert!(owns(Some(second), second), "the current watch stops itself");
+        assert!(
+            !owns(Some(second), first),
+            "a late teardown must not stop the watch that replaced it"
+        );
+        assert!(!owns(None, first), "stopping twice is a no-op, not an error");
     }
 }

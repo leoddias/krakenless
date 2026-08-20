@@ -209,6 +209,30 @@ describe('actions', () => {
     expect(store.getState().selection.commitOid).toBe('9f1c2ab');
   });
 
+  it('re-reads the status when the working tree is selected', async () => {
+    // The status and the diff are two commands answering one question. Reading
+    // only the diff is how the working-tree panel ends up saying "clean" beside
+    // a diff that lists a modified file.
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+    getStatus.mockClear();
+
+    await selectCommit(store, null);
+
+    expect(getStatus).toHaveBeenCalledWith(REPO.root);
+    expect(getWorktreeDiff).toHaveBeenCalled();
+  });
+
+  it('does not re-read the status for a commit, which cannot have changed', async () => {
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+    getStatus.mockClear();
+
+    await selectCommit(store, '9f1c2ab');
+
+    expect(getStatus).not.toHaveBeenCalled();
+  });
+
   it('does nothing when no repository is open', async () => {
     const store = createStore();
     await refreshDiff(store);

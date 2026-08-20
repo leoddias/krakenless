@@ -155,10 +155,20 @@ export async function refreshDiff(store: Store): Promise<void> {
   }
 }
 
-/** Selects a commit (or the working tree, with `null`) and loads its diff. */
+/**
+ * Selects a commit (or the working tree, with `null`) and loads its diff.
+ *
+ * Selecting the working tree re-reads the *status* as well, not just the diff.
+ * They are two different git commands answering one question, and refreshing
+ * only one of them is how the working-tree panel ends up saying "clean" while
+ * the diff beside it lists a modified file. A commit needs no status: it is
+ * history, and nothing about it can have changed since the list was read.
+ */
 export async function selectCommit(store: Store, oid: string | null): Promise<void> {
   store.dispatch({ type: 'selection/commit', oid });
-  await refreshDiff(store);
+  await (oid === null
+    ? Promise.all([refreshStatus(store), refreshDiff(store)])
+    : refreshDiff(store));
 }
 
 export function closeRepo(store: Store): void {

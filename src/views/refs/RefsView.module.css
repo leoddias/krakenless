@@ -157,13 +157,25 @@
   color: var(--faint);
 }
 
-.empty,
-.hint {
+.empty {
   margin: 0;
   padding: 0.25rem 0.75rem 0.4rem;
   color: var(--faint);
   font-size: 0.75rem;
   line-height: 1.45;
+}
+
+/* Sits inside a row next to the branch name, so it yields space rather than
+   taking it: the name is the thing being identified. */
+.hint {
+  margin: 0;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--faint);
+  font-size: 0.6875rem;
 }
 
 .list {
@@ -210,7 +222,9 @@
   align-items: center;
   gap: 0.4rem;
   flex: 1 1 auto;
-  min-width: 0;
+  /* Shrinks before the row's controls do, but never below a readable stub:
+     a name clipped to "or" is worse than no name at all. */
+  min-width: 8ch;
   padding: 0.1rem 0.2rem;
   border: 0;
   border-radius: var(--radius);
@@ -220,9 +234,17 @@
   font-size: 0.8125rem;
   text-align: left;
   overflow: hidden;
+  cursor: pointer;
+}
+
+/* The text needs its own box: `text-overflow` does nothing to the anonymous
+   flex item a bare text node becomes, so the name was being clipped
+   mid-character with no ellipsis to show for it. */
+.nameText {
+  min-width: 0;
+  overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  cursor: pointer;
 }
 
 .name:focus-visible {
@@ -361,6 +383,8 @@
 /* --- controls -------------------------------------------------------------- */
 
 .button {
+  /* Never grows or shrinks: the row's width belongs to the branch name. */
+  flex: none;
   padding: 0.1rem 0.4rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);

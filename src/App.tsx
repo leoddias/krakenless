@@ -15,7 +15,13 @@ import { RefsView } from './views/refs';
 import { resolveShortcut } from './views/shell/shortcuts';
 import { RemoteBar } from './views/remote';
 import { NoticeBar } from './views/shell';
-import { ChevronRightIcon, CloseIcon, RepoIcon, SettingsIcon } from './views/shell/icons';
+import {
+  ChevronRightIcon,
+  CloseIcon,
+  RefreshIcon,
+  RepoIcon,
+  SettingsIcon,
+} from './views/shell/icons';
 import { Splitter } from './views/shell/Splitter';
 import { HistoryView } from './views/history/HistoryView';
 import { WelcomeView } from './views/welcome';
@@ -110,6 +116,7 @@ function Toolbar({
   name: string;
   onOpenSettings: () => void;
 }): ReactNode {
+  const store = useStore();
   const status = useAppState((state) => state.status);
   const branch = branchText(status);
 
@@ -144,6 +151,22 @@ function Toolbar({
       <RemoteBar />
 
       <div className="toolbar__right">
+        {/*
+          The panels follow the repository on their own, but a filesystem watch
+          can miss a change — a network share, an editor that writes through a
+          temporary file, a burst that overflows the OS buffer. Ctrl+R has
+          always done this; without a button it was a shortcut nobody could
+          discover at the moment they needed it.
+        */}
+        <button
+          type="button"
+          className="icon-button"
+          aria-label="Refresh"
+          title="Re-read the repository (Ctrl+R)"
+          onClick={() => void refreshAllPanels(store)}
+        >
+          <RefreshIcon />
+        </button>
         <button
           type="button"
           className="icon-button"

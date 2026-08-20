@@ -311,6 +311,27 @@ describe('branch list', () => {
     expect(createMock).toHaveBeenCalledWith(store, 'main', 'origin/main');
   });
 
+  it('keeps the branch name out of the button, so the row can show it', () => {
+    // The visible label used to be "Check out as <branch>", which made every
+    // row's button a different width. The button never shrinks, so the branch
+    // name beside it was squeezed down to two or three letters — the one thing
+    // the row exists to show. The name belongs to the accessible name and the
+    // tooltip, not to the visible label.
+    renderRefs((store) => {
+      store.dispatch({
+        type: 'branches/loaded',
+        branches: [
+          branch({ name: 'origin/feat/a-rather-long-branch-name', remote: true }),
+        ],
+      });
+    });
+
+    const button = screen.getByRole('button', {
+      name: 'Check out as feat/a-rather-long-branch-name',
+    });
+    expect(button).toHaveTextContent(/^Check out$/);
+  });
+
   it('says so when checking a remote branch out did not happen', async () => {
     const store = renderLoaded();
     createMock.mockImplementation(async () => {

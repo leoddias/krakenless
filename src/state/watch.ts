@@ -45,14 +45,20 @@ export async function watchRepository(store: Store, root: string): Promise<Watch
     timer = setTimeout(refresh, REFRESH_DELAY_MS);
   });
 
-  await invoke('watch_repo', { path: root });
+  // The token identifies *this* watch. Two watches overlap whenever the effect
+  // that owns them re-runs (React's StrictMode does exactly that on every mount
+  // in development) — and an untokenized stop would tear down whichever watch
+  // happened to be current, which is usually the newer one. The app would then
+  // be watching nothing, and every change made outside it would go unnoticed
+  // until the user clicked something.
+  const token = await invoke<number>('watch_repo', { path: root });
 
   return {
     async stop() {
       stopped = true;
       if (timer !== null) clearTimeout(timer);
       unlisten();
-      await invoke('unwatch_repo').catch(() => {
+      await invoke('unwatch_repo', { token }).catch(() => {
         // Nothing to unwatch is not a failure worth surfacing.
       });
       await running;

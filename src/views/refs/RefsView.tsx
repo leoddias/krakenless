@@ -712,7 +712,7 @@ function RemoteRow({
         <span aria-hidden="true" className={styles.marker}>
           ○
         </span>
-        {branch.name}
+        <span className={styles.nameText}>{branch.name}</span>
       </span>
       <Divergence branch={branch} />
       {local === null ? (
@@ -722,10 +722,18 @@ function RemoteRow({
           type="button"
           className={styles.button}
           disabled={busy}
+          // The visible label is fixed-width on purpose. It used to name the
+          // branch, which made every row's button a different width — and
+          // since the button never shrinks, the branch name beside it was
+          // squeezed down to two or three letters. The name is what the row
+          // exists to show, so it moves into the accessible name and the
+          // tooltip, which is also what keeps two rows' buttons apart for a
+          // screen reader.
+          aria-label={`Check out as ${local}`}
           title={`Create local branch ${local} from ${branch.name} and switch to it`}
           onClick={() => void checkout(local)}
         >
-          Check out as {local}
+          Check out
         </button>
       )}
       {error !== null && (

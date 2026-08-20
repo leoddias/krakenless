@@ -20,7 +20,10 @@ describe('watchRepository', () => {
     vi.useFakeTimers();
     vi.resetAllMocks();
     unlisten = vi.fn();
-    invoke.mockResolvedValue(undefined);
+    // `watch_repo` answers with the token that identifies the watch.
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(command === 'watch_repo' ? 7 : undefined),
+    );
     listen.mockImplementation((_event: string, handler: () => void) => {
       emit = handler;
       return Promise.resolve(unlisten);
@@ -88,7 +91,7 @@ describe('watchRepository', () => {
     await handle.stop();
 
     expect(unlisten).toHaveBeenCalledTimes(1);
-    expect(invoke).toHaveBeenCalledWith('unwatch_repo');
+    expect(invoke).toHaveBeenCalledWith('unwatch_repo', { token: 7 });
 
     emit();
     await vi.advanceTimersByTimeAsync(REFRESH_DELAY_MS * 4);
@@ -108,5 +111,26 @@ describe('watchRepository', () => {
     const handle = await watchRepository(createStore(), 'C:/repos/app');
     invoke.mockRejectedValueOnce(new Error('nothing to unwatch'));
     await expect(handle.stop()).resolves.toBeUndefined();
+  });
+
+  it('stops the watch it started, not whichever one is current', async () => {
+    // Two watches overlap whenever the effect that owns them re-runs — React's
+    // StrictMode does exactly that on every mount in development. Without the
+    // token, the first teardown tears down the *second* watch, and the app is
+    // then blind to every change made outside it.
+    let next = 1;
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(command === 'watch_repo' ? next++ : undefined),
+    );
+
+    const first = await watchRepository(createStore(), 'C:/repos/app');
+    const second = await watchRepository(createStore(), 'C:/repos/app');
+    await first.stop();
+
+    expect(invoke).toHaveBeenCalledWith('unwatch_repo', { token: 1 });
+    expect(invoke).not.toHaveBeenCalledWith('unwatch_repo', { token: 2 });
+
+    await second.stop();
+    expect(invoke).toHaveBeenCalledWith('unwatch_repo', { token: 2 });
   });
 });
