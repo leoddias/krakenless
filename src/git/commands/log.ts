@@ -3,27 +3,28 @@ import { GitError } from '../errors';
 import type { GitCommand } from '../types';
 
 /**
- * Field separator: ASCII US (0x1f). Record separator: ASCII RS (0x1e).
+ * Separator between fields *and* between commits: ASCII NUL.
  *
- * Commit subjects and bodies are arbitrary user text: a newline, a tab, a
- * comma or a `|` all appear in real messages, so none of them can delimit
- * fields. The two ASCII "separator" control characters are the closest thing
- * git offers to a byte that never occurs — but "never" is not "cannot": git
- * stores the message bytes verbatim, and a commit *can* carry a 0x1f or 0x1e
- * (verified with git 2.39). The layout below is therefore built so that any
- * such collision changes the field count of a record instead of silently
- * shifting values into the wrong fields, and {@link parseLog} rejects it.
+ * Commit subjects and bodies are arbitrary user text, so no printable
+ * character can delimit them. The ASCII "separator" controls (0x1e/0x1f) are
+ * not enough either: git stores message bytes verbatim, and a commit really
+ * can carry them (verified with git 2.39) — a crafted message could then forge
+ * a whole extra record, complete with its own oid and a
+ * `HEAD -> refs/heads/main` decoration. NUL is the one byte git refuses to
+ * store: `git commit` answers "a NUL byte in commit log message not allowed"
+ * and writes no object.
+ *
+ * `-z` makes git terminate every record with NUL and `%x00` separates the
+ * fields, so the whole output is one flat NUL-separated stream with a fixed
+ * number of fields per commit. No message content can create or move a
+ * boundary; a stream whose length is not a multiple of the field count is
+ * rejected rather than realigned.
  */
-export const LOG_FIELD_SEPARATOR = '\u001f';
-export const LOG_RECORD_SEPARATOR = '\u001e';
+export const LOG_SEPARATOR = '\u0000';
 
 /**
- * Placeholders, in order. The free-text fields (`%s`, `%b`) come last so that
- * a separator smuggled inside them adds fields at the end rather than
- * corrupting the oid or dates ahead of them.
- *
- * `%D` needs `--decorate=full` to be unambiguous: in short form a tag and a
- * branch called `v1.0` decorate identically.
+ * Placeholders, in order. `%D` needs `--decorate=full`: in short form a tag
+ * and a branch called `v1.0` decorate identically.
  */
 const LOG_FIELDS = [
   '%H', // oid
@@ -39,23 +40,17 @@ const LOG_FIELDS = [
   '%b', // body without the subject
 ];
 
-/** How many fields {@link parseLog} must find in every record. */
+/** How many fields {@link parseLog} must find per commit. */
 export const LOG_FIELD_COUNT = LOG_FIELDS.length;
 
-/**
- * The record separator is a *prefix*, not a terminator: git appends a newline
- * after each record, so a trailing separator would leave a stray fragment that
- * is indistinguishable from a body collision. With a prefix, well-formed
- * output always starts with RS and every chunk after a split is a record.
- */
-export const LOG_FORMAT = `%x1e${LOG_FIELDS.join('%x1f')}`;
+export const LOG_FORMAT = LOG_FIELDS.join('%x00');
 
 export interface LogOptions {
   /** Maximum number of commits to return. Must be >= 1. */
   limit?: number;
   /** Commits to skip before the first returned one. Must be >= 0. */
   skip?: number;
-  /** Walk every ref (`--all`) instead of just HEAD. */
+  /** Walk every ref (`--all`). Mutually exclusive with {@link LogOptions.rev}. */
   allRefs?: boolean;
   /** A single revision or a range (`main`, `HEAD~5`, `main..feature`). */
   rev?: string;
@@ -88,8 +83,22 @@ function assertCount(name: string, value: number, minimum: number): number {
  * The runner already prepends `--no-pager -c core.quotePath=false`.
  */
 export function buildLogCommand(options: LogOptions = {}): GitCommand {
+  // `--all` does not narrow a revision, it *adds* every ref to the walk: asking
+  // for both would answer "the history of main" with the whole repository,
+  // interleaved by date. A caller has to say which one it means.
+  if (options.allRefs && options.rev !== undefined) {
+    throw new GitError(
+      'bad-argument',
+      'log takes either allRefs or a revision, not both',
+      {
+        args: ['log', '--all', options.rev],
+      },
+    );
+  }
+
   const args = [
     'log',
+    '-z',
     '--no-color',
     '--no-show-signature',
     '--decorate=full',

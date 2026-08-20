@@ -1,9 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   LOG_FIELD_COUNT,
-  LOG_FIELD_SEPARATOR,
   LOG_FORMAT,
-  LOG_RECORD_SEPARATOR,
+  LOG_SEPARATOR,
   buildLogCommand,
 } from '../commands/log';
 import { isDestructive } from '../destructive';
@@ -15,56 +14,57 @@ const invoke = vi.hoisted(() => vi.fn());
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
 
 /**
- * Every fixture below is verbatim stdout of `git log --decorate=full
+ * Every fixture below is verbatim stdout of `git log -z --decorate=full
  * --format=<LOG_FORMAT>` captured from a throwaway repository built with git
- * 2.39.2, not hand-written: it has a root commit, a merge, a commit with an
- * empty message, a multi-paragraph body, a CRLF body, unicode in the author
- * name and subject, a branch whose name contains a comma, an annotated tag, a
- * remote-tracking ref, a stash ref, and commits whose message really does
- * contain the field/record separators.
+ * 2.39.2, not hand-written. Between them they cover a root commit, a merge, a
+ * commit with an empty message, a multi-paragraph body, a CRLF body, unicode
+ * in the author name and subject, a branch whose name contains a comma, an
+ * annotated tag, a remote-tracking ref, a stash ref, exotic UTC offsets, and a
+ * message that tries to forge a second commit.
  */
 
 /** `git log main --` with HEAD on main: merge, body, empty message, root. */
 const HISTORY =
-  "\u001e21411ef38d01eb3ca3edb4259f794c4df8eab5ae\u001f21411ef\u001fc7809f0cfffb82d546a128e1de9225876c61f79f 3095bb2422ef76ab06d95a7d8c81a6766eae82d6\u001fÜnicode Ãuthor\u001fu@example.com\u001f2026-08-19T23:27:55-03:00\u001fÜnicode Ãuthor\u001f2026-08-19T23:27:55-03:00\u001fHEAD -> refs/heads/main, tag: refs/tags/annotated, refs/remotes/origin/main, refs/heads/comma,name\u001fMerge branch 'feature'\u001f\n" +
-  '\u001ec7809f0cfffb82d546a128e1de9225876c61f79f\u001fc7809f0\u001fae336735e994576907c2702ff1bb87f3cacdb821\u001fÜnicode Ãuthor\u001fu@example.com\u001f2026-08-19T23:27:55-03:00\u001fÜnicode Ãuthor\u001f2026-08-19T23:27:55-03:00\u001f\u001fsubject line\u001fbody line 1\nbody line 2\n\nfinal para\n\n' +
-  '\u001e3095bb2422ef76ab06d95a7d8c81a6766eae82d6\u001f3095bb2\u001fc7809f0cfffb82d546a128e1de9225876c61f79f\u001fÜnicode Ãuthor\u001fu@example.com\u001f2026-08-19T23:27:55-03:00\u001fÜnicode Ãuthor\u001f2026-08-19T23:27:55-03:00\u001frefs/heads/feature\u001f\u001f\n' +
-  '\u001eae336735e994576907c2702ff1bb87f3cacdb821\u001fae33673\u001f\u001fÜnicode Ãuthor\u001fu@example.com\u001f2026-08-19T23:27:55-03:00\u001fÜnicode Ãuthor\u001f2026-08-19T23:27:55-03:00\u001ftag: refs/tags/v1.0\u001froot commit: café ☕\u001f\n';
+  "21411ef38d01eb3ca3edb4259f794c4df8eab5ae\u000021411ef\u0000c7809f0cfffb82d546a128e1de9225876c61f79f 3095bb2422ef76ab06d95a7d8c81a6766eae82d6\u0000Ünicode Ãuthor\u0000u@example.com\u00002026-08-19T23:27:55-03:00\u0000Ünicode Ãuthor\u00002026-08-19T23:27:55-03:00\u0000HEAD -> refs/heads/main, tag: refs/tags/annotated, refs/remotes/origin/main, refs/heads/comma,name\u0000Merge branch 'feature'\u0000\u0000" +
+  'c7809f0cfffb82d546a128e1de9225876c61f79f\u0000c7809f0\u0000ae336735e994576907c2702ff1bb87f3cacdb821\u0000Ünicode Ãuthor\u0000u@example.com\u00002026-08-19T23:27:55-03:00\u0000Ünicode Ãuthor\u00002026-08-19T23:27:55-03:00\u0000\u0000subject line\u0000body line 1\nbody line 2\n\nfinal para\n\u0000' +
+  '3095bb2422ef76ab06d95a7d8c81a6766eae82d6\u00003095bb2\u0000c7809f0cfffb82d546a128e1de9225876c61f79f\u0000Ünicode Ãuthor\u0000u@example.com\u00002026-08-19T23:27:55-03:00\u0000Ünicode Ãuthor\u00002026-08-19T23:27:55-03:00\u0000refs/heads/feature\u0000\u0000\u0000' +
+  'ae336735e994576907c2702ff1bb87f3cacdb821\u0000ae33673\u0000\u0000Ünicode Ãuthor\u0000u@example.com\u00002026-08-19T23:27:55-03:00\u0000Ünicode Ãuthor\u00002026-08-19T23:27:55-03:00\u0000tag: refs/tags/v1.0\u0000root commit: café ☕\u0000\u0000';
 
-/** Same merge commit with HEAD detached on it. */
+/** The same merge commit with HEAD detached on it. */
 const DETACHED_HEAD =
-  "\u001e21411ef38d01eb3ca3edb4259f794c4df8eab5ae\u001f21411ef\u001fc7809f0cfffb82d546a128e1de9225876c61f79f 3095bb2422ef76ab06d95a7d8c81a6766eae82d6\u001fÜnicode Ãuthor\u001fu@example.com\u001f2026-08-19T23:27:55-03:00\u001fÜnicode Ãuthor\u001f2026-08-19T23:27:55-03:00\u001fHEAD, tag: refs/tags/annotated, refs/remotes/origin/main, refs/heads/main, refs/heads/comma,name\u001fMerge branch 'feature'\u001f\n";
+  "21411ef38d01eb3ca3edb4259f794c4df8eab5ae\u000021411ef\u0000c7809f0cfffb82d546a128e1de9225876c61f79f 3095bb2422ef76ab06d95a7d8c81a6766eae82d6\u0000Ünicode Ãuthor\u0000u@example.com\u00002026-08-19T23:27:55-03:00\u0000Ünicode Ãuthor\u00002026-08-19T23:27:55-03:00\u0000HEAD, tag: refs/tags/annotated, refs/remotes/origin/main, refs/heads/main, refs/heads/comma,name\u0000Merge branch 'feature'\u0000\u0000";
 
 /** A commit created with `--cleanup=verbatim` from a CRLF message file. */
 const CRLF_BODY =
-  '\u001e3274da1dcfca3dad8048b927d91e95a483bd3459\u001f3274da1\u001f069994c2bb838735f7f4fdcbbab4b7946dcba9b9\u001fÜnicode Ãuthor\u001fu@example.com\u001f2026-08-19T23:28:29-03:00\u001fÜnicode Ãuthor\u001f2026-08-19T23:28:29-03:00\u001f\u001fcrlf subject\u001fline1\r\nline2\r\n\n';
+  '3274da1dcfca3dad8048b927d91e95a483bd3459\u00003274da1\u0000069994c2bb838735f7f4fdcbbab4b7946dcba9b9\u0000Ünicode Ãuthor\u0000u@example.com\u00002026-08-19T23:28:29-03:00\u0000Ünicode Ãuthor\u00002026-08-19T23:28:29-03:00\u0000\u0000crlf subject\u0000line1\r\nline2\r\n\u0000';
 
 /** The stash commit of `git stash`, decorated with `refs/stash`. */
 const STASH_DECORATION =
-  '\u001e002fc2dde23669ec9c92b175cdeb4d6b06a5bb78\u001f002fc2d\u001fb49b1d936fb8cb72b429630d68835d1e9a1a0b0c de8e02052c6665911af32ec3ea6092bb1bcc1ff3\u001fÜnicode Ãuthor\u001fu@example.com\u001f2026-08-19T23:29:16-03:00\u001fÜnicode Ãuthor\u001f2026-08-19T23:29:16-03:00\u001frefs/stash\u001fWIP on (no branch): b49b1d9 sep subject\u001f\n';
+  '002fc2dde23669ec9c92b175cdeb4d6b06a5bb78\u0000002fc2d\u0000b49b1d936fb8cb72b429630d68835d1e9a1a0b0c de8e02052c6665911af32ec3ea6092bb1bcc1ff3\u0000Ünicode Ãuthor\u0000u@example.com\u00002026-08-19T23:29:16-03:00\u0000Ünicode Ãuthor\u00002026-08-19T23:29:16-03:00\u0000refs/stash\u0000WIP on (no branch): b49b1d9 sep subject\u0000\u0000';
 
-/** Message body containing a literal field separator (0x1f). */
-const FIELD_SEPARATOR_IN_BODY =
-  '\u001eddb2ce36ce31d8c0b08bba8fc191fc9b18813f18\u001fddb2ce3\u001f21411ef38d01eb3ca3edb4259f794c4df8eab5ae\u001fÜnicode Ãuthor\u001fu@example.com\u001f2026-08-19T23:34:12-03:00\u001fÜnicode Ãuthor\u001f2026-08-19T23:34:12-03:00\u001fHEAD\u001fus only\u001fbefore\u001fafter\n\n';
+/** A body holding the ASCII separators 0x1f and 0x1e, which git stores verbatim. */
+const CONTROL_CHARACTERS_IN_BODY =
+  'b49b1d936fb8cb72b429630d68835d1e9a1a0b0c\u0000b49b1d9\u00003274da1dcfca3dad8048b927d91e95a483bd3459\u0000Ünicode Ãuthor\u0000u@example.com\u00002026-08-19T23:28:29-03:00\u0000Ünicode Ãuthor\u00002026-08-19T23:28:29-03:00\u0000\u0000sep subject\u0000body\u001fwith US and\u001erecord sep\n\u0000';
 
-/** Message body containing a literal record separator (0x1e). */
-const RECORD_SEPARATOR_IN_BODY =
-  '\u001e0e6cc70e2cacbd5b60ae63babcf1de5ad9d014c9\u001f0e6cc70\u001fddb2ce36ce31d8c0b08bba8fc191fc9b18813f18\u001fÜnicode Ãuthor\u001fu@example.com\u001f2026-08-19T23:34:12-03:00\u001fÜnicode Ãuthor\u001f2026-08-19T23:34:12-03:00\u001fHEAD\u001frs only\u001fbefore\u001eafter\n\n';
+/**
+ * A message crafted to forge a second commit — attacker-chosen oid, author,
+ * date and a `HEAD -> refs/heads/main` decoration — using 0x1e/0x1f as
+ * separators. Committed for real, then read back.
+ */
+const FORGED_RECORD_IN_BODY =
+  'fd3dd710279e1b06828d222ae5ba187538f81aa4\u0000fd3dd71\u000021411ef38d01eb3ca3edb4259f794c4df8eab5ae\u0000Ünicode Ãuthor\u0000u@example.com\u00002026-08-19T23:51:17-03:00\u0000Ünicode Ãuthor\u00002026-08-19T23:51:17-03:00\u0000HEAD\u0000innocent subject\u0000body text\u001e0000000000000000000000000000000000000000\u001fbbbbbbb\u001f\u001fTrusted Maintainer\u001fmaint@example.com\u001f2026-08-19T10:00:00-03:00\u001fTrusted Maintainer\u001f2026-08-19T10:00:00-03:00\u001fHEAD -> refs/heads/main\u001fMerge pull request #12\u001f\n\u0000';
 
-/** Both separators at once, as `git log --all` returned them. */
-const BOTH_SEPARATORS_IN_BODY =
-  '\u001eb49b1d936fb8cb72b429630d68835d1e9a1a0b0c\u001fb49b1d9\u001f3274da1dcfca3dad8048b927d91e95a483bd3459\u001fÜnicode Ãuthor\u001fu@example.com\u001f2026-08-19T23:28:29-03:00\u001fÜnicode Ãuthor\u001f2026-08-19T23:28:29-03:00\u001f\u001fsep subject\u001fbody\u001fwith US and\u001erecord sep\n\n';
+/** `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE` with half-hour offsets. */
+const ODD_TIMEZONES =
+  'e3ff04f73220fdb22d6cf0594e458df1ee279304\u0000e3ff04f\u0000fd3dd710279e1b06828d222ae5ba187538f81aa4\u0000Ünicode Ãuthor\u0000u@example.com\u00002005-04-07T22:13:13+01:30\u0000Ünicode Ãuthor\u00002005-04-07T22:13:13-09:30\u0000HEAD\u0000odd offset\u0000\u0000';
 
-describe('log format constants', () => {
-  it('uses ASCII control characters git cannot produce accidentally', () => {
-    expect(LOG_FIELD_SEPARATOR).toBe(String.fromCharCode(0x1f));
-    expect(LOG_RECORD_SEPARATOR).toBe(String.fromCharCode(0x1e));
-  });
-
-  it('starts every record with the record separator and lists free text last', () => {
-    expect(LOG_FORMAT.startsWith('%x1e')).toBe(true);
-    expect(LOG_FORMAT.split('%x1f')).toHaveLength(LOG_FIELD_COUNT);
-    expect(LOG_FORMAT.endsWith('%s%x1f%b')).toBe(true);
+describe('log format', () => {
+  it('separates fields and records with the one byte git cannot store', () => {
+    // `git commit` refuses a message containing NUL: "a NUL byte in commit log
+    // message not allowed" (verified with git 2.39).
+    expect(LOG_SEPARATOR).toBe(String.fromCharCode(0));
+    expect(LOG_FORMAT.split('%x00')).toHaveLength(LOG_FIELD_COUNT);
+    expect(LOG_FORMAT).not.toContain('%x1e');
   });
 });
 
@@ -72,6 +72,7 @@ describe('buildLogCommand', () => {
   it('emits the hardened default invocation', () => {
     expect(buildLogCommand().args).toEqual([
       'log',
+      '-z',
       '--no-color',
       '--no-show-signature',
       '--decorate=full',
@@ -85,11 +86,10 @@ describe('buildLogCommand', () => {
     expect(buildLogCommand().destructive).toBeUndefined();
   });
 
-  it('adds all-refs, limit, skip and the revision in a stable order', () => {
-    expect(
-      buildLogCommand({ allRefs: true, limit: 50, skip: 100, rev: 'main..feature' }).args,
-    ).toEqual([
+  it('adds all-refs, limit and skip in a stable order', () => {
+    expect(buildLogCommand({ allRefs: true, limit: 50, skip: 100 }).args).toEqual([
       'log',
+      '-z',
       '--no-color',
       '--no-show-signature',
       '--decorate=full',
@@ -97,9 +97,24 @@ describe('buildLogCommand', () => {
       '--all',
       '--max-count=50',
       '--skip=100',
+      '--',
+    ]);
+  });
+
+  it('puts a revision last, before the pathspec separator', () => {
+    expect(buildLogCommand({ limit: 20, rev: 'main..feature' }).args.slice(-3)).toEqual([
+      '--max-count=20',
       'main..feature',
       '--',
     ]);
+  });
+
+  it('refuses to combine all-refs with a revision', () => {
+    // `--all` widens the walk instead of narrowing it, so the answer to "the
+    // log of main" would silently be the whole repository.
+    expect(() => buildLogCommand({ allRefs: true, rev: 'main' })).toThrow(
+      /either allRefs or a revision/,
+    );
   });
 
   it('allows skipping nothing but not a zero or negative limit', () => {
@@ -112,8 +127,8 @@ describe('buildLogCommand', () => {
   });
 
   it('refuses a revision that would become an option', () => {
-    // `git branch --all` is a legal branch name; as a bare argument it would
-    // silently turn into a flag and widen the walk to every ref.
+    // `--all` is a legal branch name; as a bare argument it would silently turn
+    // into a flag and widen the walk to every ref.
     for (const rev of ['--all', '-n1', '']) {
       let caught: unknown;
       try {
@@ -210,6 +225,12 @@ describe('parseLog', () => {
     expect(commit?.body).toBe('line1\r\nline2');
   });
 
+  it('accepts half-hour offsets in dates', () => {
+    const [commit] = parseLog(ODD_TIMEZONES);
+    expect(commit?.authorDate).toBe('2005-04-07T22:13:13+01:30');
+    expect(commit?.committerDate).toBe('2005-04-07T22:13:13-09:30');
+  });
+
   it('reads a detached HEAD as a bare HEAD ref', () => {
     expect(parseLog(DETACHED_HEAD)[0]?.refs).toEqual([
       { kind: 'head', name: 'HEAD' },
@@ -226,44 +247,65 @@ describe('parseLog', () => {
     expect(parseLog(STASH_DECORATION)[0]?.refs).toEqual([]);
   });
 
+  it('treats the ASCII separators in a body as ordinary text', () => {
+    const commits = parseLog(CONTROL_CHARACTERS_IN_BODY);
+    expect(commits).toHaveLength(1);
+    expect(commits[0]?.body).toBe('body\u001fwith US and\u001erecord sep');
+  });
+
+  it('cannot be made to invent a commit from a crafted message', () => {
+    // The body carries a complete fake record. With a NUL boundary it stays
+    // body text: no extra commit, no forged oid, no forged decoration.
+    const commits = parseLog(FORGED_RECORD_IN_BODY);
+    expect(commits).toHaveLength(1);
+    expect(commits[0]?.oid).toBe('fd3dd710279e1b06828d222ae5ba187538f81aa4');
+    expect(commits[0]?.subject).toBe('innocent subject');
+    expect(commits[0]?.refs).toEqual([{ kind: 'head', name: 'HEAD' }]);
+    expect(commits[0]?.body).toContain('Merge pull request #12');
+  });
+
   it('returns nothing for the empty output of a repository without commits', () => {
     expect(parseLog('')).toEqual([]);
-    expect(parseLog('\n')).toEqual([]);
   });
 
-  it('rejects a body containing the field separator', () => {
-    expect(() => parseLog(FIELD_SEPARATOR_IN_BODY)).toThrow(GitError);
-    expect(() => parseLog(FIELD_SEPARATOR_IN_BODY)).toThrow(/Expected 11 fields/);
-  });
-
-  it('rejects a body containing the record separator', () => {
-    // The tail of the split looks like a second, one-field commit.
-    expect(() => parseLog(RECORD_SEPARATOR_IN_BODY)).toThrow(GitError);
-  });
-
-  it('rejects a body containing both separators', () => {
-    expect(() => parseLog(BOTH_SEPARATORS_IN_BODY)).toThrow(GitError);
-  });
-
-  it('reports separator collisions as parse-failed', () => {
+  it('rejects output whose last record is not terminated', () => {
+    // What a killed or truncated git leaves behind: a record cut short with no
+    // final NUL. Accepting it would hand the UI a half-read commit.
     let caught: unknown;
     try {
-      parseLog(RECORD_SEPARATOR_IN_BODY);
+      parseLog(CONTROL_CHARACTERS_IN_BODY.slice(0, -1));
     } catch (error) {
       caught = error;
     }
+    expect(caught).toBeInstanceOf(GitError);
     expect((caught as GitError).kind).toBe('parse-failed');
+    expect((caught as GitError).message).toMatch(/record terminator/);
   });
 
-  it('rejects output that does not start with a record separator', () => {
-    expect(() => parseLog(`gpg: Signature made Mon\n${HISTORY}`)).toThrow(
-      /did not start with the record separator/,
-    );
+  it('rejects a stream that does not divide into whole records', () => {
+    const fields = HISTORY.split('\u0000');
+    const truncated = `${fields.slice(0, 15).join('\u0000')}\u0000`;
+    let caught: unknown;
+    try {
+      parseLog(truncated);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(GitError);
+    expect((caught as GitError).kind).toBe('parse-failed');
+    expect((caught as GitError).message).toMatch(/not a multiple of 11/);
   });
 
   it('rejects a record whose object name is not an object name', () => {
     const broken = HISTORY.replace('21411ef38d01eb3ca3edb4259f794c4df8eab5ae', 'HEAD');
-    expect(() => parseLog(broken)).toThrow(/Unexpected object name/);
+    let caught: unknown;
+    try {
+      parseLog(broken);
+    } catch (error) {
+      caught = error;
+    }
+    expect((caught as GitError).kind).toBe('parse-failed');
+    expect((caught as GitError).message).toMatch(/Unexpected object name/);
   });
 
   it('rejects a parent that is not an object name', () => {
@@ -271,9 +313,26 @@ describe('parseLog', () => {
     expect(() => parseLog(broken)).toThrow(/Unexpected parent object name/);
   });
 
-  it('rejects a record with a missing date', () => {
-    const broken = HISTORY.split('2026-08-19T23:27:55-03:00').join('');
-    expect(() => parseLog(broken)).toThrow(/without dates/);
+  it('rejects a record whose dates are not ISO 8601', () => {
+    const broken = HISTORY.split('2026-08-19T23:27:55-03:00').join('Tue Aug 19 23:27:55');
+    expect(() => parseLog(broken)).toThrow(/without ISO 8601 dates/);
+  });
+
+  it('never puts message text into a parse error', () => {
+    // A misaligned stream lands commit message text in the oid field; the
+    // error must describe the shape, not echo private content.
+    const broken = HISTORY.replace(
+      '21411ef38d01eb3ca3edb4259f794c4df8eab5ae',
+      'secret internal subject',
+    );
+    let caught: unknown;
+    try {
+      parseLog(broken);
+    } catch (error) {
+      caught = error;
+    }
+    expect((caught as GitError).message).not.toContain('secret internal subject');
+    expect((caught as GitError).message).toMatch(/23 chars/);
   });
 });
 
@@ -353,5 +412,17 @@ describe('readLog', () => {
     });
 
     await expect(readLog('C:/repo', { rev: 'nope' })).rejects.toBeInstanceOf(GitError);
+  });
+
+  it('does not turn a parse failure into an empty history', async () => {
+    invoke.mockResolvedValue({
+      stdout: 'not our format at all',
+      stderr: '',
+      code: 0,
+      timed_out: false,
+      stdout_lossy: false,
+    });
+
+    await expect(readLog('C:/repo')).rejects.toMatchObject({ kind: 'parse-failed' });
   });
 });

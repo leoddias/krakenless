@@ -1,8 +1,4 @@
-import {
-  LOG_FIELD_COUNT,
-  LOG_FIELD_SEPARATOR,
-  LOG_RECORD_SEPARATOR,
-} from '../commands/log';
+import { LOG_FIELD_COUNT, LOG_SEPARATOR } from '../commands/log';
 import { GitError } from '../errors';
 import type { Commit, CommitRef } from '../types';
 
@@ -12,6 +8,14 @@ const LOG_ARGS = ['log'];
 const FULL_OID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 const ABBREVIATED_OID = /^[0-9a-f]{4,64}$/;
 
+/** What `%aI`/`%cI` emit: strict ISO 8601 with an explicit offset. */
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})$/;
+
+/**
+ * Parse errors describe the *shape* of what arrived, never its content: a
+ * misaligned stream puts commit message text in these fields, and messages are
+ * private data that must not end up in a log line.
+ */
 function fail(message: string): never {
   throw new GitError('parse-failed', message, { args: LOG_ARGS });
 }
@@ -87,28 +91,17 @@ function parseParents(field: string): string[] {
   const parents = field.split(' ');
   for (const parent of parents) {
     if (!FULL_OID.test(parent)) {
-      fail(`Unexpected parent object name in git log output: ${JSON.stringify(parent)}`);
+      fail(`Unexpected parent object name in git log output (${parent.length} chars)`);
     }
   }
   return parents;
 }
 
-function parseRecord(record: string): Commit {
-  const fields = record.split(LOG_FIELD_SEPARATOR);
-  if (fields.length !== LOG_FIELD_COUNT) {
-    // The only way to get here with output from our own format is a commit
-    // message containing a separator character. Guessing which field moved
-    // would put a message fragment in an oid, so refuse instead.
-    fail(
-      `Expected ${LOG_FIELD_COUNT} fields per commit, got ${fields.length}; ` +
-        'a commit message may contain the record separator',
-    );
-  }
-
+function parseRecord(fields: string[]): Commit {
   const field = (index: number): string => {
     const value = fields[index];
-    // Unreachable after the length check above; keeps the types honest without
-    // an assertion that could hide a real gap later.
+    // Unreachable: records are sliced at exactly LOG_FIELD_COUNT. Kept so the
+    // types stay honest without an assertion that could hide a real gap.
     if (value === undefined) fail(`Missing field ${index} in git log output`);
     return value;
   };
@@ -118,16 +111,19 @@ function parseRecord(record: string): Commit {
   const authorDate = field(5);
   const committerDate = field(7);
 
+  // These four are what tells a correctly aligned stream from a shifted one.
+  // Everything after them is free text that cannot be validated, so if the
+  // alignment is wrong it has to be caught here.
   if (!FULL_OID.test(oid)) {
-    fail(`Unexpected object name in git log output: ${JSON.stringify(oid)}`);
+    fail(`Unexpected object name in git log output (${oid.length} chars)`);
   }
   if (!ABBREVIATED_OID.test(shortOid)) {
     fail(
-      `Unexpected abbreviated object name in git log output: ${JSON.stringify(shortOid)}`,
+      `Unexpected abbreviated object name in git log output (${shortOid.length} chars)`,
     );
   }
-  if (authorDate.length === 0 || committerDate.length === 0) {
-    fail(`git log returned a commit without dates: ${oid}`);
+  if (!ISO_DATE.test(authorDate) || !ISO_DATE.test(committerDate)) {
+    fail(`git log returned a commit without ISO 8601 dates: ${oid}`);
   }
 
   return {
@@ -140,31 +136,41 @@ function parseRecord(record: string): Commit {
     committerName: field(6),
     committerDate,
     subject: field(9),
-    // `%b` keeps the message's own trailing newlines and git appends one more
-    // after every record. Trailing blank lines are formatting, not content;
-    // interior blank lines and CRLF are kept verbatim.
+    // `%b` keeps the message's own trailing newlines. Trailing blank lines are
+    // formatting, not content; interior blank lines and CRLF stay verbatim.
     body: field(10).replace(/(?:\r?\n)+$/, ''),
     refs: parseDecorations(field(8)),
   };
 }
 
 /**
- * Parses the stdout of {@link buildLogCommand} into commits, newest first.
+ * Parses the stdout of `buildLogCommand` into commits, newest first.
  *
  * Pure: takes the whole output as a string, throws {@link GitError}
- * `parse-failed` on anything it does not fully understand.
+ * `parse-failed` on anything it does not fully understand. With `-z` the
+ * output is a flat NUL-separated stream, so the only thing to check is that it
+ * divides evenly into records — a commit message cannot contain a NUL, so it
+ * cannot shift a boundary.
  */
 export function parseLog(stdout: string): Commit[] {
   // An empty history is legitimately empty output (`git log --all` in a fresh
   // repository exits 0 with nothing to say).
-  if (stdout.length === 0 || stdout.trim().length === 0) return [];
+  if (stdout.length === 0) return [];
 
-  const chunks = stdout.split(LOG_RECORD_SEPARATOR);
-  // The separator is a prefix of every record, so everything before the first
-  // one must be empty. Anything else is output we did not produce.
-  if (chunks[0] !== '') {
-    fail('git log output did not start with the record separator');
+  const tokens = stdout.split(LOG_SEPARATOR);
+  // `-z` terminates the last record too, which leaves one trailing empty item.
+  if (tokens.pop() !== '') {
+    fail('git log output did not end with the record terminator');
+  }
+  if (tokens.length === 0 || tokens.length % LOG_FIELD_COUNT !== 0) {
+    fail(
+      `git log returned ${tokens.length} fields, not a multiple of ${LOG_FIELD_COUNT}`,
+    );
   }
 
-  return chunks.slice(1).map(parseRecord);
+  const commits: Commit[] = [];
+  for (let start = 0; start < tokens.length; start += LOG_FIELD_COUNT) {
+    commits.push(parseRecord(tokens.slice(start, start + LOG_FIELD_COUNT)));
+  }
+  return commits;
 }

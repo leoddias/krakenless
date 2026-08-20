@@ -12,6 +12,11 @@ import type { Commit } from './types';
  * `unknown revision or path not in the working tree`, verified with git 2.39).
  * Matching the narrow one keeps a typo in a ref name an error instead of a
  * silently empty history.
+ *
+ * Matching English text is only sound because the Rust runner spawns git with
+ * `LC_ALL=C` (`src-tauri/src/git_runner.rs`). If that ever changes, this stops
+ * recognizing the case and an unborn branch surfaces as an error — the safe
+ * direction, never a fabricated empty history.
  */
 function meansNoCommitsYet(error: unknown): boolean {
   if (!(error instanceof GitError)) return false;
