@@ -1,8 +1,8 @@
 # Architecture
 
-> Status: **in progress** — M0 scaffold and the git layer contract exist; the
-> layout below marks what has landed. Diverging from this doc without an ADR
-> is a bug.
+> Status: **in progress** — M0–M2 are done; M3/M4 exist in the git layer with
+> their views in flight. The layout below marks what has landed. Diverging from
+> this doc without an ADR is a bug.
 
 ## Big picture
 
@@ -43,19 +43,24 @@ src/                    # React + TS
     types.ts            # [done] shared contract: GitCommand, RepoStatus, Commit, FileDiff...
     errors.ts           # [done] GitError + stderr classification
     runner.ts           # [done] invoke('git_run'), timeouts, destructive gate
+    argsafety.ts        # [done] pathspec()/assertRefName()/assertRevision() guards
+    destructive.ts      # [done] isDestructive(args) — the gate, derived from args
+    confirm.ts          # [done] Confirmation token, minted only where the user answered
+    patch.ts            # [done] hunks → patch for `git apply --cached`
     repository.ts       # [done] open/identify a repository
-    commands/           # builders: pure fns → GitCommand { args: string[] }
-    parsers/            # porcelain/log/diff parsers + unit tests
-  views/                # Welcome, Repo (Graph, Status, DiffViewer, ...)
-  state/                # open-repo store, refresh orchestration
-  config/               # typed settings schema + load/save via IPC
+    status.ts log.ts diff.ts stage.ts refs.ts   # [done] thin async layers
+    commands/           # [done] builders: pure fns → GitCommand { args: string[] }
+    parsers/            # [done] porcelain/log/diff/branch parsers + unit tests
+  views/                # [done] welcome, history, diff, changes, settings, shell
+                        #   (remote + refs panels in flight)
+  state/                # [done] store, actions, fs-watch bridge
+  config/               # [done] typed settings schema + load/save via IPC
 src-tauri/              # Rust shell
   src/
     git_runner.rs       # [done] spawn git, no shell, args array, capture, timeout
-    watcher.rs
-    config.rs
-tests/
-  integration/          # real git against disposable temp repos
+    watcher.rs          # [done] debounced fs events, git-noise filtered
+    config.rs           # [done] atomic JSON read/write in %APPDATA%
+src/git/*.integration.test.ts   # [done] real git against disposable temp repos
 docs/                   # this harness
 ```
 

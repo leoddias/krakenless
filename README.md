@@ -1,6 +1,6 @@
 # Krakenless
 
-> **Status: pre-alpha — scaffold only. Not usable as a Git client yet.**
+> **Status: pre-alpha — usable for reading and committing, not yet dogfooded.**
 > "Krakenless" is a development codename; the project will be renamed before
 > any public release.
 
@@ -118,10 +118,40 @@ git output ships with unit tests in the same change — see
 - Windows 10/11 (Mac/Linux later)
 - `git` installed and on PATH
 
+## What works today
+
+- Open a repository (folder picker or recent list) and see its history,
+  working tree and diffs, refreshed automatically when files change.
+- Stage and unstage whole files or individual hunks, write a commit message,
+  commit, and amend.
+- Discard changes — always by stashing first, so the app can hand you the exact
+  command that brings them back.
+
+Not there yet: branch and stash management UI, fetch/pull/push controls, and
+the conflict-resolution flow. See [`docs/ROADMAP.md`](docs/ROADMAP.md).
+
+## Safety
+
+The parts of the app that build git commands or parse git output are treated as
+the dangerous core:
+
+- Git is spawned with an argument array, never a shell string. Values you can
+  name — branches, tags, paths — are validated so a branch called `--force`
+  cannot turn into an option.
+- Destructive commands are recognized from the arguments themselves, not from a
+  flag a builder might forget, and they refuse to run without a confirmation
+  minted where the question was actually asked.
+- Discard never uses `git restore`; it stashes the selected paths so there is
+  always a way back, and the app shows you that command.
+- Every parser and command builder ships with unit tests, and the destructive
+  paths have integration tests that run the real `git` binary on disposable
+  repositories.
+
 ## Data location & backup
 
-App settings live in `%APPDATA%/krakenless/` as human-readable JSON.
-Backup = copy that folder. Everything else is your repos, owned by git.
+App settings live in `%APPDATA%/krakenless/` as human-readable JSON — the same
+file the Settings screen writes. Backup = copy that folder. Everything else is
+your repos, owned by git.
 
 ## License
 
