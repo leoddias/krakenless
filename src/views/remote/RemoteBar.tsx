@@ -29,6 +29,7 @@ import {
   fetchBlock,
   pullBlock,
   pushBlock,
+  pushIntent,
   readUpstream,
   summarize,
   type Gate,
@@ -94,10 +95,10 @@ export function RemoteBar(): ReactNode {
   const upstream = readUpstream(status);
   const branchNow = 'branch' in upstream ? upstream.branch : null;
   const remotes = candidateRemotes(branches);
-  // A chosen remote that has vanished from the list (the branch list was
-  // re-read, the remote was removed) must not survive as a push target.
   const chosenRemote =
     choice !== null && choice.repoRoot === repoRoot ? choice.remote : null;
+  // A chosen remote that has vanished from the list (the branch list was
+  // re-read, the remote was removed) must not survive as a push target.
   const publishRemote =
     chosenRemote !== null && remotes.includes(chosenRemote)
       ? chosenRemote
@@ -139,29 +140,13 @@ export function RemoteBar(): ReactNode {
   };
 
   const onPush = (): void => {
-    // The gate is re-checked here, not only through the `disabled` attribute.
-    // The refusal to push a branch whose upstream has a different name is what
-    // keeps `refs/heads/x:refs/heads/x` from landing on a branch the user was
-    // never shown, and that guard must not depend on a rendered attribute.
-    if (pushBlock(gate) !== null) return;
-
-    if (upstream.kind === 'no-upstream') {
-      if (publishRemote === null) return;
-      void run('publish', () =>
-        pushCurrent(store, {
-          remote: publishRemote,
-          branch: upstream.branch,
-          setUpstream: true,
-        }),
-      );
-      return;
-    }
-    if (upstream.kind !== 'tracking') return;
-    void run('push', () =>
-      pushCurrent(store, {
-        remote: upstream.upstream.remote,
-        branch: upstream.branch,
-      }),
+    // Derived from the gate, not from the button's `disabled` attribute: the
+    // refusals encoded there are what keep a push off a branch the user was
+    // never shown, and they must not depend on how the control rendered.
+    const intent = pushIntent(gate);
+    if (intent === null) return;
+    void run(intent.setUpstream === true ? 'publish' : 'push', () =>
+      pushCurrent(store, intent),
     );
   };
 

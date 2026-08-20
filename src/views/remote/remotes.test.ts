@@ -7,6 +7,7 @@ import {
   parseUpstream,
   pullBlock,
   pushBlock,
+  pushIntent,
   readUpstream,
   summarize,
   type Gate,
@@ -287,8 +288,9 @@ describe('gates', () => {
     expect(pushBlock(fresh)).toBeNull();
   });
 
-  it('does not claim there is no remote while the branch list is unread', () => {
-    for (const branchesState of ['idle', 'loading'] as const) {
+  it.each(['idle', 'loading'] as const)(
+    'does not claim there is no remote while the branch list is %s',
+    (branchesState) => {
       const reason = pushBlock(
         gate({
           upstream: { kind: 'no-upstream', branch: 'topic' },
@@ -298,8 +300,8 @@ describe('gates', () => {
       );
       expect(reason).toMatch(/Reading the list of remotes/);
       expect(reason).not.toMatch(/git remote add/);
-    }
-  });
+    },
+  );
 
   it('says the branch list failed rather than blaming a missing remote', () => {
     const reason = pushBlock(
@@ -346,5 +348,69 @@ describe('gates', () => {
     const unborn = gate({ upstream: { kind: 'unborn', branch: 'main' } });
     expect(pullBlock(unborn)).toMatch(/no commits yet/);
     expect(pushBlock(unborn)).toMatch(/no commits yet/);
+  });
+});
+
+describe('pushIntent', () => {
+  it('pushes a tracking branch to its own remote without re-setting upstream', () => {
+    expect(pushIntent(gate())).toEqual({ remote: 'origin', branch: 'main' });
+  });
+
+  it('publishes a branch with no upstream to the chosen remote', () => {
+    expect(
+      pushIntent(
+        gate({
+          upstream: { kind: 'no-upstream', branch: 'topic' },
+          publishRemote: 'fork',
+        }),
+      ),
+    ).toEqual({ remote: 'fork', branch: 'topic', setUpstream: true });
+  });
+
+  // Each of these is a case where the button is disabled. The intent has to
+  // refuse on its own, so a click that reaches the handler cannot push anyway.
+  it.each([
+    ['busy', gate({ busy: true })],
+    ['no repository', gate({ repoOpen: false, statusState: 'idle' })],
+    ['unresolved conflicts', gate({ hasConflicts: true })],
+    ['a detached HEAD', gate({ upstream: { kind: 'detached' } })],
+    ['an unread status', gate({ statusState: 'loading' })],
+    ['a failed status read', gate({ statusState: 'error' })],
+    ['an unborn branch', gate({ upstream: { kind: 'unborn', branch: 'main' } })],
+    [
+      'an unreadable upstream',
+      gate({
+        upstream: { kind: 'unreadable-upstream', branch: 'main', upstream: 'weird' },
+      }),
+    ],
+    [
+      'a differently-named upstream',
+      gate({
+        upstream: {
+          kind: 'tracking',
+          branch: 'main',
+          upstream: { remote: 'origin', branch: 'trunk' },
+          ahead: 1,
+          behind: 0,
+        },
+      }),
+    ],
+    [
+      'no known remote to publish to',
+      gate({
+        upstream: { kind: 'no-upstream', branch: 'topic' },
+        publishRemote: null,
+      }),
+    ],
+    [
+      'an unread branch list',
+      gate({
+        upstream: { kind: 'no-upstream', branch: 'topic' },
+        branchesState: 'loading',
+        publishRemote: null,
+      }),
+    ],
+  ])('refuses to push with %s', (_case, blocked) => {
+    expect(pushIntent(blocked)).toBeNull();
   });
 });

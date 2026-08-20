@@ -281,6 +281,35 @@ function publishBlock(gate: Gate): string | null {
   return null;
 }
 
+/** Exactly what a push would send, or `null` when it must not run at all. */
+export interface PushIntent {
+  remote: string;
+  branch: string;
+  setUpstream?: true;
+}
+
+/**
+ * The push decision, derived rather than read off the rendered button.
+ *
+ * `pushBlock` is what greys the button out, but a `disabled` attribute is a
+ * rendering detail; the refusals it encodes — a detached HEAD, a merge in
+ * progress, an upstream whose branch has another name — are the difference
+ * between pushing where the user was shown and pushing somewhere else. So the
+ * click path re-derives the intent from the same gate and gets `null` for
+ * every case the button was supposed to refuse.
+ */
+export function pushIntent(gate: Gate): PushIntent | null {
+  if (pushBlock(gate) !== null) return null;
+
+  if (gate.upstream.kind === 'no-upstream') {
+    return gate.publishRemote === null
+      ? null
+      : { remote: gate.publishRemote, branch: gate.upstream.branch, setUpstream: true };
+  }
+  if (gate.upstream.kind !== 'tracking') return null;
+  return { remote: gate.upstream.upstream.remote, branch: gate.upstream.branch };
+}
+
 function sharedBlock(gate: Gate): string | null {
   if (!gate.repoOpen) return 'No repository is open.';
   if (gate.busy) return 'Another git operation is already running.';
