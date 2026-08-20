@@ -43,9 +43,14 @@ describe('editorLaunch', () => {
   });
 
   it('does not let a path become an option', () => {
-    // The path travels as a discrete argument; nothing is interpolated, so a
-    // file named like a flag is passed through as a filename.
-    expect(editorLaunch('code', '--wait')?.args).toEqual(['--wait']);
+    // A repository file may legally be named `--wait`; passed bare, the editor
+    // would read it as its own flag and open nothing.
+    expect(editorLaunch('code', '--wait')?.args).toEqual(['./--wait']);
+    expect(editorLaunch('code', '-w')?.args).toEqual(['./-w']);
+  });
+
+  it('leaves an ordinary path untouched', () => {
+    expect(editorLaunch('code', 'src/-weird.ts')?.args).toEqual(['src/-weird.ts']);
   });
 
   it('returns null when no editor is configured', () => {

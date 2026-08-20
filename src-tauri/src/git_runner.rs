@@ -31,7 +31,7 @@ const PIPE_GRACE: Duration = Duration::from_secs(2);
 /// Environment variables that redirect where git reads or writes. Inheriting
 /// any of them (e.g. launching the app from inside a `rebase -i` hook) would
 /// silently point our commands at a foreign index, object store, or config.
-const GIT_ENV_TO_SCRUB: [&str; 16] = [
+pub const GIT_ENV_TO_SCRUB: [&str; 16] = [
     "GIT_DIR",
     "GIT_WORK_TREE",
     "GIT_COMMON_DIR",
@@ -56,7 +56,7 @@ const GIT_ENV_TO_SCRUB: [&str; 16] = [
 /// are decided once, here, instead of per builder. `--literal-pathspecs`
 /// matters most on the write side: a file legally named `:(glob)**` would
 /// otherwise expand a `checkout -- <path>` from one file to the whole tree.
-const GIT_GLOBAL_ARGS: [&str; 6] = [
+pub const GIT_GLOBAL_ARGS: [&str; 6] = [
     "--no-pager",
     "--literal-pathspecs",
     "-c",

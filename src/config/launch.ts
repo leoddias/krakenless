@@ -49,8 +49,13 @@ export function editorLaunch(editorCommand: string, path: string): Launchable | 
   const tokens = tokenize(editorCommand);
   const program = tokens[0];
   if (program === undefined || program.length === 0) return null;
-  // The path goes last as its own argument, never interpolated into the string.
-  return { program, args: [...tokens.slice(1), path] };
+
+  // The path goes last as its own argument, never interpolated. A repository
+  // file may legally be named `-w` or `--goto`, which the editor would read as
+  // an option, so a leading dash is neutralised with an explicit `./` prefix —
+  // the one form every editor treats as a path.
+  const safePath = path.startsWith('-') ? `./${path}` : path;
+  return { program, args: [...tokens.slice(1), safePath] };
 }
 
 /**
@@ -61,6 +66,8 @@ export function editorLaunch(editorCommand: string, path: string): Launchable | 
  * git's own prompt, which the app has already asked in the UI.
  */
 export function mergetoolLaunch(tool: string, path: string): Launchable {
+  // The Rust side recognises `git` and prepends the same global arguments and
+  // environment scrub the runner uses, so this only builds the subcommand.
   const args = ['mergetool', '--no-prompt'];
   if (tool.trim().length > 0) args.push(`--tool=${tool.trim()}`);
   args.push('--', path);
