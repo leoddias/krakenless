@@ -114,15 +114,36 @@ jobs:
         timeout-minutes: 20
         run: cargo test --manifest-path src-tauri/Cargo.toml --no-run
 
+      # Backgrounded and polled, not run in the foreground. `timeout` did not
+      # end the step on this runner even with SIGKILL, and a step that never
+      # ends gets cancelled — and a cancelled job publishes no log at all. This
+      # way the foreground shell always finishes and always prints what the
+      # tests managed to write, so the last line names whatever hung.
       - name: Lib tests (Linux)
         if: matrix.os == 'ubuntu-latest'
-        timeout-minutes: 10
+        timeout-minutes: 12
         run: |
           set +e
-          timeout --signal=KILL 300 cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1 --nocapture > lib-tests.log 2>&1
-          status=$?
-          echo "--- lib tests exited with $status ---"
+          cargo test --manifest-path src-tauri/Cargo.toml --lib             -- --test-threads=1 --nocapture > lib-tests.log 2>&1 &
+          pid=$!
+          for _ in $(seq 1 60); do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 5
+          done
+          if kill -0 "$pid" 2>/dev/null; then
+            echo "=== still running after 5 minutes; killing ==="
+            kill -9 "$pid" 2>/dev/null
+            pkill -9 -f 'krakenless_lib' 2>/dev/null
+            status=124
+          else
+            wait "$pid"
+            status=$?
+          fi
+          echo "=== lib tests exited with $status ==="
+          echo "=== last 200 lines ==="
           tail -n 200 lib-tests.log
+          echo "=== processes still alive ==="
+          ps -eo pid,ppid,pgid,stat,etime,args | grep -E 'git |krakenless|cargo' | grep -v grep | head -20
           exit $status
 
       - name: Binary harness (Linux)
