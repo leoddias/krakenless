@@ -15,7 +15,14 @@
  * the git layer validates is literally what they agreed to.
  */
 
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+} from 'react';
 import type { Branch, StashEntry } from '../../git/types';
 import {
   createAndSwitch,
@@ -78,6 +85,34 @@ interface DropRecovery {
 }
 
 /**
+ * Keeps Tab inside an open question.
+ *
+ * `aria-modal` promises assistive technology that the rest of the panel is out
+ * of reach; without this the promise is false, and Tab walks straight onto the
+ * Delete button of another row while a destructive question is on screen.
+ */
+function trapTab(event: ReactKeyboardEvent<HTMLDivElement>): void {
+  if (event.key !== 'Tab') return;
+  const focusable = [
+    ...event.currentTarget.querySelectorAll<HTMLElement>('button, input'),
+  ].filter((element) => !element.hasAttribute('disabled'));
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (first === undefined || last === undefined) return;
+
+  const active = document.activeElement;
+  if (event.shiftKey && active === first) {
+    event.preventDefault();
+    last.focus();
+    return;
+  }
+  if (!event.shiftKey && active === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+/**
  * Something that did not happen, or did not happen the way the button said.
  *
  * `cause` is git's own words, taken from the notice the action layer produced,
@@ -97,6 +132,18 @@ interface Outcome {
   text: string;
   root: string;
 }
+
+/**
+ * Outcome of a branch creation. The cause travels with it because the action
+ * layer reports failure only as a boolean plus a store notice, and both the
+ * field and the remote rows need to say more than "no".
+ */
+interface CreateResult {
+  ok: boolean;
+  cause: string | null;
+}
+
+type CreateBranch = (name: string, startPoint?: string) => Promise<CreateResult>;
 
 export function RefsView(): ReactNode {
   const store = useStore();
@@ -175,10 +222,26 @@ export function RefsView(): ReactNode {
     }
   };
 
-  /** True while the question still applies to the repository that is open. */
-  const stillCurrent = (askedAbout: string): boolean => {
+  /** Repository open right now, straight from the store rather than the render. */
+  const openRoot = (): string | null => {
     const repo = store.getState().repo;
-    return repo.state === 'ready' && repo.value.root === askedAbout;
+    return repo.state === 'ready' ? repo.value.root : null;
+  };
+
+  /** True while the question still applies to the repository that is open. */
+  const stillCurrent = (askedAbout: string): boolean => openRoot() === askedAbout;
+
+  /**
+   * Reports a refusal against the repository the user is looking at.
+   *
+   * Messages are scoped to a root so they cannot follow the user into another
+   * repository — which means one about *leaving* a repository has to be filed
+   * under the new one, or it would be filed where nobody can read it.
+   */
+  const reportHere = (text: string, cause: string | null): void => {
+    const here = openRoot();
+    if (here === null) return;
+    setFailure({ text, cause, root: here });
   };
 
   const runDelete = async (pending: Deletion): Promise<void> => {
@@ -187,11 +250,10 @@ export function RefsView(): ReactNode {
     const { name } = pending;
     if (!stillCurrent(pending.root)) {
       setDeletion(null);
-      setFailure({
-        text: `Nothing was deleted: the open repository changed after the question about "${name}" was asked.`,
-        cause: null,
-        root: pending.root,
-      });
+      reportHere(
+        `Nothing was deleted: the open repository changed after the question about "${name}" was asked.`,
+        null,
+      );
       return;
     }
 
@@ -223,11 +285,10 @@ export function RefsView(): ReactNode {
     setStashQuestion(null);
     const { entry, kind } = pending;
     if (!stillCurrent(pending.root)) {
-      setFailure({
-        text: `Nothing was done: the open repository changed after the question about "${stashLabel(entry)}" was asked.`,
-        cause: null,
-        root: pending.root,
-      });
+      reportHere(
+        `Nothing was done: the open repository changed after the question about "${stashLabel(entry)}" was asked.`,
+        null,
+      );
       return;
     }
     // The oid travels with the ref: `stash@{1}` alone is a position, and
@@ -285,9 +346,9 @@ export function RefsView(): ReactNode {
       */}
       {openDeletion !== null && (
         <DeleteConfirmation
-          // Keyed by stage: the forcing question is a fresh component, so it
-          // cannot inherit the armed state of the one it replaced.
-          key={openDeletion.stage}
+          // Keyed by branch and stage: any new question is a fresh component,
+          // so it can never inherit the armed state of the one it replaced.
+          key={`${openDeletion.stage}:${openDeletion.name}`}
           deletion={openDeletion}
           busy={locked}
           onCancel={() => setDeletion(null)}
@@ -376,7 +437,10 @@ export function RefsView(): ReactNode {
           }}
           onCreate={async (name, startPoint) => {
             clearMessages();
-            return createAndSwitch(store, name, startPoint);
+            const [ok, cause] = await perform(() =>
+              createAndSwitch(store, name, startPoint),
+            );
+            return { ok, cause };
           }}
           onAskDelete={(name) => {
             if (root === null) return;
@@ -419,7 +483,7 @@ function BranchesSection({
   busy: boolean;
   selectedOid: string | null;
   onSwitch: (name: string) => void;
-  onCreate: (name: string, startPoint?: string) => Promise<boolean>;
+  onCreate: CreateBranch;
   onAskDelete: (name: string) => void;
 }): ReactNode {
   const branches = useAppState((state) => state.branches);
@@ -469,7 +533,7 @@ function BranchLists({
   branches: readonly Branch[];
   busy: boolean;
   onSwitch: (name: string) => void;
-  onCreate: (name: string, startPoint?: string) => Promise<boolean>;
+  onCreate: CreateBranch;
   onAskDelete: (name: string) => void;
 }): ReactNode {
   const { local, remote } = groupBranches(branches);
@@ -575,9 +639,24 @@ function RemoteRow({
 }: {
   branch: Branch;
   busy: boolean;
-  onCreate: (name: string, startPoint?: string) => Promise<boolean>;
+  onCreate: CreateBranch;
 }): ReactNode {
   const local = localNameFor(branch);
+  const [error, setError] = useState<string | null>(null);
+
+  const checkout = async (name: string): Promise<void> => {
+    setError(null);
+    const { ok, cause } = await onCreate(name, branch.name);
+    if (!ok) {
+      // Silence here would read as "done": the row's only other feedback is the
+      // branch appearing in the local list, which a refresh could explain away.
+      setError(
+        cause === null
+          ? `Local branch "${name}" was not created from ${branch.name}.`
+          : `Local branch "${name}" was not created from ${branch.name}. git said: ${cause}`,
+      );
+    }
+  };
 
   return (
     <li className={styles.row}>
@@ -596,10 +675,15 @@ function RemoteRow({
           className={styles.button}
           disabled={busy}
           title={`Create local branch ${local} from ${branch.name} and switch to it`}
-          onClick={() => void onCreate(local, branch.name)}
+          onClick={() => void checkout(local)}
         >
           Check out as {local}
         </button>
+      )}
+      {error !== null && (
+        <p className={styles.fieldError} role="alert">
+          {error}
+        </p>
       )}
     </li>
   );
@@ -631,7 +715,7 @@ function CreateBranchForm({
 }: {
   busy: boolean;
   selectedOid: string | null;
-  onCreate: (name: string, startPoint?: string) => Promise<boolean>;
+  onCreate: CreateBranch;
 }): ReactNode {
   const [name, setName] = useState('');
   const [fromSelected, setFromSelected] = useState(false);
@@ -651,12 +735,18 @@ function CreateBranchForm({
       return;
     }
     setError(null);
-    const created = await onCreate(
+    const { ok, cause } = await onCreate(
       candidate,
       useSelected && selectedOid !== null ? selectedOid : undefined,
     );
-    if (!created) {
-      setError(`Branch "${candidate}" was not created.`);
+    if (!ok) {
+      // Git's own words when there are any: "was not created" alone leaves the
+      // user guessing between a name that already exists and a dirty tree.
+      setError(
+        cause === null
+          ? `Branch "${candidate}" was not created.`
+          : `Branch "${candidate}" was not created. git said: ${cause}`,
+      );
       return;
     }
     setName('');
@@ -761,6 +851,7 @@ function DeleteConfirmation({
       aria-label={forcing ? 'Confirm forced branch delete' : 'Confirm branch delete'}
       onKeyDown={(event) => {
         if (event.key === 'Escape') onCancel();
+        trapTab(event);
       }}
     >
       <strong className={styles.noticeTitle}>{question}</strong>
@@ -924,6 +1015,7 @@ function StashConfirmation({
       aria-label="Confirm stash action"
       onKeyDown={(event) => {
         if (event.key === 'Escape') onCancel();
+        trapTab(event);
       }}
     >
       <strong className={styles.noticeTitle}>{text}</strong>

@@ -285,6 +285,23 @@ describe('branch list', () => {
     expect(createMock).toHaveBeenCalledWith(store, 'main', 'origin/main');
   });
 
+  it('says so when checking a remote branch out did not happen', async () => {
+    const store = renderLoaded();
+    createMock.mockImplementation(async () => {
+      store.dispatch({
+        type: 'notice',
+        notice: { tone: 'error', message: "fatal: a branch named 'main' already exists" },
+      });
+      return false;
+    });
+    await click(screen.getByRole('button', { name: 'Check out as main' }));
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent(
+      'Local branch "main" was not created from origin/main.',
+    );
+    expect(alert).toHaveTextContent("fatal: a branch named 'main' already exists");
+  });
+
   it('disables every action while a git command is in flight', () => {
     renderRefs((store) => {
       openRepo(store);
@@ -363,6 +380,22 @@ describe('creating a branch', () => {
       'Branch "feature/y" was not created.',
     );
     expect(screen.getByLabelText('New branch')).toHaveValue('feature/y');
+  });
+
+  it('quotes git when it refused the name the field accepted', async () => {
+    const store = renderLoaded();
+    createMock.mockImplementation(async () => {
+      store.dispatch({
+        type: 'notice',
+        notice: { tone: 'error', message: 'fatal: not a valid object name: nope' },
+      });
+      return false;
+    });
+    type('feature/y');
+    await click(screen.getByRole('button', { name: 'Create and switch' }));
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'fatal: not a valid object name: nope',
+    );
   });
 
   it('clears the field after a successful creation', async () => {
@@ -494,6 +527,21 @@ describe('deleting a branch', () => {
     await click(screen.getByRole('button', { name: 'Delete branch' }));
     // A keystroke aimed at the first question must not land on the second.
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Cancel' }));
+  });
+
+  it('keeps Tab inside the question while it is open', async () => {
+    renderLoaded();
+    await askDelete();
+    const cancel = screen.getByRole('button', { name: 'Cancel' });
+    const confirm = screen.getByRole('button', { name: 'Delete branch' });
+    expect(document.activeElement).toBe(cancel);
+
+    // Backwards off the first control wraps to the last one inside the
+    // question instead of landing on a Delete button behind it.
+    fireEvent.keyDown(dialog(), { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(confirm);
+    fireEvent.keyDown(dialog(), { key: 'Tab' });
+    expect(document.activeElement).toBe(cancel);
   });
 
   it('closes on Escape without deleting', async () => {
