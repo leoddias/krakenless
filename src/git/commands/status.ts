@@ -51,6 +51,10 @@ export function buildStatusCommand(options: StatusOptions = {}): GitCommand {
     'status',
     '--porcelain=v2',
     '--branch',
+    // Forces the `# branch.ab` record even when the user's config sets
+    // `status.aheadBehind=false`; without it the counts silently go missing
+    // and an unknown relationship would read as "up to date".
+    '--ahead-behind',
     '-z',
     `--untracked-files=${untracked}`,
   ];

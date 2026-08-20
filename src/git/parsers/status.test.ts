@@ -46,6 +46,7 @@ describe('buildStatusCommand', () => {
       'status',
       '--porcelain=v2',
       '--branch',
+      '--ahead-behind',
       '-z',
       '--untracked-files=all',
     ]);
@@ -99,6 +100,7 @@ describe('buildStatusCommand', () => {
       'status',
       '--porcelain=v2',
       '--branch',
+      '--ahead-behind',
       '-z',
       '--untracked-files=all',
       '--ignored=matching',
@@ -122,6 +124,7 @@ describe('buildStatusCommand', () => {
       'status',
       '--porcelain=v2',
       '--branch',
+      '--ahead-behind',
       '-z',
       '--untracked-files=all',
       '--',
@@ -155,8 +158,10 @@ describe('parseStatus branch headers', () => {
       branch: 'main',
       head: null,
       detached: false,
-      ahead: 0,
-      behind: 0,
+      // No `# branch.ab` record without an upstream: the counts stay unknown
+      // rather than being invented as zero.
+      ahead: undefined,
+      behind: undefined,
       entries: [],
       hasConflicts: false,
     });
@@ -171,11 +176,13 @@ describe('parseStatus branch headers', () => {
     expect(status.head).toBe(HEAD_OID);
   });
 
-  it('leaves upstream undefined and ahead/behind at zero without a tracking branch', () => {
+  it('leaves upstream and the counts unknown without a tracking branch', () => {
     const status = parseStatus(nul([`# branch.oid ${HEAD_OID}`, '# branch.head main']));
     expect(status.upstream).toBeUndefined();
-    expect(status.ahead).toBe(0);
-    expect(status.behind).toBe(0);
+    // Unknown, not zero: git prints no `# branch.ab` record here, and a
+    // fabricated "0 ahead, 0 behind" reads as "up to date" in the UI.
+    expect(status.ahead).toBeUndefined();
+    expect(status.behind).toBeUndefined();
   });
 
   it('parses upstream and a diverged ahead/behind count', () => {

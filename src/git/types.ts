@@ -89,8 +89,15 @@ export interface RepoStatus {
   detached: boolean;
   /** Upstream ref (e.g. `origin/main`), when the branch tracks one. */
   upstream?: string;
-  ahead: number;
-  behind: number;
+  /**
+   * Commits ahead of / behind the upstream — `undefined` when git did not
+   * report them (no `# branch.ab` record: `status.aheadBehind=false`, or the
+   * remote-tracking ref is gone). Defaulting these to 0 would render as "up to
+   * date" for a branch whose real relationship is unknown, and a push offered
+   * on that basis is a decision made on a lie.
+   */
+  ahead?: number;
+  behind?: number;
   entries: StatusEntry[];
   /** True while a merge/rebase/cherry-pick left conflicts in the tree. */
   hasConflicts: boolean;

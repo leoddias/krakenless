@@ -246,8 +246,8 @@ interface BranchHeaders {
   oid?: string;
   head?: string;
   upstream?: string;
-  ahead: number;
-  behind: number;
+  ahead?: number;
+  behind?: number;
 }
 
 function parseHeader(record: string, headers: BranchHeaders): void {
@@ -295,7 +295,8 @@ function parseHeader(record: string, headers: BranchHeaders): void {
  */
 export function parseStatus(stdout: string): RepoStatus {
   const reader = new RecordReader(stdout);
-  const headers: BranchHeaders = { ahead: 0, behind: 0 };
+  // Left undefined on purpose: only a `# branch.ab` record can fill them in.
+  const headers: BranchHeaders = {};
   const entries: StatusEntry[] = [];
 
   while (!reader.done) {
@@ -344,8 +345,8 @@ export function parseStatus(stdout: string): RepoStatus {
     // `(initial)` is git's marker for a repository with no commits yet.
     head: headers.oid === '(initial)' ? null : headers.oid,
     detached,
-    ahead: headers.ahead,
-    behind: headers.behind,
+    ...(headers.ahead === undefined ? {} : { ahead: headers.ahead }),
+    ...(headers.behind === undefined ? {} : { behind: headers.behind }),
     entries,
     hasConflicts: entries.some((entry) => entry.conflicted),
   };

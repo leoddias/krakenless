@@ -8,6 +8,7 @@ import { watchRepository, type WatchHandle } from './state/watch';
 import { ChangesView } from './views/changes';
 import { DiffView } from './views/diff';
 import { SettingsView } from './views/settings';
+import { RemoteBar } from './views/remote';
 import { NoticeBar } from './views/shell';
 import { HistoryView } from './views/history/HistoryView';
 import { WelcomeView } from './views/welcome';
@@ -80,10 +81,6 @@ function RepoHeader({
             <span>
               {status.value.detached ? 'detached HEAD' : (status.value.branch ?? '—')}
             </span>
-            {status.value.ahead > 0 && <span title="ahead">↑{status.value.ahead}</span>}
-            {status.value.behind > 0 && (
-              <span title="behind">↓{status.value.behind}</span>
-            )}
             {status.value.hasConflicts && (
               <span className="repo-header__conflicts">conflicts</span>
             )}
@@ -121,6 +118,7 @@ function RepoView({ root }: { root: string }): ReactNode {
   return (
     <div className="repo-layout">
       <RepoHeader root={root} onOpenSettings={() => setSettingsOpen(true)} />
+      <RemoteBar />
       <NoticeBar />
       <div className="repo-panels">
         <section className="repo-panels__history" aria-label="History">

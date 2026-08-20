@@ -48,8 +48,9 @@ export type UpstreamState =
       kind: 'tracking';
       branch: string;
       upstream: UpstreamRef;
-      ahead: number;
-      behind: number;
+      /** Undefined when git did not report the counts; never invented as 0. */
+      ahead?: number;
+      behind?: number;
     }
   /** Tracks something we could not split into remote + branch. */
   | { kind: 'unreadable-upstream'; branch: string; upstream: string };
@@ -74,8 +75,8 @@ export function readUpstream(status: Loadable<RepoStatus>): UpstreamState {
     kind: 'tracking',
     branch: value.branch,
     upstream,
-    ahead: value.ahead,
-    behind: value.behind,
+    ...(value.ahead === undefined ? {} : { ahead: value.ahead }),
+    ...(value.behind === undefined ? {} : { behind: value.behind }),
   };
 }
 
@@ -148,9 +149,13 @@ export function summarize(status: Loadable<RepoStatus>): Summary {
   }
 }
 
-function countsSentence(ahead: number, behind: number): string {
-  // Attributed to git, not asserted: `RepoStatus` has no way to say "unknown",
-  // so a status without a `branch.ab` record also arrives here as 0/0.
+function countsSentence(ahead: number | undefined, behind: number | undefined): string {
+  // Git did not report the counts — `status.aheadBehind=false`, or the
+  // remote-tracking ref is gone. Saying "up to date" here would be a guess the
+  // user could push on.
+  if (ahead === undefined || behind === undefined) {
+    return 'Git did not report how this branch compares to its upstream. Fetch to find out.';
+  }
   if (ahead === 0 && behind === 0)
     return 'Git reported no commits on either side, as of the last fetch.';
   const parts: string[] = [];

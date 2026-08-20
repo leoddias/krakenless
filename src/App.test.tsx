@@ -22,6 +22,7 @@ vi.mock('./views/history/HistoryView', () => ({
 }));
 vi.mock('./views/diff', () => ({ DiffView: () => <div>diff view</div> }));
 vi.mock('./views/changes', () => ({ ChangesView: () => <div>changes view</div> }));
+vi.mock('./views/remote', () => ({ RemoteBar: () => <div>remote bar</div> }));
 vi.mock('./views/settings', () => ({
   SettingsView: ({ onClose }: { onClose: () => void }) => (
     <button type="button" onClick={onClose}>
@@ -126,7 +127,7 @@ describe('App', () => {
     expect(screen.getByText('history view')).toBeInTheDocument();
   });
 
-  it('shows the branch and ahead/behind counters', () => {
+  it('shows the branch, leaving ahead/behind to the remote bar', () => {
     const store = createStore();
     store.dispatch({ type: 'repo/opened', repo: REPO });
     store.dispatch({
@@ -145,8 +146,10 @@ describe('App', () => {
     renderApp(store);
 
     expect(screen.getByText('main')).toBeInTheDocument();
-    expect(screen.getByTitle('ahead')).toHaveTextContent('2');
-    expect(screen.getByTitle('behind')).toHaveTextContent('1');
+    // The counts belong to the remote bar, which states what they are relative
+    // to ("as of the last fetch"); bare arrows in the header did not.
+    expect(screen.queryByTitle('ahead')).not.toBeInTheDocument();
+    expect(screen.getByText('remote bar')).toBeInTheDocument();
   });
 
   it('says the head is detached rather than showing a missing branch name', () => {
