@@ -18,6 +18,10 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run format:check
+      # The suite includes integration tests that drive the real git binary on
+      # disposable repositories, so the version it ran against is worth having
+      # in the log when one of them fails.
+      - run: git --version
       - run: npm test
       - run: npm run build
 
