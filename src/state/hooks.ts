@@ -1,18 +1,9 @@
-import { createContext, useContext, useSyncExternalStore, type ReactNode } from 'react';
+import { useContext, useSyncExternalStore } from 'react';
+import { StoreContext } from './context';
 import type { AppState, Store } from './store';
 import { createStore } from './store';
 
-const StoreContext = createContext<Store | null>(null);
-
-export function StoreProvider({
-  store,
-  children,
-}: {
-  store: Store;
-  children: ReactNode;
-}): ReactNode {
-  return <StoreContext.Provider value={store}>{children}</StoreContext.Provider>;
-}
+export { StoreProvider } from './StoreProvider';
 
 export function useStore(): Store {
   const store = useContext(StoreContext);

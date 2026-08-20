@@ -1,7 +1,14 @@
 :root {
   --bg: #14161a;
+  --surface: #1a1e24;
+  --surface-raised: #21262e;
   --fg: #e6e8eb;
   --muted: #9aa3ad;
+  --border: #2a2f37;
+  --accent: #6ea8fe;
+  --added: #4ec9a0;
+  --deleted: #f2777a;
+  --danger: #f2777a;
   color-scheme: dark;
 }
 
@@ -14,24 +21,4 @@ body {
   background: var(--bg);
   color: var(--fg);
   font-family: 'Segoe UI', system-ui, sans-serif;
-}
-
-.app-shell {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.25rem;
-  height: 100vh;
-}
-
-.app-shell h1 {
-  margin: 0;
-  font-size: 2rem;
-  letter-spacing: -0.02em;
-}
-
-.app-shell p {
-  margin: 0;
-  color: var(--muted);
 }

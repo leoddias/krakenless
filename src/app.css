@@ -1,0 +1,90 @@
+/* Application shell: the frame the views live in. Each view owns its own
+   styles through a CSS module; only the layout between them lives here. */
+
+.repo-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-height: 0;
+}
+
+.repo-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border, #2a2f37);
+  background: var(--surface, #1a1e24);
+}
+
+.repo-header__identity {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.repo-header__name {
+  font-weight: 600;
+}
+
+.repo-header__path {
+  font-size: 0.75rem;
+  color: var(--muted, #9aa3ad);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 40ch;
+}
+
+.repo-header__branch {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--muted, #9aa3ad);
+}
+
+.repo-header__conflicts {
+  color: var(--danger, #f2777a);
+  font-weight: 600;
+}
+
+.repo-header__close {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--border, #2a2f37);
+  border-radius: 4px;
+  color: var(--fg, #e6e8eb);
+  padding: 0.3rem 0.6rem;
+  cursor: pointer;
+}
+
+.repo-header__close:hover {
+  border-color: var(--accent, #6ea8fe);
+}
+
+.repo-header__close:focus-visible {
+  outline: 2px solid var(--accent, #6ea8fe);
+  outline-offset: 2px;
+}
+
+.repo-panels {
+  display: grid;
+  /* History left, changes right; both scroll independently. */
+  grid-template-columns: minmax(280px, 34%) 1fr;
+  flex: 1;
+  min-height: 0;
+}
+
+.repo-panels__history,
+.repo-panels__diff {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.repo-panels__history {
+  border-right: 1px solid var(--border, #2a2f37);
+}
