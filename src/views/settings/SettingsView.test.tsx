@@ -6,7 +6,9 @@ import { createStore, type Store } from '../../state/store';
 
 const saveConfig = vi.hoisted(() => vi.fn());
 const configFolder = vi.hoisted(() => vi.fn());
+const revealFolder = vi.hoisted(() => vi.fn());
 vi.mock('../../config/store', () => ({ saveConfig, configFolder, loadConfig: vi.fn() }));
+vi.mock('../../config/launch', () => ({ revealFolder }));
 
 function renderSettings(store: Store = createStore()): {
   store: Store;
@@ -26,6 +28,7 @@ describe('SettingsView', () => {
     vi.resetAllMocks();
     saveConfig.mockResolvedValue(undefined);
     configFolder.mockResolvedValue('C:/Users/x/AppData/Roaming/krakenless');
+    revealFolder.mockResolvedValue(undefined);
   });
 
   it('shows the current settings', () => {
@@ -84,6 +87,26 @@ describe('SettingsView', () => {
     renderSettings();
     await waitFor(() => expect(configFolder).toHaveBeenCalled());
     expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
+  });
+
+  it('opens the config folder in the file manager', async () => {
+    renderSettings();
+    fireEvent.click(await screen.findByRole('button', { name: 'Open config folder' }));
+    expect(revealFolder).toHaveBeenCalledWith('C:/Users/x/AppData/Roaming/krakenless');
+  });
+
+  it('reports a file manager that refused to open', async () => {
+    revealFolder.mockRejectedValue(new Error('no file manager'));
+    renderSettings();
+    fireEvent.click(await screen.findByRole('button', { name: 'Open config folder' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('no file manager');
+  });
+
+  it('says what the app is and how it is funded', () => {
+    renderSettings();
+    const about = screen.getByLabelText('About');
+    expect(about).toHaveTextContent('no telemetry');
+    expect(about).toHaveTextContent('AGPL-3.0');
   });
 
   it('closes when asked', () => {

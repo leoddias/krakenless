@@ -109,8 +109,9 @@
   grid-column: 1;
   grid-row: 2;
   border-top: 1px solid var(--border, #2a2f37);
-  /* A long branch list must not push the history out of view. */
-  max-height: 40vh;
+  /* The history is the primary way around the repository, so the refs list
+     yields height to it and scrolls internally instead. */
+  max-height: 30vh;
   overflow-y: auto;
 }
 

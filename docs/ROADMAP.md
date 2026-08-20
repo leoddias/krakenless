@@ -48,9 +48,10 @@ If schedule slips: cut graph *polish*, never parser tests.
 ### M5 — Polish + dogfood gate (~1 week)
 - [ ] Keyboard navigation, focus states, contrast pass
 - [x] Settings screen (JSON-backed): editor command, mergetool
-- [ ] Import/export = documented config file location (done) + "Open config folder" button
-- [ ] README: setup, architecture, data location, backup, limitations
-- [ ] Sponsors/Ko-fi link in README + About dialog
+- [x] Import/export = documented config file location + "Open config folder" button
+- [x] README: setup, architecture, data location, backup, limitations
+- [x] Sponsors note in README + About section in Settings (real links wait for
+      the rename, ADR-0010)
 - [ ] **Gate:** switch to Krakenless as only Git client for 2 weeks
 
 ## Validation checkpoint (after M5)

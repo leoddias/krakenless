@@ -126,9 +126,15 @@ git output ships with unit tests in the same change — see
   commit, and amend.
 - Discard changes — always by stashing first, so the app can hand you the exact
   command that brings them back.
+- Fetch, fast-forward pull, and push (never force), with the branch's real
+  relationship to its upstream, or an honest "git did not report it".
+- Create, switch and delete branches; list, apply, pop and drop stashes.
+- A conflict banner that lists what is conflicted, opens your editor or merge
+  tool, and can abort the merge — it does not pretend to resolve conflicts.
+- Settings, written to the same JSON file you can edit by hand.
 
-Not there yet: branch and stash management UI, fetch/pull/push controls, and
-the conflict-resolution flow. See [`docs/ROADMAP.md`](docs/ROADMAP.md).
+Not there yet: a conflict-resolution UI, interactive rebase, and the commit
+graph's parent lines. See [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Safety
 
@@ -152,6 +158,12 @@ the dangerous core:
 App settings live in `%APPDATA%/krakenless/` as human-readable JSON — the same
 file the Settings screen writes. Backup = copy that folder. Everything else is
 your repos, owned by git.
+
+## Sponsoring
+
+Krakenless is free and will stay free. If it replaces a paid client for you,
+sponsoring is the only thing it will ever ask for — links will land here once
+the project has its real name (see ADR-0010).
 
 ## License
 

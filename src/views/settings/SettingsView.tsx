@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import { revealFolder } from '../../config/launch';
 import { saveConfig, configFolder } from '../../config/store';
 import type { AppConfig } from '../../config/schema';
 import { useAppState, useStore } from '../../state/hooks';
@@ -114,12 +115,39 @@ export function SettingsView({ onClose }: { onClose: () => void }): ReactNode {
         )}
       </div>
 
+      <section className={styles.about} aria-label="About">
+        <h3 className={styles.label}>About Krakenless</h3>
+        <p className={styles.hint}>
+          A fast, private Git client. No account, no telemetry, no subscription — it runs
+          your own <code>git</code> and nothing leaves this machine.
+        </p>
+        <p className={styles.hint}>
+          Free and open source under AGPL-3.0. If it saves you time, sponsoring the
+          project is the only thing it will ever ask for.
+        </p>
+      </section>
+
       <footer className={styles.footer}>
         <p className={styles.hint}>
           Settings live in a plain JSON file you can edit or copy. Backing it up is just
           copying that folder.
         </p>
-        {folder !== null && <code className={styles.folder}>{folder}</code>}
+        {folder !== null && (
+          <>
+            <code className={styles.folder}>{folder}</code>
+            <button
+              type="button"
+              className={styles.close}
+              onClick={() => {
+                void revealFolder(folder).catch((failure: unknown) => {
+                  setError(failure instanceof Error ? failure.message : String(failure));
+                });
+              }}
+            >
+              Open config folder
+            </button>
+          </>
+        )}
       </footer>
     </section>
   );
