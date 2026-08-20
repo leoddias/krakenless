@@ -12,7 +12,8 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke }));
 vi.mock('@tauri-apps/api/event', () => ({ listen }));
 vi.mock('./actions', () => ({ refreshStatus, refreshCommits, refreshDiff }));
 
-let emit: () => void;
+/** Fires the repo-changed event as Tauri delivers it: payload = watch token. */
+let emit: (token?: number) => void;
 let unlisten: ReturnType<typeof vi.fn>;
 
 describe('watchRepository', () => {
@@ -24,10 +25,12 @@ describe('watchRepository', () => {
     invoke.mockImplementation((command: string) =>
       Promise.resolve(command === 'watch_repo' ? 7 : undefined),
     );
-    listen.mockImplementation((_event: string, handler: () => void) => {
-      emit = handler;
-      return Promise.resolve(unlisten);
-    });
+    listen.mockImplementation(
+      (_event: string, handler: (event: { payload: number }) => void) => {
+        emit = (token = 7) => handler({ payload: token });
+        return Promise.resolve(unlisten);
+      },
+    );
     refreshStatus.mockResolvedValue(undefined);
     refreshCommits.mockResolvedValue(undefined);
     refreshDiff.mockResolvedValue(undefined);
@@ -132,5 +135,19 @@ describe('watchRepository', () => {
 
     await second.stop();
     expect(invoke).toHaveBeenCalledWith('unwatch_repo', { token: 2 });
+  });
+
+  it('ignores a change in another open repository', async () => {
+    // One event channel serves every watch in the process. Without the token,
+    // a change in one tab would re-read every panel of every other tab.
+    await watchRepository(createStore(), 'C:/repos/app');
+
+    emit(999);
+    await vi.advanceTimersByTimeAsync(REFRESH_DELAY_MS * 2);
+    expect(refreshStatus).not.toHaveBeenCalled();
+
+    emit(7);
+    await vi.advanceTimersByTimeAsync(REFRESH_DELAY_MS * 2);
+    expect(refreshStatus).toHaveBeenCalledTimes(1);
   });
 });

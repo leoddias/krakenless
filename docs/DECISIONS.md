@@ -316,3 +316,33 @@ one tick share a timestamp. A successful save re-reads the diff, so a file whose
 edit made it identical to HEAD disappears from the list and takes its editor
 with it — correct, but abrupt. Anything richer than a text box (syntax
 highlighting, an editor component) is a dependency and needs its own ADR.
+
+## ADR-0023 — Several repositories at once, one store per tab
+**Date:** 2026-08-20 · **Status:** accepted
+**Decision:** Krakenless opens more than one repository. The title bar carries
+one tab per open repository plus the app name, which is a button back to the
+repository list; opening a repository that is already open activates its tab
+instead of adding a second. Each tab owns its own `Store` — the tab list itself
+is `src/views/shell/tabs.ts`, pure functions over an immutable list. Every open
+tab stays mounted (hidden when it is not on screen) so its filesystem watch
+keeps running and its panels stay current. Settings are *not* per tab: they are
+published to every live store through `src/state/stores.ts`. Supersedes the
+single-repository assumption in ADR-0007's v0.1 scope, which listed repo tabs as
+out of scope.
+**Why:** The user asked for it, and the shape was already half-built: the
+redesign (ADR-0017) drew a tab strip for one repository because that is what
+GitKraken looks like. Two things made it more than cosmetics. Multiple watches:
+the Rust watcher held a single slot, so a second repository would have silently
+stopped the first one's watch — it now keeps a map keyed by the token from the
+watcher fix, and the change event carries that token so a change in one tab does
+not re-read every panel of every other. And keyboard scope: every mounted pane
+listened on `window`, so one Ctrl+W would have closed every repository at once;
+only the pane on screen binds shortcuts, and panel focus is scoped to that pane
+because every tab has a panel called "History".
+**Consequences:** Repository paths are compared case-insensitively and with
+separators normalised, so `C:/repos/App` and `C:\repos\app` are one tab. That is
+deliberately wrong on a case-sensitive filesystem, and wrong in the safe
+direction: one tab for one path, rather than two tabs writing to one index.
+Nothing persists the open tabs yet — a restart comes back to the repository
+list. N repositories mean N watchers and N sets of git processes on refresh;
+there is no cap, and a user who opens twenty will feel it.

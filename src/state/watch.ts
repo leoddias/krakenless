@@ -27,6 +27,7 @@ export async function watchRepository(store: Store, root: string): Promise<Watch
   let timer: ReturnType<typeof setTimeout> | null = null;
   let running: Promise<void> = Promise.resolve();
   let stopped = false;
+  let token: number | null = null;
 
   const refresh = (): void => {
     running = running.then(async () => {
@@ -39,8 +40,13 @@ export async function watchRepository(store: Store, root: string): Promise<Watch
     });
   };
 
-  const unlisten = await listen(REPO_CHANGED_EVENT, () => {
+  // The event is global — one channel for every watch in the process — so each
+  // listener has to recognise its own. With several repositories open at once,
+  // an unfiltered listener would re-read every panel of every tab each time any
+  // one of them changed.
+  const unlisten = await listen<number>(REPO_CHANGED_EVENT, (event) => {
     if (stopped) return;
+    if (token !== null && event.payload !== token) return;
     if (timer !== null) clearTimeout(timer);
     timer = setTimeout(refresh, REFRESH_DELAY_MS);
   });
@@ -51,7 +57,9 @@ export async function watchRepository(store: Store, root: string): Promise<Watch
   // happened to be current, which is usually the newer one. The app would then
   // be watching nothing, and every change made outside it would go unnoticed
   // until the user clicked something.
-  const token = await invoke<number>('watch_repo', { path: root });
+  // Assigned after the listener is attached, so an event that arrives during
+  // the round trip is not dropped for belonging to "no token yet".
+  token = await invoke<number>('watch_repo', { path: root });
 
   return {
     async stop() {

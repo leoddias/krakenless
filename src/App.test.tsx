@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
-import { StoreProvider } from './state/hooks';
+import { StoreProvider, useStore } from './state/hooks';
 import { createStore, type Store } from './state/store';
 import type { RepoInfo } from './git/types';
 import { LAYOUT_BOUNDS, defaultConfig } from './config/schema';
@@ -23,7 +23,36 @@ vi.mock('./state/actions', async (original) => ({
 }));
 // The views have their own tests; here we only care that the shell mounts the
 // right one and wires the watcher.
-vi.mock('./views/welcome', () => ({ WelcomeView: () => <div>welcome view</div> }));
+vi.mock('./views/welcome', () => ({
+  // The real screen opens a repository into the store it is rendered under;
+  // this one does the same thing with a button, so the tab machinery above it
+  // is exercised for real.
+  WelcomeView: () => {
+    const store = useStore();
+    return (
+      <div>
+        welcome view
+        <button
+          type="button"
+          onClick={() =>
+            store.dispatch({
+              type: 'repo/opened',
+              repo: { ...REPO, root: 'C:/repos/other', gitDir: 'C:/repos/other/.git' },
+            })
+          }
+        >
+          open other
+        </button>
+        <button
+          type="button"
+          onClick={() => store.dispatch({ type: 'repo/opened', repo: REPO })}
+        >
+          open app again
+        </button>
+      </div>
+    );
+  },
+}));
 vi.mock('./views/history/HistoryView', () => ({
   HistoryView: () => <div>history view</div>,
 }));
@@ -369,5 +398,108 @@ describe('App layout', () => {
     expect(store.getState().config.layout.sidebarWidth).toBe(
       defaultConfig().layout.sidebarWidth + 36,
     );
+  });
+});
+
+describe('App tabs', () => {
+  const stop = vi.fn();
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    loadConfig.mockResolvedValue(defaultConfig());
+    saveConfig.mockResolvedValue(undefined);
+    watchRepository.mockResolvedValue({ stop });
+  });
+
+  function openFirst(): Store {
+    const store = createStore();
+    store.dispatch({ type: 'repo/opened', repo: REPO });
+    renderApp(store);
+    return store;
+  }
+
+  function tab(name: string): HTMLElement {
+    return screen.getByRole('tab', { name: new RegExp(name) });
+  }
+
+  it('gives the open repository a tab', () => {
+    openFirst();
+    expect(tab('app')).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('goes back to the repository list without closing what is open', () => {
+    openFirst();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Krakenless' }));
+
+    expect(screen.getByText('welcome view')).toBeInTheDocument();
+    // The tab is still there, and still watching.
+    expect(tab('app')).toHaveAttribute('aria-selected', 'false');
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it('opens a second repository in its own tab', () => {
+    openFirst();
+    fireEvent.click(screen.getByRole('button', { name: 'Krakenless' }));
+    fireEvent.click(screen.getByRole('button', { name: 'open other' }));
+
+    expect(screen.getAllByRole('tab')).toHaveLength(2);
+    expect(tab('other')).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('activates the tab a repository already has instead of opening a second', () => {
+    openFirst();
+    fireEvent.click(screen.getByRole('button', { name: 'Krakenless' }));
+
+    // The same repository, asked for again from the home screen. Two tabs on
+    // one repository would mean two watchers and two ideas of what is staged.
+    fireEvent.click(screen.getByRole('button', { name: 'open app again' }));
+
+    expect(screen.getAllByRole('tab')).toHaveLength(1);
+    expect(tab('app')).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('switches between open repositories', () => {
+    openFirst();
+    fireEvent.click(screen.getByRole('button', { name: 'Krakenless' }));
+    fireEvent.click(screen.getByRole('button', { name: 'open other' }));
+
+    fireEvent.click(tab('app'));
+
+    expect(tab('app')).toHaveAttribute('aria-selected', 'true');
+    expect(tab('other')).toHaveAttribute('aria-selected', 'false');
+  });
+
+  it('closes a tab and the repository behind it', async () => {
+    const store = openFirst();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close app' }));
+
+    expect(screen.queryAllByRole('tab')).toHaveLength(0);
+    expect(store.getState().repo.state).toBe('idle');
+    // The last tab closing lands on the repository list, not on an empty shell.
+    expect(screen.getByText('welcome view')).toBeInTheDocument();
+    await waitFor(() => expect(stop).toHaveBeenCalled());
+  });
+
+  it('keeps every open repository watched, not just the one on screen', async () => {
+    openFirst();
+    fireEvent.click(screen.getByRole('button', { name: 'Krakenless' }));
+    fireEvent.click(screen.getByRole('button', { name: 'open other' }));
+
+    // Two repositories open, two watches; leaving a tab must not stop its own.
+    await waitFor(() => expect(watchRepository).toHaveBeenCalledTimes(2));
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it('answers the keyboard only in the tab on screen', () => {
+    openFirst();
+    fireEvent.click(screen.getByRole('button', { name: 'Krakenless' }));
+    fireEvent.click(screen.getByRole('button', { name: 'open other' }));
+
+    fireEvent.keyDown(window, { key: 'w', ctrlKey: true });
+
+    // One repository closed, not both.
+    expect(screen.getAllByRole('tab')).toHaveLength(1);
   });
 });

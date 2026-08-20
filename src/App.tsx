@@ -1,11 +1,25 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from 'react';
 import './index.css';
 import './app.css';
-import { clampLayout, LAYOUT_BOUNDS, type LayoutConfig } from './config/schema';
+import {
+  clampLayout,
+  LAYOUT_BOUNDS,
+  type AppConfig,
+  type LayoutConfig,
+} from './config/schema';
 import { loadConfig, saveConfig } from './config/store';
 import { closeRepo, refreshAllPanels } from './state/actions';
 import { useAppState, useStore } from './state/hooks';
-import { isBusy, type AppState } from './state/store';
+import { createStore, isBusy, type AppState, type Store } from './state/store';
+import { publishConfig, registerStore } from './state/stores';
+import { StoreProvider } from './state/StoreProvider';
 import { watchRepository, type WatchHandle } from './state/watch';
 import { ChangesView } from './views/changes';
 import { ConflictBanner } from './views/conflicts';
@@ -23,23 +37,43 @@ import {
   SettingsIcon,
 } from './views/shell/icons';
 import { Splitter } from './views/shell/Splitter';
+import {
+  activeTab,
+  closeRepoTab,
+  openRepoTab,
+  type RepoTab,
+  type Workspace as TabWorkspace,
+} from './views/shell/tabs';
 import { HistoryView } from './views/history/HistoryView';
 import { WelcomeView } from './views/welcome';
 
 export const APP_NAME = 'Krakenless';
 
-/** Loads saved settings once, on startup. */
+/** Reads a slice of a store that is not the one in context. */
+function useStoreState<T>(store: Store, select: (state: AppState) => T): T {
+  return useSyncExternalStore(
+    store.subscribe,
+    () => select(store.getState()),
+    () => select(store.getState()),
+  );
+}
+
+/**
+ * Loads the saved settings once and hands them to every open repository.
+ *
+ * Published rather than dispatched: the settings are one answer for the whole
+ * app, and each tab has its own store (see `state/stores.ts`).
+ */
 function useLoadedConfig(): void {
-  const store = useStore();
   useEffect(() => {
     let cancelled = false;
     void loadConfig().then((config) => {
-      if (!cancelled) store.dispatch({ type: 'config/loaded', config });
+      if (!cancelled) publishConfig(config);
     });
     return () => {
       cancelled = true;
     };
-  }, [store]);
+  }, []);
 }
 
 /**
@@ -69,28 +103,6 @@ function useRepositoryWatch(root: string | null): void {
   }, [store, root]);
 }
 
-function TitleBar({ name, onClose }: { name: string; onClose: () => void }): ReactNode {
-  return (
-    <div className="titlebar">
-      <span className="titlebar__brand">{APP_NAME}</span>
-      <div className="titlebar__tabs">
-        <div className="tab">
-          <RepoIcon size={13} />
-          <span className="tab__name">{name}</span>
-          <button
-            type="button"
-            className="tab__close"
-            aria-label="Close repository"
-            onClick={onClose}
-          >
-            <CloseIcon size={11} />
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /** What the toolbar says the checkout is, in the words the status supports. */
 function branchText(status: AppState['status']): { text: string; muted: boolean } {
   switch (status.state) {
@@ -105,6 +117,69 @@ function branchText(status: AppState['status']): { text: string; muted: boolean 
     case 'idle':
       return { text: '—', muted: true };
   }
+}
+
+/**
+ * The title bar: the way home, and one tab per open repository.
+ *
+ * The brand is a button, not decoration — it is how the user gets back to the
+ * repository list without closing what they already have open.
+ */
+function TitleBar({
+  tabs,
+  activeId,
+  onHome,
+  onActivate,
+  onClose,
+}: {
+  tabs: RepoTab<Store>[];
+  activeId: string | null;
+  onHome: () => void;
+  onActivate: (id: string) => void;
+  onClose: (id: string) => void;
+}): ReactNode {
+  return (
+    <div className="titlebar">
+      <button
+        type="button"
+        className={
+          activeId === null
+            ? 'titlebar__brand titlebar__brand--active'
+            : 'titlebar__brand'
+        }
+        aria-current={activeId === null ? 'page' : undefined}
+        title="Open another repository"
+        onClick={onHome}
+      >
+        {APP_NAME}
+      </button>
+      <div className="titlebar__tabs" role="tablist" aria-label="Open repositories">
+        {tabs.map((tab) => (
+          <div key={tab.id} className={tab.id === activeId ? 'tab tab--active' : 'tab'}>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab.id === activeId}
+              className="tab__button"
+              title={tab.root}
+              onClick={() => onActivate(tab.id)}
+            >
+              <RepoIcon size={13} />
+              <span className="tab__name">{repoName(tab.root)}</span>
+            </button>
+            <button
+              type="button"
+              className="tab__close"
+              aria-label={`Close ${repoName(tab.root)}`}
+              onClick={() => onClose(tab.id)}
+            >
+              <CloseIcon size={11} />
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function Toolbar({
@@ -230,7 +305,6 @@ function useLayout(): {
   endDrag: () => void;
   startRef: React.RefObject<LayoutConfig>;
 } {
-  const store = useStore();
   const config = useAppState((state) => state.config);
   const [draft, setDraft] = useState<LayoutConfig | null>(null);
   const layout = draft ?? config.layout;
@@ -250,14 +324,15 @@ function useLayout(): {
     setDraft((current) => {
       if (current === null) return null;
       const updated = { ...config, layout: current };
-      store.dispatch({ type: 'config/loaded', config: updated });
+      // Every open tab, not just this one: the panel sizes are one setting.
+      publishConfig(updated);
       void saveConfig(updated).catch(() => {
         // The size is already on screen; failing to remember it is not worth
         // an alert over the repository.
       });
       return null;
     });
-  }, [config, store]);
+  }, [config]);
 
   return { layout, beginDrag, setLayout, endDrag, startRef };
 }
@@ -278,9 +353,14 @@ function isEditable(target: EventTarget | null): boolean {
  * panels carry `tabIndex={-1}` as the fallback: a `<section>` cannot take
  * programmatic focus without it, so an empty panel would silently swallow the
  * shortcut.
+ *
+ * Scoped to the pane the user is looking at: with several repositories open,
+ * every one of them has a panel called "History".
  */
-function focusPanel(label: string): void {
-  const panel = document.querySelector<HTMLElement>(`[aria-label="${label}"]`);
+function focusPanel(within: HTMLElement | null, label: string): void {
+  const panel = (within ?? document).querySelector<HTMLElement>(
+    `[aria-label="${label}"]`,
+  );
   if (panel === null) return;
   const focusable = panel.querySelector<HTMLElement>(
     'button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
@@ -295,13 +375,35 @@ const PANEL_LABEL: Record<string, string> = {
   'focus-diff': 'Diff',
 };
 
-function RepoView({ root }: { root: string }): ReactNode {
-  useRepositoryWatch(root);
+/**
+ * One open repository.
+ *
+ * Every open tab stays mounted, hidden when it is not the one on screen, so its
+ * watcher keeps running and its panels stay current — coming back to a tab
+ * shows what that repository looks like now, not what it looked like when you
+ * left it.
+ */
+function RepoPane({
+  active,
+  onClose,
+}: {
+  active: boolean;
+  onClose: () => void;
+}): ReactNode {
   const store = useStore();
+  const repo = useAppState((state) => state.repo);
+  const root = repo.state === 'ready' ? repo.value.root : null;
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const name = repoName(root);
+  const pane = useRef<HTMLDivElement | null>(null);
+
+  useRepositoryWatch(root);
 
   useEffect(() => {
+    // Only the pane on screen answers the keyboard. Every open tab is mounted,
+    // and without this each one would act on the same key press — Ctrl+W would
+    // close every repository at once.
+    if (!active) return;
+
     const onKeyDown = (event: KeyboardEvent): void => {
       const shortcut = resolveShortcut(event, { editable: isEditable(event.target) });
       if (shortcut === null) return;
@@ -309,7 +411,7 @@ function RepoView({ root }: { root: string }): ReactNode {
       const panel = PANEL_LABEL[shortcut];
       if (panel !== undefined) {
         event.preventDefault();
-        focusPanel(panel);
+        focusPanel(pane.current, panel);
         return;
       }
       if (shortcut === 'refresh') {
@@ -324,7 +426,7 @@ function RepoView({ root }: { root: string }): ReactNode {
       }
       if (shortcut === 'close-repo') {
         event.preventDefault();
-        closeRepo(store);
+        onClose();
       }
       // `commit` is handled by the changes panel, which owns the draft.
     };
@@ -333,26 +435,33 @@ function RepoView({ root }: { root: string }): ReactNode {
     return () => {
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [store]);
+  }, [store, active, onClose]);
 
-  if (settingsOpen) {
-    return <SettingsView onClose={() => setSettingsOpen(false)} />;
-  }
+  if (root === null) return null;
 
   return (
-    <div className="repo-layout">
-      <TitleBar name={name} onClose={() => closeRepo(store)} />
-      <Toolbar root={root} name={name} onOpenSettings={() => setSettingsOpen(true)} />
-      <ConflictBanner />
-      <NoticeBar />
-      <Workspace />
-      <StatusBar root={root} />
+    <div className="repo-pane" ref={pane} hidden={!active}>
+      {settingsOpen ? (
+        <SettingsView onClose={() => setSettingsOpen(false)} />
+      ) : (
+        <>
+          <Toolbar
+            root={root}
+            name={repoName(root)}
+            onOpenSettings={() => setSettingsOpen(true)}
+          />
+          <ConflictBanner />
+          <NoticeBar />
+          <PanelGrid />
+          <StatusBar root={root} />
+        </>
+      )}
     </div>
   );
 }
 
-/** The three panels and the two-and-a-half edges the user can drag. */
-function Workspace(): ReactNode {
+/** The three panels and the edges the user can drag. */
+function PanelGrid(): ReactNode {
   const { layout, beginDrag, setLayout, endDrag, startRef } = useLayout();
   // The centre column's height, needed to turn a vertical drag into a share.
   // Read at the start of each drag rather than watched, since it cannot change
@@ -477,12 +586,111 @@ function Workspace(): ReactNode {
   );
 }
 
+/** Keeps a store on the list that receives settings changes. */
+function useRegisteredStore(store: Store): void {
+  useEffect(() => registerStore(store), [store]);
+}
+
+/** A store for a new tab, starting from the settings already in force. */
+function makeTabStore(config: AppConfig): Store {
+  const store = createStore();
+  store.dispatch({ type: 'config/loaded', config });
+  return store;
+}
+
+let nextTabId = 1;
+
 export default function App(): ReactNode {
   useLoadedConfig();
-  const repo = useAppState((state) => state.repo);
+  // The store the app was mounted with is where the welcome screen opens
+  // repositories. When one opens, that store *becomes* the tab's store — the
+  // loading it just did is the tab's state — and a fresh one takes its place
+  // for the next visit home.
+  const initial = useStore();
+  const [home, setHome] = useState<Store>(initial);
+  const [workspace, setWorkspace] = useState<TabWorkspace<Store>>({
+    tabs: [],
+    activeId: null,
+  });
 
-  if (repo.state === 'ready') {
-    return <RepoView root={repo.value.root} />;
+  useRegisteredStore(home);
+  const homeRepo = useStoreState(home, (state) => state.repo);
+
+  // A repository opened on the home screen becomes a tab. Reading the store
+  // rather than wiring a callback through the welcome screen keeps every route
+  // in — the folder picker, a recent row, a repository already open at mount —
+  // going through one place.
+  //
+  // Adjusted during render rather than in an effect, the way `RefsView` handles
+  // a changed repository: the tab list is *derived* from the store, and an
+  // effect would let one frame paint the home screen over a repository that is
+  // already open.
+  if (homeRepo.state === 'ready') {
+    const root = homeRepo.value.root;
+    const adopted = home;
+    setWorkspace((current) =>
+      openRepoTab(current, root, () => ({
+        id: `tab-${String(nextTabId++)}`,
+        root,
+        store: adopted,
+      })),
+    );
+    setHome(makeTabStore(adopted.getState().config));
   }
-  return <WelcomeView />;
+
+  const closeTab = useCallback((id: string) => {
+    setWorkspace((current) => {
+      const tab = current.tabs.find((candidate) => candidate.id === id);
+      // Closing the repository inside the store is what stops its watcher; the
+      // store itself goes away with the tab.
+      if (tab !== undefined) closeRepo(tab.store);
+      return closeRepoTab(current, id);
+    });
+  }, []);
+
+  const active = activeTab(workspace);
+
+  return (
+    <div className="repo-layout">
+      <TitleBar
+        tabs={workspace.tabs}
+        activeId={workspace.activeId}
+        onHome={() => setWorkspace((current) => ({ ...current, activeId: null }))}
+        onActivate={(id) => setWorkspace((current) => ({ ...current, activeId: id }))}
+        onClose={closeTab}
+      />
+
+      {active === undefined && (
+        <StoreProvider store={home}>
+          <WelcomeView />
+        </StoreProvider>
+      )}
+
+      {workspace.tabs.map((tab) => (
+        <TabPane
+          key={tab.id}
+          tab={tab}
+          active={tab.id === workspace.activeId}
+          onClose={() => closeTab(tab.id)}
+        />
+      ))}
+    </div>
+  );
+}
+
+function TabPane({
+  tab,
+  active,
+  onClose,
+}: {
+  tab: RepoTab<Store>;
+  active: boolean;
+  onClose: () => void;
+}): ReactNode {
+  useRegisteredStore(tab.store);
+  return (
+    <StoreProvider store={tab.store}>
+      <RepoPane active={active} onClose={onClose} />
+    </StoreProvider>
+  );
 }
