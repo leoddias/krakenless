@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   closeRepo,
+  fetchRemote,
+  pullCurrent,
+  removeBranch,
+  removeStash,
+  switchTo,
   commitStaged,
   discard,
   forgetRepo,
@@ -26,12 +31,34 @@ const unstagePaths = vi.hoisted(() => vi.fn());
 const applyHunks = vi.hoisted(() => vi.fn());
 const commit = vi.hoisted(() => vi.fn());
 const discardPaths = vi.hoisted(() => vi.fn());
+const listBranches = vi.hoisted(() => vi.fn());
+const listStashes = vi.hoisted(() => vi.fn());
+const fetchRemoteFn = vi.hoisted(() => vi.fn());
+const pullFn = vi.hoisted(() => vi.fn());
+const pushFn = vi.hoisted(() => vi.fn());
+const switchBranch = vi.hoisted(() => vi.fn());
+const switchNewBranch = vi.hoisted(() => vi.fn());
+const deleteBranch = vi.hoisted(() => vi.fn());
+const applyStash = vi.hoisted(() => vi.fn());
+const dropStash = vi.hoisted(() => vi.fn());
 
 vi.mock('../git/repository', () => ({ openRepository }));
 vi.mock('../git/status', () => ({ getStatus }));
 vi.mock('../git/log', () => ({ readLog }));
 vi.mock('../git/diff', () => ({ getWorktreeDiff, getStagedDiff, getCommitDiff }));
 vi.mock('../config/store', () => ({ saveConfig }));
+vi.mock('../git/refs', () => ({
+  listBranches,
+  listStashes,
+  fetch: fetchRemoteFn,
+  pull: pullFn,
+  push: pushFn,
+  switchBranch,
+  switchNewBranch,
+  deleteBranch,
+  applyStash,
+  dropStash,
+}));
 vi.mock('../git/stage', () => ({
   stagePaths,
   unstagePaths,
@@ -82,6 +109,16 @@ describe('actions', () => {
     unstagePaths.mockResolvedValue(undefined);
     applyHunks.mockResolvedValue(undefined);
     commit.mockResolvedValue(undefined);
+    listBranches.mockResolvedValue([]);
+    listStashes.mockResolvedValue([]);
+    fetchRemoteFn.mockResolvedValue(undefined);
+    pullFn.mockResolvedValue(undefined);
+    pushFn.mockResolvedValue(undefined);
+    switchBranch.mockResolvedValue(undefined);
+    switchNewBranch.mockResolvedValue(undefined);
+    deleteBranch.mockResolvedValue({ deleted: true });
+    applyStash.mockResolvedValue(undefined);
+    dropStash.mockResolvedValue(undefined);
     discardPaths.mockResolvedValue({
       discarded: true,
       stashLabel: 'krakenless: discarded now',
@@ -293,6 +330,16 @@ describe('actions', () => {
   it('says nothing was discarded when git created no stash', async () => {
     // `stash push -- <path>` exits 0 and creates nothing when the path is
     // unchanged; claiming success would send the user to an unrelated stash.
+    listBranches.mockResolvedValue([]);
+    listStashes.mockResolvedValue([]);
+    fetchRemoteFn.mockResolvedValue(undefined);
+    pullFn.mockResolvedValue(undefined);
+    pushFn.mockResolvedValue(undefined);
+    switchBranch.mockResolvedValue(undefined);
+    switchNewBranch.mockResolvedValue(undefined);
+    deleteBranch.mockResolvedValue({ deleted: true });
+    applyStash.mockResolvedValue(undefined);
+    dropStash.mockResolvedValue(undefined);
     discardPaths.mockResolvedValue({ discarded: false, undoCommands: [] });
     const store = createStore();
     await openRepo(store, 'C:/repos/app');
@@ -316,5 +363,71 @@ describe('actions', () => {
 
     expect(commit).toHaveBeenCalledWith(REPO.root, { message: 'feat: thing' });
     expect(readLog).toHaveBeenCalled();
+  });
+
+  it('reports a failed pull as a notice instead of throwing at the view', async () => {
+    pullFn.mockRejectedValue(
+      new GitError('command-failed', 'Your branch and its upstream have diverged.'),
+    );
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await expect(pullCurrent(store)).resolves.toBe(false);
+    expect(store.getState().notice).toMatchObject({ tone: 'error' });
+    expect(store.getState().notice?.message).toContain('diverged');
+  });
+
+  it('refreshes everything after a fetch, including branches and stashes', async () => {
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+    listBranches.mockClear();
+    listStashes.mockClear();
+
+    await fetchRemote(store);
+
+    expect(fetchRemoteFn).toHaveBeenCalledWith(REPO.root, { prune: true });
+    expect(listBranches).toHaveBeenCalled();
+    expect(listStashes).toHaveBeenCalled();
+    expect(store.getState().busy).toBe(false);
+  });
+
+  it('keeps the panels consistent when a branch switch fails', async () => {
+    // A failed switch leaves the old branch checked out; the panels must be
+    // re-read rather than left showing the branch the user tried to reach.
+    switchBranch.mockRejectedValue(new GitError('command-failed', 'local changes'));
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+    getStatus.mockClear();
+
+    await expect(switchTo(store, 'topic')).resolves.toBe(false);
+    expect(getStatus).toHaveBeenCalled();
+    expect(store.getState().notice).toMatchObject({ tone: 'error' });
+  });
+
+  it('surfaces the unmerged warning instead of deleting', async () => {
+    deleteBranch.mockResolvedValue({
+      deleted: false,
+      unmergedWarning: 'Branch "topic" has commits that are not merged anywhere.',
+    });
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    const outcome = await removeBranch(store, 'topic', 'Delete branch topic?');
+
+    expect(outcome?.deleted).toBe(false);
+    expect(store.getState().notice).toMatchObject({ tone: 'warning' });
+  });
+
+  it('passes the confirmation the user saw down to the stash drop', async () => {
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await removeStash(store, { ref: 'stash@{0}', oid: 'abc' }, 'Drop stash@{0}?');
+
+    expect(dropStash).toHaveBeenCalledWith(
+      REPO.root,
+      { ref: 'stash@{0}', oid: 'abc' },
+      expect.objectContaining({ reason: 'Drop stash@{0}?' }),
+    );
   });
 });

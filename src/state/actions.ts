@@ -24,6 +24,19 @@ import {
 } from '../git/stage';
 import type { CommitOptions } from '../git/commands/stage';
 import { userConfirmed } from '../git/confirm';
+import {
+  applyStash,
+  deleteBranch,
+  dropStash,
+  fetch,
+  listBranches,
+  listStashes,
+  pull,
+  push,
+  switchBranch,
+  switchNewBranch,
+  type DeleteBranchOutcome,
+} from '../git/refs';
 import { getStatus } from '../git/status';
 import type { FileDiff, Hunk } from '../git/types';
 import type { Store } from './store';
@@ -226,4 +239,149 @@ export async function commitStaged(store: Store, options: CommitOptions): Promis
   if (root === null) return;
   await mutate(store, () => commit(root, options));
   await refreshCommits(store);
+}
+
+// --- refs ------------------------------------------------------------------
+
+export async function refreshBranches(store: Store): Promise<void> {
+  const root = currentRoot(store);
+  if (root === null) return;
+  store.dispatch({ type: 'branches/loading' });
+  try {
+    const branches = await listBranches(root, { includeRemotes: true });
+    store.dispatch({ type: 'branches/loaded', branches });
+  } catch (error) {
+    store.dispatch({ type: 'branches/failed', ...describe(error) });
+  }
+}
+
+export async function refreshStashes(store: Store): Promise<void> {
+  const root = currentRoot(store);
+  if (root === null) return;
+  store.dispatch({ type: 'stashes/loading' });
+  try {
+    store.dispatch({ type: 'stashes/loaded', stashes: await listStashes(root) });
+  } catch (error) {
+    store.dispatch({ type: 'stashes/failed', ...describe(error) });
+  }
+}
+
+/** Refreshes everything a branch switch or network operation can change. */
+async function refreshAll(store: Store): Promise<void> {
+  await Promise.all([
+    refreshStatus(store),
+    refreshCommits(store),
+    refreshDiff(store),
+    refreshBranches(store),
+    refreshStashes(store),
+  ]);
+}
+
+function report(store: Store, error: unknown): void {
+  store.dispatch({ type: 'notice', notice: { tone: 'error', ...describe(error) } });
+}
+
+/** Runs a repository-changing operation, reporting failure as a notice. */
+async function operate(store: Store, run: () => Promise<unknown>): Promise<boolean> {
+  store.dispatch({ type: 'busy', busy: true });
+  try {
+    await run();
+    return true;
+  } catch (error) {
+    report(store, error);
+    return false;
+  } finally {
+    store.dispatch({ type: 'busy', busy: false });
+    await refreshAll(store);
+  }
+}
+
+export async function fetchRemote(store: Store): Promise<boolean> {
+  const root = currentRoot(store);
+  if (root === null) return false;
+  return operate(store, () => fetch(root, { prune: true }));
+}
+
+export async function pullCurrent(store: Store): Promise<boolean> {
+  const root = currentRoot(store);
+  if (root === null) return false;
+  return operate(store, () => pull(root));
+}
+
+export async function pushCurrent(
+  store: Store,
+  options: { remote: string; branch: string; setUpstream?: boolean },
+): Promise<boolean> {
+  const root = currentRoot(store);
+  if (root === null) return false;
+  return operate(store, () => push(root, options));
+}
+
+export async function switchTo(store: Store, name: string): Promise<boolean> {
+  const root = currentRoot(store);
+  if (root === null) return false;
+  return operate(store, () => switchBranch(root, name));
+}
+
+export async function createAndSwitch(
+  store: Store,
+  name: string,
+  startPoint?: string,
+): Promise<boolean> {
+  const root = currentRoot(store);
+  if (root === null) return false;
+  return operate(store, () => switchNewBranch(root, name, startPoint));
+}
+
+/**
+ * Deletes a branch. Without `force` this reports the unmerged warning instead
+ * of deleting, so the UI can ask again with the consequence spelled out.
+ */
+export async function removeBranch(
+  store: Store,
+  name: string,
+  confirmationReason: string,
+  options: { force: boolean } = { force: false },
+): Promise<DeleteBranchOutcome | null> {
+  const root = currentRoot(store);
+  if (root === null) return null;
+
+  let outcome: DeleteBranchOutcome | null = null;
+  await operate(store, async () => {
+    outcome = await deleteBranch(root, name, userConfirmed(confirmationReason), options);
+  });
+
+  if (outcome !== null) {
+    const result: DeleteBranchOutcome = outcome;
+    if (!result.deleted && result.unmergedWarning !== undefined) {
+      store.dispatch({
+        type: 'notice',
+        notice: { tone: 'warning', message: result.unmergedWarning },
+      });
+    }
+  }
+  return outcome;
+}
+
+export async function restoreStash(
+  store: Store,
+  entry: { ref: string; oid: string },
+  options: { pop: boolean },
+  confirmationReason: string,
+): Promise<boolean> {
+  const root = currentRoot(store);
+  if (root === null) return false;
+  return operate(store, () =>
+    applyStash(root, entry, options, userConfirmed(confirmationReason)),
+  );
+}
+
+export async function removeStash(
+  store: Store,
+  entry: { ref: string; oid: string },
+  confirmationReason: string,
+): Promise<boolean> {
+  const root = currentRoot(store);
+  if (root === null) return false;
+  return operate(store, () => dropStash(root, entry, userConfirmed(confirmationReason)));
 }
