@@ -1,0 +1,38 @@
+# Conventions
+
+## Code
+
+- TypeScript strict mode; no `any` in `src/git/**` (the safety core).
+- Pure functions for command builders and parsers — no IPC, no globals.
+- React: function components, hooks; state lives in `src/state`, views stay thin.
+- Rust: plumbing only (see ARCHITECTURE invariants); `clippy` clean.
+- English everywhere: identifiers, comments, docs, UI strings.
+
+## Testing (the non-negotiable part — ADR-0008)
+
+- A change to any command builder or parser **includes unit tests in the same
+  commit**. No exceptions, including "trivial" changes.
+- Integration tests create disposable temp repos and run the real git binary;
+  they must pass on a clean Windows machine with only git installed.
+- Run `npm test` before declaring any task done; broken tests block handoff.
+- Destructive-operation code paths (discard, force-push, `branch -D`) need an
+  integration test proving the recoverable path (e.g. stash created).
+
+## Commits
+
+- Conventional Commits: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`,
+  `chore:`, `ci:`. Scope optional: `feat(staging): ...`
+- Small, coherent commits; a milestone checkbox ≈ 1–3 commits.
+- Check off the matching `docs/ROADMAP.md` item in the same commit that
+  completes it.
+
+## Vibe-coding rules (for agents)
+
+- Read `docs/PROGRESS.md` before writing code; update it after (see `/handoff`).
+- Don't invent scope: anything not in the current milestone goes to
+  ROADMAP § Backlog.
+- Generated code gets the same test bar as handwritten code. If you can't
+  test it, don't ship it.
+- After touching `src/git/**` or `src-tauri/src/git_runner.rs`, run the
+  `safety-reviewer` agent before handoff.
+- Never commit `.env`, keys, or user repo paths in fixtures.

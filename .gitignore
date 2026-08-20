@@ -1,0 +1,28 @@
+# Node
+node_modules/
+dist/
+*.local
+
+# Rust / Tauri
+src-tauri/target/
+target/
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# Editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+Thumbs.db
+.DS_Store
+
+# Test artifacts
+coverage/
+tmp/
