@@ -35,10 +35,10 @@ If schedule slips: cut graph *polish*, never parser tests.
 - [x] Working tree auto-refresh (fs watcher, debounced)
 
 ### M3 — Remotes (~1 week)
-- [ ] Fetch / pull / push with progress and readable error surfaces
-- [ ] Ahead/behind indicators
-- [ ] Conflict detection → honest banner: conflicted files list, "Open in editor",
-      "Open git mergetool", "Abort merge" (integration tests for state detection)
+- [x] Fetch / pull / push with progress and readable error surfaces
+- [x] Ahead/behind indicators (honest: unknown when git did not report them)
+- [x] Conflict detection → honest banner: conflicted files list, "Open in editor",
+      "Open git mergetool", "Abort merge"
 
 ### M4 — Branches + stash (~1 week)
 - [ ] Create / checkout / delete branch (delete = confirm; prefer `-d`, explicit `-D`)
@@ -47,7 +47,7 @@ If schedule slips: cut graph *polish*, never parser tests.
 
 ### M5 — Polish + dogfood gate (~1 week)
 - [ ] Keyboard navigation, focus states, contrast pass
-- [ ] Settings screen (JSON-backed): editor command, mergetool
+- [x] Settings screen (JSON-backed): editor command, mergetool
 - [ ] Import/export = documented config file location + "Open config folder" button
 - [ ] README: setup, architecture, data location, backup, limitations
 - [ ] Sponsors/Ko-fi link in README + About dialog

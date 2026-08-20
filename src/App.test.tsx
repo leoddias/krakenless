@@ -23,6 +23,9 @@ vi.mock('./views/history/HistoryView', () => ({
 vi.mock('./views/diff', () => ({ DiffView: () => <div>diff view</div> }));
 vi.mock('./views/changes', () => ({ ChangesView: () => <div>changes view</div> }));
 vi.mock('./views/remote', () => ({ RemoteBar: () => <div>remote bar</div> }));
+vi.mock('./views/conflicts', () => ({
+  ConflictBanner: () => <div>conflict banner</div>,
+}));
 vi.mock('./views/settings', () => ({
   SettingsView: ({ onClose }: { onClose: () => void }) => (
     <button type="button" onClick={onClose}>

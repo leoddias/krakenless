@@ -6,6 +6,7 @@ import { closeRepo } from './state/actions';
 import { useAppState, useStore } from './state/hooks';
 import { watchRepository, type WatchHandle } from './state/watch';
 import { ChangesView } from './views/changes';
+import { ConflictBanner } from './views/conflicts';
 import { DiffView } from './views/diff';
 import { SettingsView } from './views/settings';
 import { RemoteBar } from './views/remote';
@@ -119,6 +120,7 @@ function RepoView({ root }: { root: string }): ReactNode {
     <div className="repo-layout">
       <RepoHeader root={root} onOpenSettings={() => setSettingsOpen(true)} />
       <RemoteBar />
+      <ConflictBanner />
       <NoticeBar />
       <div className="repo-panels">
         <section className="repo-panels__history" aria-label="History">

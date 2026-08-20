@@ -23,7 +23,9 @@ import {
 } from '../git/stage';
 import type { CommitOptions } from '../git/commands/stage';
 import { userConfirmed } from '../git/confirm';
+import { editorLaunch, launch, mergetoolLaunch } from '../config/launch';
 import {
+  abortMerge,
   applyStash,
   deleteBranch,
   dropStash,
@@ -398,4 +400,67 @@ export async function removeStash(
   const root = currentRoot(store);
   if (root === null) return false;
   return operate(store, () => dropStash(root, entry, userConfirmed(confirmationReason)));
+}
+
+// --- external tools --------------------------------------------------------
+
+/**
+ * Opens a repository file in the user's editor.
+ *
+ * Failure is reported as a notice rather than thrown: the editor not starting
+ * is a configuration problem, not a reason to break the panel the user clicked
+ * from.
+ */
+export async function openInEditor(store: Store, path: string): Promise<boolean> {
+  const root = currentRoot(store);
+  if (root === null) return false;
+
+  const target = editorLaunch(store.getState().config.editorCommand, path);
+  if (target === null) {
+    store.dispatch({
+      type: 'notice',
+      notice: {
+        tone: 'warning',
+        message: 'No editor is configured. Set one in Settings to open files from here.',
+      },
+    });
+    return false;
+  }
+
+  try {
+    await launch(target, root);
+    return true;
+  } catch (error) {
+    report(store, error);
+    return false;
+  }
+}
+
+/** Hands one conflicted file to `git mergetool`. */
+export async function openMergetool(store: Store, path: string): Promise<boolean> {
+  const root = currentRoot(store);
+  if (root === null) return false;
+
+  try {
+    await launch(mergetoolLaunch(store.getState().config.mergetool, path), root);
+    return true;
+  } catch (error) {
+    report(store, error);
+    return false;
+  }
+}
+
+/**
+ * Aborts a merge in progress, returning the tree to its pre-merge state.
+ *
+ * Destructive: it throws away conflict resolutions made so far, so the caller
+ * passes the text the user agreed to.
+ */
+export async function abortMergeInProgress(
+  store: Store,
+  confirmationReason: string,
+): Promise<boolean> {
+  const root = currentRoot(store);
+  if (root === null) return false;
+  return operate(store, () => abortMerge(root, userConfirmed(confirmationReason)));
 }
