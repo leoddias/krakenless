@@ -6,31 +6,28 @@
 
 ## Current state
 
-- **Phase:** M0–M4 complete; M5 mostly done. The app runs and was driven by hand
-  (screenshots) against this repository, not only through tests.
-- **Verified working in the real app:** welcome + recent repos, history with ref
-  decorations, working-tree panel (stage/unstage/discard/commit), diff panel,
-  remote bar (fetch/pull/push), branches + stashes panel, conflict banner,
-  settings, fs-watch refresh.
-- **Test status:** `npm test` 881 passing (35 files), `cargo test` 32 passing;
-  oxlint, prettier and clippy clean. Integration tests drive the real `git`
-  binary on disposable repos for patch round-trips and destructive paths.
-- Settings live in `%APPDATA%/krakenless/config.json` — the path the docs
-  promise (Tauri's default would have been `dev.krakenless.app`).
-- **Not built:** conflict *resolution* UI, graph parent lines, interactive
-  rebase. `state.remotes` is reconstructed from branches, not read directly.
+- **Phase:** v0.1 feature-complete. Every buildable item in `docs/ROADMAP.md`
+  M0–M5 is checked off; the only open item is the dogfood gate, which is two
+  weeks of use, not code.
+- **Verified in the running app**, by hand with screenshots: welcome + recent
+  repos, history with the commit graph and ref decorations, working-tree panel
+  (stage/unstage/discard/commit), diff viewer, remote bar, branches + stashes,
+  conflict banner, settings, keyboard shortcuts, fs-watch refresh.
+- **Test status:** `npm test` 935 passing (40 files, stable across three
+  consecutive runs), `cargo test` 36 passing; oxlint, prettier and clippy clean.
+- The discard path — the only code that takes work off disk — has integration
+  tests that **execute the recovery command the UI displays**. Keep that
+  property for any future change to `stage.ts` or `recovery.ts`.
+- **Not built:** conflict *resolution* UI, interactive rebase. Both are v0.2.
 
 ## Next up (in order)
 
-1. **Close M5** (`docs/ROADMAP.md` § M5): keyboard navigation and focus pass
-   across the four panels, contrast check, then the dogfood gate — use
-   Krakenless as the only Git client for two weeks.
-2. **Graph parent lines** (M4's last item): commit edges between rows in
-   `src/views/history`. Functional, not beautiful.
-3. Work the backlog the reviewers filed, highest value first: a real
-   `state.remotes` slice (unfetched remotes are invisible today), `busy` as a
-   depth counter rather than a boolean, and an integration test for the
-   stash-drop recovery route.
+1. **The dogfood gate** (`docs/ROADMAP.md` § M5): use Krakenless as the only
+   Git client for two weeks. Everything else in v0.1 is done, so this is the
+   next real step and it produces the list that shapes v0.2.
+2. Fix whatever the gate surfaces, in the order it hurts.
+3. Then the validation checkpoint in `PLAN.md`: builds to 3–5 friends, and the
+   decision to invest in v0.2 or stop.
 
 ## Blockers / open questions
 
@@ -40,6 +37,30 @@
   until `buildPushCommand` emits a `<local>:<upstream>` refspec.
 
 ## Session log
+
+### 2026-08-20 (later) — v0.1 finished, final safety pass
+
+- Closed M3–M5: conflict banner, settings, About, keyboard shortcuts
+  (Ctrl+1..4, Ctrl+R/F5, Ctrl+Enter, Ctrl+`,`, Ctrl+W), commit graph lanes.
+- Final `safety-reviewer` pass blocked twice more, both times correctly:
+  - `git stash push --include-untracked` stores the file in the stash's *third
+    parent*, so the recovery command shipped for an untracked discard could
+    never work. Fixed by resolving `^3` to a literal oid (never emitting `^`,
+    which cmd.exe eats) and naming only paths the source tree actually holds.
+  - The two facts the fix produced — "cannot restore this path", "no command
+    for this discard" — were computed and dropped before reaching the screen.
+  - `describeStash` walked the whole repository tree, so one undecodable
+    filename anywhere made a discard fail *after* moving work off disk.
+- Took the backlog items the reviewers filed: `state.remotes` read from
+  `git remote` (an unfetched remote was invisible), and `busyDepth` as a
+  counter so an overlapping write cannot re-enable destructive controls.
+- Running the app found what tests could not: the graph reserved the widest
+  lane count on every row and pushed commit subjects off the line.
+- Fixed suite flakiness: the three integration files spawn dozens of git
+  processes and exceeded Vitest's 5s default under the parallel runner.
+- Also corrected a false claim I made to the reviewer — I reported view-layer
+  tests that a silently-failed edit had never written. They exist now.
+- Tests at handoff: `npm test` 935 passing, `cargo test` 36 passing.
 
 ### 2026-08-20 — M1–M4 built with parallel packets and capped loops
 

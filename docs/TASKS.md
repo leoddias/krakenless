@@ -6,7 +6,8 @@ history; outcomes go to `docs/PROGRESS.md`.
 
 ## In flight
 
-_(none)_
+_(none — v0.1 is feature-complete; the next work is the dogfood gate, which is
+not a packet.)_
 
 ## Merged this session
 
