@@ -52,9 +52,16 @@ const GIT_ENV_TO_SCRUB: [&str; 16] = [
     "GIT_EXTERNAL_DIFF",
 ];
 
-/// Prepended to every invocation so path quoting and paging are decided once,
-/// here, instead of per builder.
-const GIT_GLOBAL_ARGS: [&str; 3] = ["--no-pager", "-c", "core.quotePath=false"];
+/// Prepended to every invocation so path quoting, paging and pathspec magic
+/// are decided once, here, instead of per builder. `--literal-pathspecs`
+/// matters most on the write side: a file legally named `:(glob)**` would
+/// otherwise expand a `checkout -- <path>` from one file to the whole tree.
+const GIT_GLOBAL_ARGS: [&str; 4] = [
+    "--no-pager",
+    "--literal-pathspecs",
+    "-c",
+    "core.quotePath=false",
+];
 
 #[derive(Debug, serde::Serialize)]
 pub struct GitOutput {

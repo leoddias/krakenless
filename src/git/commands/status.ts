@@ -36,10 +36,8 @@ export interface StatusOptions {
  *   it is the most likely to hit the runner timeout — and the runner kills the
  *   process group with SIGKILL, which runs no cleanup and would leave the lock
  *   behind, breaking every later `add`/`commit` in that repository.
- * - `--literal-pathspecs`: after `--`, git still reads pathspec magic such as
- *   `:(top)` or `:/`, which expand to the whole repository. The paths this
- *   command reports are the same strings that later reach write commands, so
- *   magic is disabled at the source.
+ * - `--literal-pathspecs` is prepended by the Rust runner for every command
+ *   (ADR-0015), so pathspec magic such as `:(glob)` is never interpreted here.
  */
 export function buildStatusCommand(options: StatusOptions = {}): GitCommand {
   const untracked = options.untracked ?? 'all';
@@ -50,7 +48,6 @@ export function buildStatusCommand(options: StatusOptions = {}): GitCommand {
   }
   const args = [
     '--no-optional-locks',
-    '--literal-pathspecs',
     'status',
     '--porcelain=v2',
     '--branch',

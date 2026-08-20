@@ -73,6 +73,12 @@ export interface StatusEntry {
   conflicted: boolean;
   /** Submodule marker from porcelain v2 (`SCMU`), when present. */
   submodule?: string;
+  /**
+   * Conflict type from a porcelain v2 `u` record, when the path is unmerged.
+   * The UI needs it to offer the right resolution: `UU`/`AA` are content
+   * conflicts, `DU`/`UD` are keep-vs-delete.
+   */
+  conflictKind?: 'DD' | 'AU' | 'UD' | 'UA' | 'DU' | 'AA' | 'UU';
 }
 
 export interface RepoStatus {

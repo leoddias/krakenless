@@ -221,6 +221,8 @@ function parseUnmerged(record: string): StatusEntry {
     index: 'unmerged',
     worktree: 'unmerged',
     conflicted: true,
+    // Kept, not discarded: the resolution UI differs per conflict type.
+    conflictKind: code as NonNullable<StatusEntry['conflictKind']>,
   };
   const submodule = submoduleField(at(parts, 1, record), record);
   if (submodule !== undefined) entry.submodule = submodule;

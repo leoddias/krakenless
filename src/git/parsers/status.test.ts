@@ -43,7 +43,6 @@ describe('buildStatusCommand', () => {
   it('emits the exact porcelain v2 argument array', () => {
     expect(buildStatusCommand().args).toEqual([
       '--no-optional-locks',
-      '--literal-pathspecs',
       'status',
       '--porcelain=v2',
       '--branch',
@@ -69,11 +68,12 @@ describe('buildStatusCommand', () => {
   it('takes no index lock and disables pathspec magic', () => {
     // status rewrites the index under .git/index.lock unless told not to, and
     // the runner kills a timed-out git with SIGKILL, which would leave the
-    // lock behind. --literal-pathspecs stops `:(top)` and friends from
+    // lock behind. Pathspec magic is disabled by the runner's global
+    // --literal-pathspecs (ADR-0015), which stops `:(top)` and friends from
     // widening the report - and later, a discard - to the whole repository.
     const { args } = buildStatusCommand();
-    expect(args.slice(0, 2)).toEqual(['--no-optional-locks', '--literal-pathspecs']);
-    expect(args.indexOf('status')).toBe(2);
+    expect(args[0]).toBe('--no-optional-locks');
+    expect(args.indexOf('status')).toBe(1);
   });
 
   it('rejects an untracked mode that did not come from the type system', () => {
@@ -96,7 +96,6 @@ describe('buildStatusCommand', () => {
     expect(buildStatusCommand().args).not.toContain('--ignored=matching');
     expect(buildStatusCommand({ includeIgnored: true }).args).toEqual([
       '--no-optional-locks',
-      '--literal-pathspecs',
       'status',
       '--porcelain=v2',
       '--branch',
@@ -120,7 +119,6 @@ describe('buildStatusCommand', () => {
   it('puts paths after -- and routes them through the path guard', () => {
     expect(buildStatusCommand({ paths: ['src/a.ts', 'with space.txt'] }).args).toEqual([
       '--no-optional-locks',
-      '--literal-pathspecs',
       'status',
       '--porcelain=v2',
       '--branch',
@@ -360,12 +358,14 @@ describe('parseStatus entries', () => {
         index: 'unmerged',
         worktree: 'unmerged',
         conflicted: true,
+        conflictKind: 'AA',
       },
       {
         path: 'conflict.txt',
         index: 'unmerged',
         worktree: 'unmerged',
         conflicted: true,
+        conflictKind: 'UU',
       },
     ]);
   });
