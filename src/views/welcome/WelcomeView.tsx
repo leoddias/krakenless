@@ -6,7 +6,7 @@
  * picker) has its own honest wording in `messages.ts`.
  */
 
-import { useCallback, useState, type ReactNode } from 'react';
+import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { forgetRepo, openRepo } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
@@ -18,10 +18,26 @@ export function WelcomeView(): ReactNode {
   const repo = useAppState((state) => state.repo);
   const recentRepos = useAppState((state) => state.config.recentRepos);
   const [pickerError, setPickerError] = useState<string | null>(null);
-  // Read once per mount: rendering must not depend on a ticking clock.
-  const [now] = useState(() => new Date());
+  // Labels are computed when the list changes, so the clock is read there and
+  // never during an arbitrary render.
+  const rows = useMemo(() => {
+    const now = new Date();
+    return recentRepos.map((recent) => ({
+      path: recent.path,
+      name: repoName(recent.path),
+      when: formatLastOpened(recent.lastOpened, now),
+    }));
+  }, [recentRepos]);
+
+  const primaryRef = useRef<HTMLButtonElement>(null);
 
   const opening = repo.state === 'loading';
+
+  /** Forgetting the last row removes the focused element; keep focus on screen. */
+  const forget = (path: string): void => {
+    if (recentRepos.length === 1) primaryRef.current?.focus();
+    void forgetRepo(store, path);
+  };
 
   const pickFolder = useCallback(async (): Promise<void> => {
     setPickerError(null);
@@ -49,6 +65,7 @@ export function WelcomeView(): ReactNode {
       <button
         type="button"
         className={styles.primary}
+        ref={primaryRef}
         onClick={() => void pickFolder()}
         disabled={opening}
       >
@@ -75,32 +92,33 @@ export function WelcomeView(): ReactNode {
         <h2 className={styles.sectionTitle} id="welcome-recents">
           Recent repositories
         </h2>
-        {recentRepos.length === 0 ? (
+        {rows.length === 0 ? (
           <p className={styles.empty}>
             No recent repositories yet. Open a folder to get started.
           </p>
         ) : (
           <ul className={styles.list}>
-            {recentRepos.map((recent) => (
+            {rows.map((recent) => (
               <li className={styles.row} key={recent.path}>
                 <button
                   type="button"
                   className={styles.rowOpen}
-                  aria-label={`Open ${recent.path}`}
-                  onClick={() => void openRepo(store, recent.path)}
+                  onClick={() => {
+                    // A stale picker failure must not survive the next action.
+                    setPickerError(null);
+                    void openRepo(store, recent.path);
+                  }}
                   disabled={opening}
                 >
-                  <span className={styles.rowName}>{repoName(recent.path)}</span>
+                  <span className={styles.rowName}>{recent.name}</span>
                   <span className={styles.rowPath}>{recent.path}</span>
-                  <span className={styles.rowWhen}>
-                    {formatLastOpened(recent.lastOpened, now)}
-                  </span>
+                  <span className={styles.rowWhen}>{recent.when}</span>
                 </button>
                 <button
                   type="button"
                   className={styles.rowForget}
                   aria-label={`Forget ${recent.path}`}
-                  onClick={() => void forgetRepo(store, recent.path)}
+                  onClick={() => forget(recent.path)}
                 >
                   Forget
                 </button>

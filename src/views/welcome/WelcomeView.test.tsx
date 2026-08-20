@@ -1,4 +1,12 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { forgetRepo, openRepo } from '../../state/actions';
 import { StoreProvider } from '../../state/hooks';
@@ -31,6 +39,16 @@ function renderWelcome(recentRepos: RecentRepo[] = []): Store {
   return store;
 }
 
+/** The button that opens a recent row; its name comes from its visible text. */
+function openButton(path: string): HTMLElement {
+  const row = screen
+    .getAllByRole('listitem')
+    .find((item) => within(item).queryByText(path) !== null);
+  if (row === undefined) throw new Error(`no recent row for ${path}`);
+  // First button in the row is the opener, second is "Forget".
+  return within(row).getAllByRole('button')[0] as HTMLElement;
+}
+
 const recents: RecentRepo[] = [
   { path: 'C:/code/newest', lastOpened: '2026-08-20T10:00:00.000Z' },
   { path: 'C:/code/older', lastOpened: '2026-08-10T10:00:00.000Z' },
@@ -54,20 +72,28 @@ describe('WelcomeView', () => {
     expect(screen.queryByRole('list')).not.toBeInTheDocument();
   });
 
-  it('lists recent repositories newest first, with name and path', () => {
+  it('lists recent repositories in store order, newest first, with name and path', () => {
+    // The store hands the list over already ordered (config's withRecentRepo
+    // prepends), so the view must not re-sort or reverse it.
     renderWelcome(recents);
-    const rows = screen.getAllByRole('button', { name: /^Open C:/ });
-    expect(rows.map((row) => row.getAttribute('aria-label'))).toEqual([
-      'Open C:/code/newest',
-      'Open C:/code/older',
-    ]);
+    const rows = screen.getAllByRole('listitem');
+    expect(rows[0]).toHaveTextContent('C:/code/newest');
+    expect(rows[1]).toHaveTextContent('C:/code/older');
     expect(screen.getByText('newest')).toBeInTheDocument();
     expect(screen.getByText('C:/code/older')).toBeInTheDocument();
   });
 
+  it('keeps the repository name and recency in the row button name', () => {
+    renderWelcome(recents);
+    const name = openButton('C:/code/newest').textContent ?? '';
+    expect(name).toContain('newest');
+    expect(name).toContain('C:/code/newest');
+    expect(name).toContain('Opened');
+  });
+
   it('opens a recent repository through the action layer', () => {
     const store = renderWelcome(recents);
-    fireEvent.click(screen.getByRole('button', { name: 'Open C:/code/older' }));
+    fireEvent.click(openButton('C:/code/older'));
     expect(openRepo).toHaveBeenCalledWith(store, 'C:/code/older');
   });
 
@@ -102,20 +128,38 @@ describe('WelcomeView', () => {
     expect(openRepo).not.toHaveBeenCalled();
   });
 
+  it('clears a stale picker failure when a recent repository is opened', async () => {
+    pickFolder.mockRejectedValue(new Error('dialog plugin unavailable'));
+    renderWelcome(recents);
+    fireEvent.click(screen.getByRole('button', { name: 'Open a repository…' }));
+    await screen.findByRole('alert');
+
+    fireEvent.click(openButton('C:/code/newest'));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it('forgets a recent repository through the action layer', () => {
     const store = renderWelcome(recents);
     fireEvent.click(screen.getByRole('button', { name: 'Forget C:/code/newest' }));
     expect(forgetRepo).toHaveBeenCalledWith(store, 'C:/code/newest');
   });
 
+  it('keeps focus on screen after forgetting the last recent repository', () => {
+    renderWelcome([recents[0] as RecentRepo]);
+    fireEvent.click(screen.getByRole('button', { name: 'Forget C:/code/newest' }));
+    expect(document.activeElement).toBe(
+      screen.getByRole('button', { name: 'Open a repository…' }),
+    );
+  });
+
   it('shows a loading state while a repository is opening', () => {
     const store = renderWelcome(recents);
-    fireEvent.click(screen.getByRole('button', { name: 'Open C:/code/newest' }));
+    fireEvent.click(openButton('C:/code/newest'));
     act(() => store.dispatch({ type: 'repo/opening' }));
 
     expect(screen.getByRole('status')).toHaveTextContent('Opening repository…');
     expect(screen.getByRole('button', { name: 'Open a repository…' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Open C:/code/older' })).toBeDisabled();
+    expect(openButton('C:/code/older')).toBeDisabled();
   });
 
   it('uses real buttons so Enter and Space activate them', () => {

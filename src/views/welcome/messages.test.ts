@@ -42,22 +42,37 @@ describe('repoName', () => {
 });
 
 describe('formatLastOpened', () => {
-  const now = new Date('2026-08-20T12:00:00.000Z');
+  // Built in local time so the expectations hold in any timezone.
+  const local = (year: number, month: number, day: number, hour = 12, minute = 0): Date =>
+    new Date(year, month - 1, day, hour, minute);
+  const now = local(2026, 8, 20, 1, 0);
 
   it('reads today, yesterday and days ago', () => {
-    expect(formatLastOpened('2026-08-20T08:00:00.000Z', now)).toBe('Opened today');
-    expect(formatLastOpened('2026-08-19T08:00:00.000Z', now)).toBe('Opened yesterday');
-    expect(formatLastOpened('2026-08-15T12:00:00.000Z', now)).toBe('Opened 5 days ago');
+    expect(formatLastOpened(local(2026, 8, 20, 0, 30).toISOString(), now)).toBe(
+      'Opened today',
+    );
+    expect(formatLastOpened(local(2026, 8, 15).toISOString(), now)).toBe(
+      'Opened 5 days ago',
+    );
+  });
+
+  it('counts calendar days, not elapsed hours', () => {
+    // Two hours earlier, but on the previous calendar day.
+    expect(formatLastOpened(local(2026, 8, 19, 23, 0).toISOString(), now)).toBe(
+      'Opened yesterday',
+    );
   });
 
   it('falls back to a date beyond a month', () => {
-    expect(formatLastOpened('2026-01-02T12:00:00.000Z', now)).toBe(
+    expect(formatLastOpened(local(2026, 1, 2).toISOString(), now)).toBe(
       'Opened on 2026-01-02',
     );
   });
 
   it('handles a clock that moved backwards', () => {
-    expect(formatLastOpened('2026-09-01T12:00:00.000Z', now)).toBe('Opened just now');
+    expect(formatLastOpened(local(2026, 9, 1).toISOString(), now)).toBe(
+      'Opened just now',
+    );
   });
 
   it('admits when the stored timestamp is unusable', () => {

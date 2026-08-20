@@ -64,6 +64,18 @@ export function repoName(path: string): string {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** `YYYY-MM-DD` in local time, matching the calendar the comparison uses. */
+function localIsoDate(date: Date): string {
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+/** Midnight of the given instant in local time, for calendar-day comparisons. */
+function startOfDay(date: Date): number {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+}
+
 /**
  * Human wording for "last opened". Takes `now` explicitly so the result is
  * deterministic in tests and so the clock is never read during render.
@@ -75,9 +87,10 @@ export function formatLastOpened(iso: string, now: Date): string {
   const elapsed = now.getTime() - then.getTime();
   if (elapsed < 0) return 'Opened just now';
 
-  const days = Math.floor(elapsed / DAY_MS);
+  // Calendar days, not elapsed hours: 23:00 yesterday is "yesterday" at 01:00.
+  const days = Math.round((startOfDay(now) - startOfDay(then)) / DAY_MS);
   if (days === 0) return 'Opened today';
   if (days === 1) return 'Opened yesterday';
   if (days < 30) return `Opened ${days} days ago`;
-  return `Opened on ${then.toISOString().slice(0, 10)}`;
+  return `Opened on ${localIsoDate(then)}`;
 }
