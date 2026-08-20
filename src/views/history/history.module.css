@@ -1,0 +1,174 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  background: #14161a;
+  color: #e6e8eb;
+}
+
+.title {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #9aa3ad;
+  border-bottom: 1px solid #23272e;
+}
+
+.notice {
+  margin: 0;
+  padding: 0.75rem;
+  color: #9aa3ad;
+  font-size: 0.875rem;
+}
+
+.error {
+  padding: 0.75rem;
+  font-size: 0.875rem;
+}
+
+.errorTitle {
+  margin: 0 0 0.25rem;
+  font-weight: 600;
+  color: #ff9c8a;
+}
+
+.errorMessage {
+  margin: 0 0 0.25rem;
+  color: #e6e8eb;
+  overflow-wrap: anywhere;
+}
+
+.errorKind {
+  margin: 0;
+  color: #9aa3ad;
+  font-family: ui-monospace, 'Cascadia Mono', 'Consolas', monospace;
+  font-size: 0.75rem;
+}
+
+.viewport {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.spacer {
+  position: relative;
+  width: 100%;
+}
+
+.row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0 0.75rem;
+  border: 0;
+  border-bottom: 1px solid #1c1f25;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.875rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.row:hover {
+  background: #1a1d23;
+}
+
+.row:focus-visible {
+  outline: 2px solid #6aa6ff;
+  outline-offset: -2px;
+}
+
+.rowSelected {
+  background: #1f2a3a;
+}
+
+.rowSelected:hover {
+  background: #24314480;
+}
+
+.oid {
+  flex: none;
+  width: 5.5ch;
+  color: #9aa3ad;
+  font-family: ui-monospace, 'Cascadia Mono', 'Consolas', monospace;
+  font-size: 0.8125rem;
+}
+
+.subject {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.refs {
+  flex: none;
+  display: flex;
+  gap: 0.25rem;
+  max-width: 40%;
+  overflow: hidden;
+}
+
+.ref {
+  padding: 0.0625rem 0.375rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.refHead {
+  border-color: #7ad1a0;
+  background: #1632241a;
+  color: #7ad1a0;
+}
+
+.refBranch {
+  border-color: #6aa6ff;
+  background: #16233a;
+  color: #9cc4ff;
+}
+
+.refRemote {
+  border-color: #b28cf0;
+  background: #241a36;
+  color: #cbb0ff;
+}
+
+.refTag {
+  border-color: #e0b64a;
+  background: #2e2412;
+  color: #f0cf80;
+}
+
+.author {
+  flex: none;
+  max-width: 12ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: #9aa3ad;
+  font-size: 0.8125rem;
+}
+
+.date {
+  flex: none;
+  width: 10ch;
+  text-align: right;
+  color: #9aa3ad;
+  font-size: 0.8125rem;
+}
