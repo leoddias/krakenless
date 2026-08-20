@@ -53,6 +53,10 @@ const CONFLICT = [
 export function classifyFailure(args: string[], output: GitOutput): GitError {
   const stderr = output.stderr.trim();
   const context = { args, code: output.code, stderr };
+  // Some commands announce conflicts on *stdout* — `git stash pop` and
+  // `git merge` both print `CONFLICT (content): …` there. Classifying from
+  // stderr alone reports those as an anonymous "git failed with code 1".
+  const announced = `${stderr}\n${output.stdout.trim()}`;
 
   if (output.timedOut) {
     return new GitError('timeout', `git ${args[0] ?? ''} timed out`.trim(), context);
@@ -63,7 +67,7 @@ export function classifyFailure(args: string[], output: GitOutput): GitError {
   if (AUTHENTICATION.some((pattern) => pattern.test(stderr))) {
     return new GitError('authentication', 'Authentication failed', context);
   }
-  if (CONFLICT.some((pattern) => pattern.test(stderr))) {
+  if (CONFLICT.some((pattern) => pattern.test(announced))) {
     return new GitError('conflict', 'Conflicts must be resolved first', context);
   }
 

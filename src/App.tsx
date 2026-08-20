@@ -9,6 +9,7 @@ import { ChangesView } from './views/changes';
 import { ConflictBanner } from './views/conflicts';
 import { DiffView } from './views/diff';
 import { SettingsView } from './views/settings';
+import { RefsView } from './views/refs';
 import { RemoteBar } from './views/remote';
 import { NoticeBar } from './views/shell';
 import { HistoryView } from './views/history/HistoryView';
@@ -125,6 +126,9 @@ function RepoView({ root }: { root: string }): ReactNode {
       <div className="repo-panels">
         <section className="repo-panels__history" aria-label="History">
           <HistoryView />
+        </section>
+        <section className="repo-panels__refs" aria-label="Branches and stashes">
+          <RefsView />
         </section>
         <section className="repo-panels__changes" aria-label="Working tree">
           <ChangesView />

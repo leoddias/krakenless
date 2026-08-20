@@ -23,6 +23,7 @@ vi.mock('./views/history/HistoryView', () => ({
 vi.mock('./views/diff', () => ({ DiffView: () => <div>diff view</div> }));
 vi.mock('./views/changes', () => ({ ChangesView: () => <div>changes view</div> }));
 vi.mock('./views/remote', () => ({ RemoteBar: () => <div>remote bar</div> }));
+vi.mock('./views/refs', () => ({ RefsView: () => <div>refs view</div> }));
 vi.mock('./views/conflicts', () => ({
   ConflictBanner: () => <div>conflict banner</div>,
 }));
@@ -77,6 +78,7 @@ describe('App', () => {
 
     expect(screen.getByText('history view')).toBeInTheDocument();
     expect(screen.getByText('changes view')).toBeInTheDocument();
+    expect(screen.getByText('refs view')).toBeInTheDocument();
     expect(screen.getByText('diff view')).toBeInTheDocument();
     expect(screen.getByText('C:/repos/app')).toBeInTheDocument();
   });

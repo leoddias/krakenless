@@ -135,7 +135,11 @@ export function parseStashes(stdout: string): StashEntry[] {
     const index = /^stash@\{(\d+)\}$/.exec(ref);
     if (index === null) fail(`Unrecognized stash ref: ${ref.slice(0, 40)}`);
 
-    if (oid.length === 0) fail(`Stash ${ref} has no object id`);
+    // A malformed oid would later be handed to `git stash apply <oid>` as the
+    // documented recovery route; it has to be a real object name.
+    if (!/^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(oid)) {
+      fail(`Stash ${ref} has a malformed object id`);
+    }
     const entry: StashEntry = { ref, oid, index: Number(index[1]), message, date };
     // `On <branch>: <message>` is how git records where a stash was taken.
     const branch = /^(?:On|WIP on) ([^:]+):/.exec(message);

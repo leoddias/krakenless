@@ -41,14 +41,14 @@ If schedule slips: cut graph *polish*, never parser tests.
       "Open git mergetool", "Abort merge"
 
 ### M4 — Branches + stash (~1 week)
-- [ ] Create / checkout / delete branch (delete = confirm; prefer `-d`, explicit `-D`)
-- [ ] Stash push / pop / list
+- [x] Create / checkout / delete branch (delete = confirm; prefer `-d`, explicit `-D`)
+- [x] Stash push / pop / list
 - [ ] Graph edges between commits (parent lines) — functional, not beautiful
 
 ### M5 — Polish + dogfood gate (~1 week)
 - [ ] Keyboard navigation, focus states, contrast pass
 - [x] Settings screen (JSON-backed): editor command, mergetool
-- [ ] Import/export = documented config file location + "Open config folder" button
+- [ ] Import/export = documented config file location (done) + "Open config folder" button
 - [ ] README: setup, architecture, data location, backup, limitations
 - [ ] Sponsors/Ko-fi link in README + About dialog
 - [ ] **Gate:** switch to Krakenless as only Git client for 2 weeks
@@ -66,6 +66,25 @@ after 2 more weeks → proceed to v0.2. Else: keep as personal tool, stop invest
 - Mac/Linux builds if a real user wants them
 
 ## Backlog (ideas parking lot — not scheduled)
+
+Found during M3/M4 fan-out (2026-08-20), by the workers and their reviewers:
+
+- `state.remotes` slice fed by `listRemotes`: the publish target is currently
+  reconstructed from remote-tracking refs, so an unfetched remote is invisible.
+- Force-push-with-lease needs an explicit `<branch>:<oid>` lease plus a
+  confirmation dialog before any UI may offer it.
+- Push to a differently-named upstream needs a `<local>:<upstream>` refspec;
+  until then the remote bar disables that case and prints the command.
+- `state.busy` is a boolean, not a depth counter: two overlapping operations
+  clear it when the first finishes.
+- No integration test proves the `stash drop` recovery route or that
+  `assertStashUnchanged` refuses a shifted list.
+- `restoreStash`/`removeStash` return a bare boolean; a discriminated result
+  would let the UI stop inferring the cause from prose.
+- `formatRelativeDate` is duplicated in `views/history` and `views/refs`.
+- A merge whose conflicts are staged but not committed (`MERGE_HEAD` present,
+  no unmerged entries) is not gated yet, though `buildOperationProbeCommand`
+  already exists to detect it.
 
 Found during M1 fan-out (2026-08-20), by the workers and their reviewers:
 

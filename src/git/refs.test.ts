@@ -166,13 +166,13 @@ describe('listStashes', () => {
     const NUL = '\u0000';
     invoke.mockResolvedValue(
       raw({
-        stdout: `stash@{0}${NUL}abc${NUL}2026-08-20T01:00:00-03:00${NUL}On main: wip${NUL}`,
+        stdout: `stash@{0}${NUL}1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d${NUL}2026-08-20T01:00:00-03:00${NUL}On main: wip${NUL}`,
       }),
     );
     await expect(listStashes('C:/repo')).resolves.toEqual([
       {
         ref: 'stash@{0}',
-        oid: 'abc',
+        oid: '1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d',
         index: 0,
         message: 'On main: wip',
         branch: 'main',

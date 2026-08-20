@@ -2,9 +2,9 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { NoticeBar } from './NoticeBar';
 import { StoreProvider } from '../../state/hooks';
-import { createStore, type Notice, type Store } from '../../state/store';
+import { createStore, type NoticeInput, type Store } from '../../state/store';
 
-function renderBar(notice: Notice | null): Store {
+function renderBar(notice: NoticeInput | null): Store {
   const store = createStore();
   if (notice !== null) store.dispatch({ type: 'notice', notice });
   render(

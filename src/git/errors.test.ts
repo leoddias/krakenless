@@ -47,6 +47,20 @@ describe('classifyFailure', () => {
     expect(classifyFailure(['merge', 'topic'], output({ stderr })).kind).toBe('conflict');
   });
 
+  it('sees a conflict git announced on stdout', () => {
+    // `git stash pop` and `git merge` print CONFLICT to stdout; reading only
+    // stderr reported those as an anonymous "git failed with code 1".
+    const error = classifyFailure(
+      ['stash', 'pop'],
+      output({
+        code: 1,
+        stdout: 'CONFLICT (content): Merge conflict in src/app.ts',
+        stderr: '',
+      }),
+    );
+    expect(error.kind).toBe('conflict');
+  });
+
   it('does not call a missing branch a conflict', () => {
     // A bare substring match on "conflict" would send the UI into merge
     // recovery for a repository with no merge in progress.

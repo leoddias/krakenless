@@ -74,13 +74,17 @@
 
 .repo-panels {
   display: grid;
-  /* History, working tree, diff — three columns that scroll independently. */
+  /* Three columns; the left one is split into history (which gets the height)
+     and refs (which is a short list). A fourth column would leave nothing
+     readable at 1280px, the minimum window width. */
   grid-template-columns: minmax(320px, 30%) minmax(280px, 26%) 1fr;
+  grid-template-rows: 1fr auto;
   flex: 1;
   min-height: 0;
 }
 
 .repo-panels__history,
+.repo-panels__refs,
 .repo-panels__changes,
 .repo-panels__diff {
   min-width: 0;
@@ -91,8 +95,33 @@
 }
 
 .repo-panels__history,
+.repo-panels__refs,
 .repo-panels__changes {
   border-right: 1px solid var(--border, #2a2f37);
+}
+
+.repo-panels__history {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.repo-panels__refs {
+  grid-column: 1;
+  grid-row: 2;
+  border-top: 1px solid var(--border, #2a2f37);
+  /* A long branch list must not push the history out of view. */
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.repo-panels__changes {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+.repo-panels__diff {
+  grid-column: 3;
+  grid-row: 1 / span 2;
 }
 
 /* Below this width three columns stop being readable; stack the working tree
@@ -100,9 +129,21 @@
 @media (max-width: 1100px) {
   .repo-panels {
     grid-template-columns: minmax(240px, 32%) 1fr;
+    grid-template-rows: 1fr auto auto;
   }
 
   .repo-panels__changes {
+    grid-column: 1;
     grid-row: 2;
+  }
+
+  .repo-panels__refs {
+    grid-column: 1;
+    grid-row: 3;
+  }
+
+  .repo-panels__diff {
+    grid-column: 2;
+    grid-row: 1 / span 3;
   }
 }

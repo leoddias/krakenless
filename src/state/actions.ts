@@ -173,8 +173,10 @@ async function mutate(store: Store, run: () => Promise<unknown>): Promise<void> 
   store.dispatch({ type: 'busy', busy: true });
   try {
     await run();
-    await Promise.all([refreshStatus(store), refreshDiff(store)]);
   } finally {
+    // Same ordering rule as `operate`: the panels must be current before the
+    // controls come back to life.
+    await Promise.all([refreshStatus(store), refreshDiff(store)]);
     store.dispatch({ type: 'busy', busy: false });
   }
 }
@@ -307,8 +309,11 @@ async function operate(store: Store, run: () => Promise<unknown>): Promise<boole
     report(store, error);
     return false;
   } finally {
-    store.dispatch({ type: 'busy', busy: false });
+    // The refresh completes *before* busy clears. Clearing first re-enables
+    // every button while the panels still show pre-operation state, so a click
+    // aimed at one row can land on another once the new data arrives.
     await refreshAll(store);
+    store.dispatch({ type: 'busy', busy: false });
   }
 }
 

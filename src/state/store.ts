@@ -41,11 +41,21 @@ export interface Selection {
  * to the discarded work.
  */
 export interface Notice {
+  /**
+   * Monotonic id. A panel that reads a notice back to learn why its own call
+   * failed must be able to tell "the notice I caused" from "a notice another
+   * panel raised in the meantime" — comparing message text cannot do that,
+   * because two panels can fail identically.
+   */
+  id: number;
   tone: 'info' | 'warning' | 'error';
   message: string;
   /** Command the user can run to undo, when one exists. */
   undoHint?: string;
 }
+
+/** What a caller supplies; the store stamps the id. */
+export type NoticeInput = Omit<Notice, 'id'>;
 
 export interface AppState {
   config: AppConfig;
@@ -98,7 +108,7 @@ export type Action =
   | { type: 'stashes/loading' }
   | { type: 'stashes/loaded'; stashes: StashEntry[] }
   | { type: 'stashes/failed'; message: string; kind?: string }
-  | { type: 'notice'; notice: Notice | null }
+  | { type: 'notice'; notice: NoticeInput | null }
   | { type: 'selection/commit'; oid: string | null }
   | { type: 'selection/path'; path: string | null }
   | { type: 'busy'; busy: boolean };
@@ -178,7 +188,10 @@ export function reduce(state: AppState, action: Action): AppState {
       };
 
     case 'notice':
-      return { ...state, notice: action.notice };
+      return {
+        ...state,
+        notice: action.notice === null ? null : { ...action.notice, id: nextNoticeId() },
+      };
 
     case 'selection/commit':
       // Changing what is selected invalidates the diff shown for the old
@@ -194,6 +207,14 @@ export function reduce(state: AppState, action: Action): AppState {
     case 'busy':
       return { ...state, busy: action.busy };
   }
+}
+
+let noticeCounter = 0;
+
+/** Ids are process-wide and never reused, so an id identifies one dispatch. */
+function nextNoticeId(): number {
+  noticeCounter += 1;
+  return noticeCounter;
 }
 
 function kindOf(kind: string | undefined): { kind?: string } {

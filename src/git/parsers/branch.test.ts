@@ -208,8 +208,8 @@ describe('parseStashes', () => {
   // Verbatim from git 2.39.2: `stash list -z` separates fields *and* records
   // with NUL, and terminates the last one too.
   const REAL =
-    `stash@{0}${NUL}7e499fe${NUL}2026-08-20T01:49:53-03:00${NUL}On master: second${NUL}` +
-    `stash@{1}${NUL}da59e9a${NUL}2026-08-20T01:49:52-03:00${NUL}On master: first stash${NUL}`;
+    `stash@{0}${NUL}7e499fef1a7efe7533381f6146fd5d7c79d4005f${NUL}2026-08-20T01:49:53-03:00${NUL}On master: second${NUL}` +
+    `stash@{1}${NUL}da59e9a9679c49b95b1a6b481583fa1cccfed9f0${NUL}2026-08-20T01:49:52-03:00${NUL}On master: first stash${NUL}`;
 
   it('reads every entry, newest first', () => {
     const stashes = parseStashes(REAL);
@@ -229,7 +229,7 @@ describe('parseStashes', () => {
   });
 
   it('keeps a message containing a colon intact', () => {
-    const record = `stash@{0}${NUL}abc${NUL}2026-08-20T01:00:00-03:00${NUL}On main: fix: thing${NUL}`;
+    const record = `stash@{0}${NUL}1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d${NUL}2026-08-20T01:00:00-03:00${NUL}On main: fix: thing${NUL}`;
     expect(parseStashes(record)[0]).toMatchObject({
       branch: 'main',
       message: 'On main: fix: thing',
@@ -237,16 +237,25 @@ describe('parseStashes', () => {
   });
 
   it('handles a WIP stash created without a message', () => {
-    const record = `stash@{0}${NUL}abc${NUL}2026-08-20T01:00:00-03:00${NUL}WIP on main: abc1234 subject${NUL}`;
+    const record = `stash@{0}${NUL}1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d${NUL}2026-08-20T01:00:00-03:00${NUL}WIP on main: abc1234 subject${NUL}`;
     expect(parseStashes(record)[0]?.branch).toBe('main');
   });
 
   it('throws on a truncated record instead of inventing fields', () => {
-    expect(() => parseStashes(`stash@{0}${NUL}abc${NUL}`)).toThrow(/not a multiple/);
+    expect(() =>
+      parseStashes(`stash@{0}${NUL}1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d${NUL}`),
+    ).toThrow(/not a multiple/);
+  });
+
+  it('refuses a malformed object id', () => {
+    // The oid is handed back to the user as `git stash apply <oid>`; an
+    // abbreviated or garbled one sends them to a command that cannot work.
+    const record = `stash@{0}${NUL}not-an-oid${NUL}2026-08-20T01:00:00-03:00${NUL}msg${NUL}`;
+    expect(() => parseStashes(record)).toThrow(/malformed object id/);
   });
 
   it('throws on an unrecognized stash ref', () => {
-    const record = `refs/stash${NUL}abc${NUL}2026-08-20T01:00:00-03:00${NUL}msg${NUL}`;
+    const record = `refs/stash${NUL}1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d${NUL}2026-08-20T01:00:00-03:00${NUL}msg${NUL}`;
     expect(() => parseStashes(record)).toThrow(/Unrecognized stash ref/);
   });
 });
