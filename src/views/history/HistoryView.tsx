@@ -15,6 +15,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
   type UIEvent,
 } from 'react';
@@ -27,6 +28,7 @@ import { GraphCell } from './GraphCell';
 import { useAuthorPictures } from './avatarCache';
 import { avatarIdentity } from './remoteAvatar';
 import { buildGraph, type GraphRow } from './graph';
+import { CommitActions, type CommitMenuTarget } from './CommitActions';
 import styles from './history.module.css';
 
 /** Height of one row in pixels; must match `.row` in the stylesheet. */
@@ -102,6 +104,8 @@ function CommitList({ commits }: { commits: Commit[] }): ReactNode {
   const [viewportHeight, setViewportHeight] = useState(FALLBACK_VIEWPORT_HEIGHT);
   /** Set by keyboard navigation only, so a mouse click never steals focus. */
   const focusSelected = useRef(false);
+  /** The commit whose context menu is open, and where it was opened. */
+  const [menuTarget, setMenuTarget] = useState<CommitMenuTarget | null>(null);
 
   // Row 0 is the working tree; commit `i` lives at row `i + 1`.
   const total = commits.length + 1;
@@ -152,6 +156,23 @@ function CommitList({ commits }: { commits: Commit[] }): ReactNode {
     },
     [commits, scrollTop, store, total, viewportHeight],
   );
+
+  /**
+   * Right-click on a commit: select it, then open the menu where the pointer is.
+   *
+   * Selecting first is what makes the menu unambiguous — the diff below and the
+   * highlighted row both name the commit the menu is about, so an item chosen a
+   * second later cannot be read as applying to whatever was selected before.
+   */
+  const openMenu = (commit: Commit, event: ReactMouseEvent<HTMLElement>): void => {
+    event.preventDefault();
+    // The row index is looked up rather than captured from the render loop, so
+    // the handler holds no reference to a variable the loop goes on to change.
+    const index = indexOfOid(commits, commit.oid);
+    if (index === -1) return;
+    select(index, false);
+    setMenuTarget({ commit, x: event.clientX, y: event.clientY });
+  };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     switch (event.key) {
@@ -225,6 +246,7 @@ function CommitList({ commits }: { commits: Commit[] }): ReactNode {
         graphRow={graph.rows[index - 1]}
         laneCount={graph.laneCount}
         avatarUrl={identity === null ? null : (pictures.get(identity) ?? null)}
+        onContextMenu={(event) => openMenu(commit, event)}
         {...shared}
       />,
     );
@@ -245,6 +267,9 @@ function CommitList({ commits }: { commits: Commit[] }): ReactNode {
       {commits.length === 0 && (
         <p className={styles.notice}>No commits yet — this repository has no history.</p>
       )}
+      {menuTarget !== null && (
+        <CommitActions target={menuTarget} onDismiss={() => setMenuTarget(null)} />
+      )}
     </div>
   );
 }
@@ -254,6 +279,11 @@ interface RowProps {
   selected: boolean;
   tabbable: boolean;
   onSelect: (index: number, viaKeyboard: boolean) => void;
+}
+
+/** Rows that have a context menu carry the handler; the working tree does not. */
+interface MenuRowProps {
+  onContextMenu: (event: ReactMouseEvent<HTMLElement>) => void;
 }
 
 function WorkingTreeRow({ index, selected, tabbable, onSelect }: RowProps): ReactNode {
@@ -289,17 +319,19 @@ function CommitRow({
   selected,
   tabbable,
   onSelect,
-}: RowProps & {
-  commit: Commit;
-  graphRow: GraphRow | undefined;
-  laneCount: number;
-  /**
-   * The author's fetched picture, once it has arrived. `null` until then, and
-   * for good when there is none — the derived badge underneath is what the
-   * row shows in both cases (ADR-0021).
-   */
-  avatarUrl: string | null;
-}): ReactNode {
+  onContextMenu,
+}: RowProps &
+  MenuRowProps & {
+    commit: Commit;
+    graphRow: GraphRow | undefined;
+    laneCount: number;
+    /**
+     * The author's fetched picture, once it has arrived. `null` until then, and
+     * for good when there is none — the derived badge underneath is what the
+     * row shows in both cases (ADR-0021).
+     */
+    avatarUrl: string | null;
+  }): ReactNode {
   const subject = commit.subject === '' ? '(no subject)' : commit.subject;
   const relative = formatRelativeDate(commit.authorDate, new Date());
   return (
@@ -308,6 +340,7 @@ function CommitRow({
       selected={selected}
       tabbable={tabbable}
       onSelect={onSelect}
+      onContextMenu={onContextMenu}
       label={rowLabel(commit, subject, relative)}
     >
       <span className={styles.columnRefs}>
@@ -357,9 +390,10 @@ function RowButton({
   selected,
   tabbable,
   onSelect,
+  onContextMenu,
   label,
   children,
-}: RowProps & { label: string; children: ReactNode }): ReactNode {
+}: RowProps & Partial<MenuRowProps> & { label: string; children: ReactNode }): ReactNode {
   return (
     <button
       type="button"
@@ -370,6 +404,7 @@ function RowButton({
       aria-current={selected ? 'true' : undefined}
       tabIndex={tabbable ? 0 : -1}
       onClick={() => onSelect(index, false)}
+      {...(onContextMenu === undefined ? {} : { onContextMenu })}
     >
       {children}
     </button>

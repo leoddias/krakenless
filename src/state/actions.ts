@@ -25,8 +25,18 @@ import type { CommitOptions } from '../git/commands/stage';
 import { userConfirmed } from '../git/confirm';
 import { editorLaunch, launch, mergetoolLaunch } from '../config/launch';
 import {
+  cherryPick,
+  createTag,
+  rebaseOnto,
+  resetTo,
+  revertCommit,
+  type ResetMode,
+} from '../git/commits';
+import {
   abortMerge,
   applyStash,
+  checkoutRevision,
+  createBranch,
   deleteBranch,
   dropStash,
   fetch,
@@ -424,6 +434,95 @@ export async function removeBranch(
     }
   }
   return outcome;
+}
+
+// --- one commit from the history ------------------------------------------
+
+/** Checks a commit out directly, leaving HEAD detached. */
+export async function checkoutCommit(store: Store, oid: string): Promise<boolean> {
+  const root = currentRoot(store);
+  if (root === null) return false;
+  return operate(store, () => checkoutRevision(root, oid));
+}
+
+/**
+ * Creates a branch at `oid`, and switches to it unless asked not to.
+ *
+ * Both routes go through `switch`/`branch` rather than a forced checkout, so a
+ * working tree with changes in it is a refusal from git, never an overwrite.
+ */
+export async function createBranchAt(
+  store: Store,
+  name: string,
+  oid: string,
+  options: { checkout: boolean },
+): Promise<boolean> {
+  const root = currentRoot(store);
+  if (root === null) return false;
+  return operate(store, () =>
+    options.checkout ? switchNewBranch(root, name, oid) : createBranch(root, name, oid),
+  );
+}
+
+/** Creates a tag at `oid`; annotated when a message is given. */
+export async function createTagAt(
+  store: Store,
+  name: string,
+  oid: string,
+  options: { message?: string } = {},
+): Promise<boolean> {
+  const root = currentRoot(store);
+  if (root === null) return false;
+  return operate(store, () => createTag(root, name, oid, options));
+}
+
+/** Replays `oid` on top of HEAD as a new commit. */
+export async function cherryPickCommit(store: Store, oid: string): Promise<boolean> {
+  const root = currentRoot(store);
+  if (root === null) return false;
+  return operate(store, () => cherryPick(root, oid));
+}
+
+/** Records a new commit undoing `oid`. */
+export async function revertCommitOnHead(store: Store, oid: string): Promise<boolean> {
+  const root = currentRoot(store);
+  if (root === null) return false;
+  return operate(store, () => revertCommit(root, oid));
+}
+
+/**
+ * Replays `branch` onto `oid`.
+ *
+ * `branch` is the name the menu item showed, and the git layer refuses if HEAD
+ * has moved off it since — the confirmation the user gave was about that
+ * branch and no other.
+ */
+export async function rebaseBranchOnto(
+  store: Store,
+  branch: string,
+  oid: string,
+  confirmationReason: string,
+): Promise<boolean> {
+  const root = currentRoot(store);
+  if (root === null) return false;
+  return operate(store, () =>
+    rebaseOnto(root, branch, oid, userConfirmed(confirmationReason)),
+  );
+}
+
+/** Moves `branch` to `oid`. Same guard, same reason. */
+export async function resetBranchTo(
+  store: Store,
+  branch: string,
+  oid: string,
+  mode: ResetMode,
+  confirmationReason: string,
+): Promise<boolean> {
+  const root = currentRoot(store);
+  if (root === null) return false;
+  return operate(store, () =>
+    resetTo(root, branch, oid, mode, userConfirmed(confirmationReason)),
+  );
 }
 
 export async function restoreStash(

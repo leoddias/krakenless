@@ -62,12 +62,33 @@ after 2 more weeks → proceed to v0.2. Else: keep as personal tool, stop invest
 
 ## v0.2 — only if checkpoint passes
 
+- [x] Commit context menu in the history panel (right-click a commit):
+      checkout, create branch/tag/annotated tag here, cherry-pick, revert,
+      rebase the current branch onto it, reset it there (soft/mixed/hard),
+      copy the sha, copy a link to it on the remote. Built ahead of the gate at
+      the user's request; rebase and reset confirm first and re-check HEAD.
 - BYOK AI commit messages (Anthropic/OpenAI/Ollama; optional; `.env.example`)
 - Conflict resolution UI (ours/theirs per file → editor later)
 - Real product name (trademark-safe), wedge decision, donations push
 - Mac/Linux builds if a real user wants them
 
 ## Backlog (ideas parking lot — not scheduled)
+
+**Commit menu items deferred from the first pass.** *Interactive rebase* and
+everything built on it — edit a commit message, drop a commit, move one up or
+down — need a rebase-todo driver that does not exist yet, and it is the v0.2
+item "conflict resolution UI" that unblocks the conflict half of it. *Create
+worktree from this commit* needs `git worktree add` plus a folder picker, and
+writes outside the repository (see ADR-0022 before starting). *Create patch from
+commit* needs `git format-patch` plus a save dialog. *Recompose with AI* waits on
+the BYOK AI work; *Share as Cloud Patch* is deliberately never — it needs an
+account and a server, which is what this app exists not to be.
+
+**The commit menu links only to hosts whose URL shape is known.** `commitWebUrl`
+(`src/git/remoteWeb.ts`) assumes `/commit/<sha>`, with Bitbucket Cloud's
+`/commits/` as the one special case, and refuses Azure DevOps outright. A
+self-hosted forge with another shape gets a link that looks right and is not.
+Wanted: a per-remote override in Settings.
 
 **`git log` has no `--topo-order`, so a parent can be emitted above its child.**
 `buildLogCommand` (`src/git/commands/log.ts`) leaves the ordering to git's
