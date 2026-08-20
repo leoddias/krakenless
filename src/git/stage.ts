@@ -7,6 +7,7 @@ import {
   buildUnstageCommand,
   type CommitOptions,
 } from './commands/stage';
+import { pathspec } from './argsafety';
 import type { Confirmation } from './confirm';
 import { GitError } from './errors';
 import { serializeHunks } from './patch';
@@ -117,13 +118,44 @@ async function stashTip(repo: string): Promise<string | null> {
   return oid.length === 0 ? null : oid;
 }
 
-/** Paths to discard, split by whether git tracks them. */
-export interface DiscardSelection {
-  tracked: string[];
-  untracked: string[];
+/**
+ * Splits the requested paths into what git actually needs discarding.
+ *
+ * Derived here, never taken from the caller: `keepIndex` is the only thing
+ * standing between a discard and losing a staged snapshot, and a tracked path
+ * mistakenly passed as untracked would lose it silently, exit 0, no warning.
+ * Paths whose worktree side matches the index are dropped entirely — stashing
+ * those creates an entry and changes nothing, so the user would be told their
+ * changes were discarded while the file sits untouched.
+ */
+async function planDiscard(
+  repo: string,
+  paths: string[],
+): Promise<{ tracked: string[]; untracked: string[] }> {
+  const listed = await runGit(repo, { args: ['ls-files', '-z', ...pathspec(paths)] });
+  const tracked = new Set(
+    listed.stdout.split('\u0000').filter((path) => path.length > 0),
+  );
+
+  // Worktree-vs-index differences: exactly the paths a discard would change.
+  const dirty = await runGit(repo, {
+    args: ['diff', '--name-only', '-z', ...pathspec(paths)],
+  });
+  const changed = new Set(dirty.stdout.split('\u0000').filter((path) => path.length > 0));
+
+  return {
+    tracked: paths.filter((path) => tracked.has(path) && changed.has(path)),
+    untracked: paths.filter((path) => !tracked.has(path)),
+  };
 }
 
-/** Runs one stash and reports whether it actually created an entry. */
+/**
+ * Runs one stash phase and returns the oid it created, if any.
+ *
+ * A failure still has to report the oid: `stash push --keep-index` on an
+ * untracked path can fail *after* stashing the file and removing it from disk,
+ * and losing that oid to an exception means the file is gone with no route back.
+ */
 async function stashAway(
   repo: string,
   paths: string[],
@@ -133,59 +165,85 @@ async function stashAway(
 ): Promise<string | null> {
   if (paths.length === 0) return null;
   const before = await stashTip(repo);
-  await runGit(repo, buildDiscardCommand(paths, label, { keepIndex }), gate);
 
-  // `git stash push -- <path>` exits 0 and creates nothing when the path has no
-  // changes. Reporting "recover from the stash" then would send the user to an
+  try {
+    await runGit(repo, buildDiscardCommand(paths, label, { keepIndex }), gate);
+  } catch (error) {
+    const created = await stashTip(repo);
+    if (created !== null && created !== before) {
+      throw new StashedButFailed(created);
+    }
+    throw error;
+  }
+
+  // `git stash push -- <path>` exits 0 and creates nothing when there is
+  // nothing to save; reporting a recovery route then would point at an
   // unrelated, older entry.
   const after = await stashTip(repo);
   return after === null || after === before ? null : after;
 }
 
+/** Carries the stash oid out of a failed phase so the undo route survives. */
+class StashedButFailed extends Error {
+  readonly oid: string;
+
+  constructor(oid: string) {
+    super('The discard failed after stashing');
+    this.name = 'StashedButFailed';
+    this.oid = oid;
+  }
+}
+
 /**
- * Discards working-tree changes for the selected paths.
+ * Discards working-tree changes for the given paths.
  *
- * `--keep-index` on the tracked half is what protects a staged snapshot:
- * without it the stash reverts the staged content to HEAD too, and no
- * `stash pop` puts that back. With it, discarding means "throw away my unstaged
- * edits" — `git restore <path>` semantics — while the edits stay recoverable
- * from the stash commit the result names.
+ * `--keep-index` on the tracked half protects a staged snapshot: without it the
+ * stash reverts staged content to HEAD too, and nothing puts that back. Git
+ * 2.39 rejects that flag together with an untracked pathspec, so untracked
+ * paths go into their own stash — they have no index entry to protect anyway.
  */
 export async function discardPaths(
   repo: string,
-  selection: DiscardSelection,
+  paths: string[],
   confirmation: Confirmation,
 ): Promise<DiscardResult> {
   const gate = approved(confirmation);
   const stashLabel = `krakenless: discarded ${new Date().toISOString()}`;
-
-  // Tracked and untracked paths go in separate stashes: `--keep-index` protects
-  // the staged snapshot of tracked files, but git 2.39 fails the whole command
-  // when it is combined with an untracked pathspec.
-  const trackedOid = await stashAway(repo, selection.tracked, stashLabel, true, gate);
-  const untrackedOid = await stashAway(
-    repo,
-    selection.untracked,
-    stashLabel,
-    false,
-    gate,
-  );
+  const plan = await planDiscard(repo, paths);
 
   const undoCommands: string[] = [];
-  // `stash pop` would conflict, because the worktree now holds the staged
-  // content. Checking the paths out of the stash commit restores them cleanly,
-  // and addressing it by oid survives later stashes shifting the indices.
-  if (trackedOid !== null) {
-    undoCommands.push(`git checkout ${trackedOid} -- ${quote(selection.tracked)}`);
-  }
-  if (untrackedOid !== null) {
-    undoCommands.push(`git checkout ${untrackedOid} -- ${quote(selection.untracked)}`);
+  const addUndo = (oid: string, forPaths: string[]): void => {
+    // `git checkout <oid> -- <path>` would write the *index* too, clobbering
+    // the staged snapshot --keep-index just protected. `restore --worktree`
+    // touches only the working tree, which is the exact inverse of a discard.
+    undoCommands.push(`git restore --source=${oid} --worktree -- ${quote(forPaths)}`);
+  };
+
+  try {
+    const trackedOid = await stashAway(repo, plan.tracked, stashLabel, true, gate);
+    if (trackedOid !== null) addUndo(trackedOid, plan.tracked);
+
+    const untrackedOid = await stashAway(repo, plan.untracked, stashLabel, false, gate);
+    if (untrackedOid !== null) addUndo(untrackedOid, plan.untracked);
+  } catch (error) {
+    if (error instanceof StashedButFailed) {
+      // Work was moved to a stash before the failure; the user must be told
+      // where it went, so the recovery route travels with the error.
+      addUndo(error.oid, paths);
+      throw new GitError(
+        'command-failed',
+        `The discard failed partway. Your changes are in a stash: ${undoCommands.join(' ; ')}`,
+        { args: ['stash', 'push'] },
+      );
+    }
+    throw error;
   }
 
   if (undoCommands.length === 0) return { discarded: false, undoCommands: [] };
   return { discarded: true, stashLabel, undoCommands };
 }
 
+/** Quotes paths for a command the user copy-pastes into their own shell. */
 function quote(paths: string[]): string {
-  return paths.map((path) => `"${path}"`).join(' ');
+  return paths.map((path) => `"${path.replace(/(["$`\\])/g, '\\$1')}"`).join(' ');
 }

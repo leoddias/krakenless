@@ -122,7 +122,7 @@ describe('actions', () => {
     discardPaths.mockResolvedValue({
       discarded: true,
       stashLabel: 'krakenless: discarded now',
-      undoCommands: ['git checkout abc123 -- "a.txt"'],
+      undoCommands: ['git restore --source=abc123 --worktree -- "a.txt"'],
     });
   });
 
@@ -311,20 +311,19 @@ describe('actions', () => {
     const store = createStore();
     await openRepo(store, 'C:/repos/app');
 
-    const result = await discard(
-      store,
-      { tracked: ['a.txt'], untracked: [] },
-      'Discard changes to a.txt?',
-    );
+    const result = await discard(store, ['a.txt'], 'Discard changes to a.txt?');
 
     expect(discardPaths).toHaveBeenCalledWith(
       REPO.root,
-      { tracked: ['a.txt'], untracked: [] },
+      ['a.txt'],
       expect.objectContaining({ reason: 'Discard changes to a.txt?' }),
     );
     expect(result?.stashLabel).toContain('krakenless');
-    // The undo route must reach the user, not just the return value.
-    expect(store.getState().notice?.undoHint).toContain('git checkout');
+    // The undo route must reach the user, not just the return value. It must
+    // be the worktree-only form: `git checkout <oid> -- <path>` would write the
+    // index too and clobber the staged snapshot the discard protected.
+    expect(store.getState().notice?.undoHint).toContain('git restore --source=');
+    expect(store.getState().notice?.undoHint).toContain('--worktree');
   });
 
   it('says nothing was discarded when git created no stash', async () => {
@@ -344,14 +343,28 @@ describe('actions', () => {
     const store = createStore();
     await openRepo(store, 'C:/repos/app');
 
-    await discard(
-      store,
-      { tracked: ['a.txt'], untracked: [] },
-      'Discard changes to a.txt?',
-    );
+    await discard(store, ['a.txt'], 'Discard changes to a.txt?');
 
     expect(store.getState().notice).toMatchObject({ tone: 'warning' });
     expect(store.getState().notice?.undoHint).toBeUndefined();
+  });
+
+  it('reports a discard that failed after stashing, with its recovery route', async () => {
+    // The file is already off disk at this point; swallowing the error would
+    // leave the user with no idea where their work went.
+    discardPaths.mockRejectedValue(
+      new GitError(
+        'command-failed',
+        'The discard failed partway. Your changes are in a stash: git restore --source=abc --worktree -- "a.txt"',
+      ),
+    );
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await expect(discard(store, ['a.txt'], 'Discard?')).resolves.toBeNull();
+    expect(store.getState().notice).toMatchObject({ tone: 'error' });
+    expect(store.getState().notice?.message).toContain('git restore --source=');
+    expect(store.getState().busy).toBe(false);
   });
 
   it('refreshes the history after committing', async () => {

@@ -259,8 +259,8 @@ pub fn run_git(
     // gets the command's own timeout budget — bounded, but not tight enough to
     // truncate legitimate output.
     let grace = if timed_out { PIPE_GRACE } else { timeout };
-    let stdout = collect(&stdout_rx, grace)?;
-    let stderr = collect(&stderr_rx, grace)?;
+    let stdout = collect(&stdout_rx, grace, timed_out)?;
+    let stderr = collect(&stderr_rx, grace, timed_out)?;
 
     let (stdout_text, stdout_lossy) = decode(stdout);
     let (stderr_text, _) = decode(stderr);
@@ -283,12 +283,19 @@ pub fn run_git(
 fn collect(
     rx: &mpsc::Receiver<std::io::Result<Vec<u8>>>,
     grace: Duration,
+    timed_out: bool,
 ) -> Result<Vec<u8>, GitRunError> {
     match rx.recv_timeout(grace) {
         Ok(received) => received.map_err(|e| GitRunError::IoFailed(e.to_string())),
-        // The child is gone but something it spawned still holds the pipe.
-        // Report what we have rather than hanging forever.
-        Err(_) => Ok(Vec::new()),
+        // After a kill the output is expected to be incomplete; the caller is
+        // already being told the command timed out.
+        Err(_) if timed_out => Ok(Vec::new()),
+        // On the success path an unread pipe must never look like empty output:
+        // an empty `status --porcelain=v2` reads as "clean working tree", and a
+        // destructive decision could be made on that lie.
+        Err(e) => Err(GitRunError::IoFailed(format!(
+            "git output could not be read in full: {e}"
+        ))),
     }
 }
 
@@ -547,6 +554,26 @@ mod tests {
         // The empty blob's oid: git read EOF rather than waiting for input.
         assert_eq!(out.stdout.trim(), "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_unreadable_pipe_is_an_error_not_empty_output() {
+        // A closed channel stands in for a reader that never delivered. On the
+        // success path that must fail loudly: empty stdout would be parsed as
+        // "no changes" and could precede a destructive decision.
+        let (tx, rx) = mpsc::channel::<std::io::Result<Vec<u8>>>();
+        drop(tx);
+
+        let err = collect(&rx, Duration::from_millis(10), false).unwrap_err();
+        assert!(matches!(err, GitRunError::IoFailed(_)));
+
+        // After a timeout the caller already knows the output is incomplete.
+        let (tx, rx) = mpsc::channel::<std::io::Result<Vec<u8>>>();
+        drop(tx);
+        assert_eq!(
+            collect(&rx, Duration::from_millis(10), true).unwrap(),
+            Vec::<u8>::new()
+        );
     }
 
     #[test]

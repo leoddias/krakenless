@@ -82,18 +82,35 @@ describe('discard', () => {
     expect(read('drop.txt')).toBe('staged version\n');
   });
 
-  it('can restore the discarded edit from the stash commit by oid', () => {
-    // The undo command the UI shows is `git checkout <oid> -- <paths>`; a
-    // `stash pop` would conflict against the restored staged content.
+  it('restores the discarded edit without clobbering the staged snapshot', () => {
+    // The undo the UI shows is `git restore --source=<oid> --worktree`.
+    // `git checkout <oid> -- <path>` would write the index too and destroy the
+    // staged version that --keep-index just protected.
     write('drop.txt', 'staged version\n');
     git(['add', 'drop.txt']);
     write('drop.txt', 'worktree version\n');
     git(buildDiscardCommand(['drop.txt'], 'label', { keepIndex: true }).args);
 
     const oid = git(['rev-parse', 'refs/stash']).trim();
-    git(['checkout', oid, '--', 'drop.txt']);
+    git(['restore', `--source=${oid}`, '--worktree', '--', 'drop.txt']);
 
     expect(read('drop.txt')).toBe('worktree version\n');
+    expect(git(['show', ':drop.txt'])).toBe('staged version\n');
+  });
+
+  it('creates no stash for a path whose worktree matches the index', () => {
+    // `stash push --keep-index` on a staged-but-clean path exits 0 and creates
+    // an entry that changes nothing; telling the user it was discarded would be
+    // a lie, and the entries would pile up on every click.
+    write('drop.txt', 'staged only\n');
+    git(['add', 'drop.txt']);
+
+    const listed = git(['ls-files', '--', 'drop.txt']).trim();
+    const dirty = git(['diff', '--name-only', '--', 'drop.txt']).trim();
+
+    expect(listed).toBe('drop.txt');
+    // No worktree-vs-index difference, so the planner excludes it entirely.
+    expect(dirty).toBe('');
   });
 
   it('leaves changes to other files alone', () => {

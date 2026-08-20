@@ -48,6 +48,11 @@ export interface PushOptions {
   /**
    * Force with lease: refuses if the remote moved since our last fetch. Plain
    * `--force` is deliberately not offered anywhere in this app.
+   *
+   * Not safe to expose in the UI until the lease carries an explicit
+   * `<branch>:<oid>` — the bare form leases against the local remote-tracking
+   * ref, so it is only as fresh as the last fetch. Wire the oid the UI showed
+   * the user at the same time as the confirmation dialog.
    */
   forceWithLease?: boolean;
 }

@@ -80,9 +80,28 @@ describe('pull', () => {
 describe('push', () => {
   beforeEach(() => invoke.mockReset());
 
-  it('sends the confirmation the runner requires for a lease push', async () => {
+  it('refuses a force push that nobody confirmed', async () => {
+    // This is the one operation here that can destroy other people's work.
     invoke.mockResolvedValue(raw());
-    await push('C:/repo', { remote: 'origin', branch: 'main', forceWithLease: true });
+    await expect(
+      push('C:/repo', { remote: 'origin', branch: 'main', forceWithLease: true }),
+    ).rejects.toMatchObject({ kind: 'needs-confirmation' });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('runs a force push once the user has confirmed', async () => {
+    invoke.mockResolvedValue(raw());
+    await push(
+      'C:/repo',
+      { remote: 'origin', branch: 'main', forceWithLease: true },
+      userConfirmed('Force push main over origin?'),
+    );
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('needs no confirmation for an ordinary push', async () => {
+    invoke.mockResolvedValue(raw());
+    await push('C:/repo', { remote: 'origin', branch: 'main' });
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 });

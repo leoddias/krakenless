@@ -92,7 +92,26 @@ export async function pull(repo: string): Promise<void> {
   }
 }
 
-export function push(repo: string, options: PushOptions): Promise<unknown> {
+/**
+ * Pushes. A lease push needs a {@link Confirmation}: it is the one operation
+ * here that can destroy work belonging to *other people*, so it must not be
+ * reachable without the user having been asked.
+ */
+export async function push(
+  repo: string,
+  options: PushOptions,
+  confirmation?: Confirmation,
+): Promise<unknown> {
+  if (options.forceWithLease === true) {
+    if (confirmation === undefined) {
+      throw new GitError(
+        'needs-confirmation',
+        'A force push must be confirmed by the user first',
+        { args: ['push'] },
+      );
+    }
+    return runGit(repo, buildPushCommand(options), approved(confirmation));
+  }
   return runGit(repo, buildPushCommand(options), SAFE);
 }
 

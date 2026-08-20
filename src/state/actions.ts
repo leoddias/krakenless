@@ -20,7 +20,6 @@ import {
   stagePaths,
   unstagePaths,
   type DiscardResult,
-  type DiscardSelection,
 } from '../git/stage';
 import type { CommitOptions } from '../git/commands/stage';
 import { userConfirmed } from '../git/confirm';
@@ -201,19 +200,26 @@ export async function stageHunks(
  */
 export async function discard(
   store: Store,
-  selection: DiscardSelection,
+  paths: string[],
   confirmationReason: string,
 ): Promise<DiscardResult | null> {
   const root = currentRoot(store);
-  const count = selection.tracked.length + selection.untracked.length;
-  if (root === null || count === 0) return null;
+  if (root === null || paths.length === 0) return null;
+  const count = paths.length;
 
   let result: DiscardResult | null = null;
-  await mutate(store, async () => {
-    // The token is minted from the text the user agreed to; a caller that never
-    // asked has nothing to pass here.
-    result = await discardPaths(root, selection, userConfirmed(confirmationReason));
-  });
+  try {
+    await mutate(store, async () => {
+      // The token is minted from the text the user agreed to; a caller that
+      // never asked has nothing to pass here.
+      result = await discardPaths(root, paths, userConfirmed(confirmationReason));
+    });
+  } catch (error) {
+    // A discard that failed partway may still have moved work into a stash;
+    // its message carries the recovery route, so it must reach the user.
+    store.dispatch({ type: 'notice', notice: { tone: 'error', ...describe(error) } });
+    return null;
+  }
 
   if (result !== null) {
     const outcome: DiscardResult = result;
