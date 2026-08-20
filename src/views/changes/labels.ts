@@ -47,10 +47,29 @@ export function groupEntries(entries: readonly StatusEntry[]): ChangeGroups {
 
 /** Renames read as `old → new`; anything else is just the path. */
 export function displayPath(entry: StatusEntry): string {
-  if (entry.origPath !== undefined && entry.origPath !== entry.path) {
-    return `${entry.origPath} → ${entry.path}`;
-  }
+  if (isRename(entry)) return `${entry.origPath ?? ''} → ${entry.path}`;
   return entry.path;
+}
+
+function isRename(entry: StatusEntry): boolean {
+  return entry.origPath !== undefined && entry.origPath !== entry.path;
+}
+
+/**
+ * Every path an action on this entry has to name.
+ *
+ * A rename is two paths in git's eyes: the removal of the old one and the
+ * addition of the new one. Acting on `path` alone leaves the other half behind
+ * — unstaging a rename would keep `old.ts` staged as a deletion, and
+ * discarding one would leave the worktree with neither file.
+ */
+export function pathsOf(entry: StatusEntry): string[] {
+  return isRename(entry) ? [entry.origPath ?? '', entry.path] : [entry.path];
+}
+
+/** Paths for a whole list, in order and without repeats. */
+export function pathsOfAll(entries: readonly StatusEntry[]): string[] {
+  return [...new Set(entries.flatMap(pathsOf))];
 }
 
 /** Single-letter status marker, matching what `git status` prints. */
@@ -114,7 +133,13 @@ export function discardQuestion(paths: readonly string[]): string {
 /**
  * The sentence that makes discard defensible: the changes went into a stash,
  * and this is the command that brings them back.
+ *
+ * Two details are load-bearing. `git stash list` first, because git creates no
+ * stash at all when the pathspec turns out to have nothing to save, and a blind
+ * `pop` would then restore an older, unrelated stash on top of live work.
+ * `--index` second, because the discard sweeps the staged side of those paths
+ * in too, and a plain `pop` would bring everything back unstaged.
  */
 export function recoveryMessage(stashLabel: string): string {
-  return `Your changes were stashed as "${stashLabel}". Run \`git stash pop\` in this repository to get them back.`;
+  return `Your changes were stashed as "${stashLabel}". Check that it is the top entry with \`git stash list\`, then run \`git stash pop --index\` to get them back — staged and unstaged sides alike.`;
 }

@@ -39,6 +39,13 @@ function statusOf(entries: StatusEntry[]): RepoStatus {
   };
 }
 
+function openRepo(store: Store): void {
+  store.dispatch({
+    type: 'repo/opened',
+    repo: { root: '/repo', gitDir: '/repo/.git', bare: false, empty: false },
+  });
+}
+
 function renderChanges(prepare: (store: Store) => void = () => {}): Store {
   const store = createStore();
   prepare(store);
@@ -51,9 +58,15 @@ function renderChanges(prepare: (store: Store) => void = () => {}): Store {
 }
 
 function renderWithEntries(entries: StatusEntry[]): Store {
-  return renderChanges((store) =>
-    store.dispatch({ type: 'status/loaded', status: statusOf(entries) }),
-  );
+  return renderChanges((store) => {
+    // `repo/opened` resets derived state, so it has to come first.
+    openRepo(store);
+    store.dispatch({ type: 'status/loaded', status: statusOf(entries) });
+  });
+}
+
+function setEntries(store: Store, entries: StatusEntry[]): void {
+  act(() => store.dispatch({ type: 'status/loaded', status: statusOf(entries) }));
 }
 
 function section(name: string): HTMLElement {
@@ -132,6 +145,21 @@ describe('list split', () => {
     expect(within(section('Unstaged')).getByText('Untracked')).toBeInTheDocument();
   });
 
+  it('shows the state letter next to its spelled-out label', () => {
+    renderWithEntries([entry({ path: 'edited.ts', worktree: 'modified' })]);
+
+    const row = within(section('Unstaged')).getByRole('listitem');
+    expect(within(row).getByText('M')).toBeInTheDocument();
+    expect(within(row).getByText('Modified')).toBeInTheDocument();
+  });
+
+  it('shows each side of a path that is staged and edited again', () => {
+    renderWithEntries([entry({ path: 'both.ts', index: 'added', worktree: 'modified' })]);
+
+    expect(within(section('Staged')).getByText('Added')).toBeInTheDocument();
+    expect(within(section('Unstaged')).getByText('Modified')).toBeInTheDocument();
+  });
+
   it('renders a rename as old → new with its state label', () => {
     renderWithEntries([entry({ path: 'new.ts', origPath: 'old.ts', index: 'renamed' })]);
 
@@ -168,14 +196,26 @@ describe('staging', () => {
     expect(unstageMock).toHaveBeenCalledWith(store, ['a.ts']);
   });
 
-  it('stages a rename by its current path, not its display text', () => {
+  it('stages a rename by both of its paths, not by its display text', () => {
     const store = renderWithEntries([
       entry({ path: 'new.ts', origPath: 'old.ts', worktree: 'renamed' }),
     ]);
 
     fireEvent.click(screen.getByRole('button', { name: 'Stage old.ts → new.ts' }));
 
-    expect(stageMock).toHaveBeenCalledWith(store, ['new.ts']);
+    expect(stageMock).toHaveBeenCalledWith(store, ['old.ts', 'new.ts']);
+  });
+
+  it('unstages a rename by both of its paths', () => {
+    // Unstaging only `new.ts` would leave `old.ts` staged as a deletion — half
+    // a rename, and not what the row promised.
+    const store = renderWithEntries([
+      entry({ path: 'new.ts', origPath: 'old.ts', index: 'renamed' }),
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unstage old.ts → new.ts' }));
+
+    expect(unstageMock).toHaveBeenCalledWith(store, ['old.ts', 'new.ts']);
   });
 
   it('stages all unstaged paths at once', () => {
@@ -190,15 +230,15 @@ describe('staging', () => {
     expect(stageMock).toHaveBeenCalledWith(store, ['a.ts', 'b.ts']);
   });
 
-  it('unstages all staged paths at once', () => {
+  it('unstages all staged paths at once, renames included whole', () => {
     const store = renderWithEntries([
       entry({ path: 'a.ts', index: 'added' }),
-      entry({ path: 'b.ts', index: 'deleted' }),
+      entry({ path: 'new.ts', origPath: 'old.ts', index: 'renamed' }),
     ]);
 
     fireEvent.click(screen.getByRole('button', { name: 'Unstage all' }));
 
-    expect(unstageMock).toHaveBeenCalledWith(store, ['a.ts', 'b.ts']);
+    expect(unstageMock).toHaveBeenCalledWith(store, ['a.ts', 'old.ts', 'new.ts']);
   });
 
   it('disables bulk actions when the list is empty', () => {
@@ -212,6 +252,10 @@ describe('staging', () => {
 describe('discard confirmation', () => {
   function renderOneUnstaged(): Store {
     return renderWithEntries([entry({ path: 'a.ts', worktree: 'modified' })]);
+  }
+
+  function confirm(): void {
+    fireEvent.click(screen.getByRole('button', { name: /^Discard \d+ files?$/ }));
   }
 
   it('does not discard on the first click', () => {
@@ -237,6 +281,34 @@ describe('discard confirmation', () => {
     expect(within(dialog).getByText('b.ts')).toBeInTheDocument();
   });
 
+  it('names both halves of a rename it is about to discard', () => {
+    const store = renderWithEntries([
+      entry({ path: 'new.ts', origPath: 'old.ts', worktree: 'renamed' }),
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Discard old.ts → new.ts' }));
+
+    const dialog = screen.getByRole('alertdialog', { name: 'Confirm discard' });
+    expect(dialog).toHaveTextContent('Discard changes to 2 files?');
+    expect(within(dialog).getByText('old.ts')).toBeInTheDocument();
+    expect(within(dialog).getByText('new.ts')).toBeInTheDocument();
+
+    confirm();
+    expect(discardMock).toHaveBeenCalledWith(store, ['old.ts', 'new.ts']);
+  });
+
+  it('warns when the staged side of a path is swept in too', () => {
+    renderWithEntries([
+      entry({ path: 'both.ts', index: 'modified', worktree: 'modified' }),
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Discard both.ts' }));
+
+    const dialog = screen.getByRole('alertdialog', { name: 'Confirm discard' });
+    expect(dialog).toHaveTextContent('also has staged changes');
+    expect(dialog).toHaveTextContent('git stash pop --index');
+  });
+
   it('cancels without discarding anything', () => {
     renderOneUnstaged();
     fireEvent.click(screen.getByRole('button', { name: 'Discard a.ts' }));
@@ -245,6 +317,16 @@ describe('discard confirmation', () => {
 
     expect(discardMock).not.toHaveBeenCalled();
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+  });
+
+  it('cancels on Escape', () => {
+    renderOneUnstaged();
+    fireEvent.click(screen.getByRole('button', { name: 'Discard a.ts' }));
+
+    fireEvent.keyDown(screen.getByRole('alertdialog'), { key: 'Escape' });
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(discardMock).not.toHaveBeenCalled();
   });
 
   it('focuses the safe choice so a stray Enter cannot discard', () => {
@@ -258,27 +340,69 @@ describe('discard confirmation', () => {
     const store = renderOneUnstaged();
     fireEvent.click(screen.getByRole('button', { name: 'Discard a.ts' }));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Discard 1 file' }));
+    confirm();
 
     expect(discardMock).toHaveBeenCalledWith(store, ['a.ts']);
     await screen.findByText(/git stash pop/);
   });
 
+  it('re-asks instead of discarding when the working tree moved underneath', () => {
+    const store = renderWithEntries([
+      entry({ path: 'a.ts', worktree: 'modified' }),
+      entry({ path: 'b.ts', worktree: 'modified' }),
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: 'Discard all' }));
+
+    // Someone reverts b.ts while the dialog is open.
+    setEntries(store, [entry({ path: 'a.ts', worktree: 'modified' })]);
+    confirm();
+
+    expect(discardMock).not.toHaveBeenCalled();
+    const dialog = screen.getByRole('alertdialog', { name: 'Confirm discard' });
+    expect(dialog).toHaveTextContent('The working tree changed while this was open');
+    expect(dialog).toHaveTextContent('Discard changes to 1 file?');
+    expect(within(dialog).queryByText('b.ts')).not.toBeInTheDocument();
+
+    // The re-confirmed, smaller set is what actually runs.
+    confirm();
+    expect(discardMock).toHaveBeenCalledWith(store, ['a.ts']);
+  });
+
+  it('discards nothing when every pending path has gone clean', () => {
+    const store = renderOneUnstaged();
+    fireEvent.click(screen.getByRole('button', { name: 'Discard a.ts' }));
+
+    setEntries(store, []);
+    confirm();
+
+    expect(discardMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Those paths no longer have unstaged changes',
+    );
+  });
+
   it('keeps the recovery message on screen with the stash label', async () => {
     discardMock.mockResolvedValue({ stashLabel: 'krakenless: discarded 2026-08-20' });
-    renderOneUnstaged();
+    const store = renderOneUnstaged();
     fireEvent.click(screen.getByRole('button', { name: 'Discard a.ts' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Discard 1 file' }));
+    confirm();
 
     const notice = await screen.findByRole('status');
     expect(notice).toHaveTextContent('krakenless: discarded 2026-08-20');
-    expect(notice).toHaveTextContent('git stash pop');
+    expect(notice).toHaveTextContent('git stash list');
+    expect(notice).toHaveTextContent('git stash pop --index');
     expect(within(notice).getByText('a.ts')).toBeInTheDocument();
 
-    // It stays until the user dismisses it: a message that vanishes takes the
-    // only recovery instructions with it.
-    expect(screen.getByRole('status')).toBeInTheDocument();
-    fireEvent.click(within(notice).getByRole('button', { name: 'Dismiss' }));
+    // It survives whatever the status panel does next — including failing —
+    // because it carries the only instructions for getting the work back.
+    act(() =>
+      store.dispatch({ type: 'status/failed', message: 'fatal: index.lock exists' }),
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('git stash pop --index');
+
+    fireEvent.click(
+      within(screen.getByRole('status')).getByRole('button', { name: 'Dismiss' }),
+    );
     expect(screen.queryByText(/git stash pop/)).not.toBeInTheDocument();
   });
 
@@ -286,7 +410,7 @@ describe('discard confirmation', () => {
     discardMock.mockResolvedValue(null);
     renderOneUnstaged();
     fireEvent.click(screen.getByRole('button', { name: 'Discard a.ts' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Discard 1 file' }));
+    confirm();
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('Nothing was discarded');
@@ -297,7 +421,7 @@ describe('discard confirmation', () => {
     discardMock.mockRejectedValue(new Error('fatal: cannot save the current worktree'));
     renderOneUnstaged();
     fireEvent.click(screen.getByRole('button', { name: 'Discard a.ts' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Discard 1 file' }));
+    confirm();
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('still in the working tree');
@@ -334,6 +458,20 @@ describe('conflicted entries', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('keeps them out of the bulk actions', () => {
+    const store = renderWithEntries([
+      conflicted,
+      entry({ path: 'a.ts', worktree: 'modified' }),
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stage all' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Discard all' }));
+
+    expect(stageMock).toHaveBeenCalledWith(store, ['a.ts']);
+    const dialog = screen.getByRole('alertdialog', { name: 'Confirm discard' });
+    expect(within(dialog).queryByText('merge.ts')).not.toBeInTheDocument();
+  });
+
   it('explains the conflict and why staging is withheld', () => {
     renderWithEntries([conflicted]);
 
@@ -346,6 +484,15 @@ describe('conflicted entries', () => {
     renderWithEntries([conflicted]);
 
     expect(screen.getByRole('button', { name: 'Commit' })).toBeDisabled();
+  });
+
+  it('withholds amend while the repository has conflicts', () => {
+    renderWithEntries([conflicted, entry({ path: 'a.ts', index: 'modified' })]);
+
+    expect(screen.getByLabelText('Amend the last commit')).toBeDisabled();
+    expect(
+      screen.getByText('Amending is unavailable while the repository has conflicts.'),
+    ).toBeInTheDocument();
   });
 });
 
@@ -399,12 +546,32 @@ describe('commit box', () => {
     expect(screen.getByLabelText('Commit message')).toHaveValue('feat: add a thing');
   });
 
-  it('warns that amending rewrites the last commit', () => {
+  it('keeps the message when there is no repository to commit to', () => {
+    // The action layer returns silently in that case, so clearing the box
+    // would look like a commit that never happened.
+    renderChanges((store) =>
+      store.dispatch({
+        type: 'status/loaded',
+        status: statusOf([entry({ path: 'a.ts', index: 'modified' })]),
+      }),
+    );
+    typeMessage('feat: add a thing');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Commit' }));
+
+    expect(commitMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent('No repository is open.');
+    expect(screen.getByLabelText('Commit message')).toHaveValue('feat: add a thing');
+  });
+
+  it('warns that amending rewrites the last commit and names it', () => {
     renderWithEntries([entry({ path: 'a.ts', index: 'modified' })]);
 
     fireEvent.click(screen.getByLabelText('Amend the last commit'));
 
-    expect(screen.getByText(/Amending rewrites the last commit/)).toBeInTheDocument();
+    const warning = screen.getByText(/Amending rewrites the last commit/);
+    expect(warning).toHaveTextContent('aaaaaaa');
+    expect(warning).toHaveTextContent('reflog');
     expect(screen.getByRole('button', { name: 'Amend commit' })).toBeInTheDocument();
   });
 
@@ -425,6 +592,7 @@ describe('commit box', () => {
 describe('busy gate', () => {
   it('disables every write action while git is running', () => {
     renderChanges((store) => {
+      openRepo(store);
       store.dispatch({
         type: 'status/loaded',
         status: statusOf([
@@ -433,9 +601,6 @@ describe('busy gate', () => {
         ]),
       });
       store.dispatch({ type: 'busy', busy: true });
-    });
-    fireEvent.change(screen.getByLabelText('Commit message'), {
-      target: { value: 'chore: try' },
     });
 
     for (const name of [
@@ -449,6 +614,7 @@ describe('busy gate', () => {
       expect(screen.getByRole('button', { name })).toBeDisabled();
     }
     expect(screen.getByLabelText('Commit message')).toBeDisabled();
+    expect(screen.getByLabelText('Amend the last commit')).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Commit' })).toBeDisabled();
   });
 

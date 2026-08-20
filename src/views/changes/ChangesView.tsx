@@ -2,25 +2,31 @@
  * Working-tree panel: staged and unstaged files, staging actions, and the
  * commit box.
  *
- * Two rules shape this file. First, discard never runs straight from a click:
+ * Three rules shape this file. First, discard never runs straight from a click:
  * it goes through an explicit confirmation that names the paths, and the stash
- * label that comes back is shown as a persistent notice, because "you can get
- * it back with `git stash pop`" is the only reason a destructive button is
- * allowed here at all. Second, conflicted paths get their own list with no
- * stage or discard button — staging a file full of conflict markers records a
- * wrong resolution without ever saying so.
+ * label that comes back is shown as a notice that survives whatever the status
+ * panel does next, because "you can get it back" is the only reason a
+ * destructive button is allowed here at all. Second, the confirmed path set is
+ * re-checked against the current status before anything runs — the working tree
+ * can move while the dialog is open, and discarding paths the dialog never
+ * showed is exactly the mis-click this confirmation exists to prevent. Third,
+ * conflicted paths get their own list with no stage or discard button: staging
+ * a file full of conflict markers records a wrong resolution without saying so.
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import type { StatusEntry } from '../../git/types';
+import type { RepoStatus, StatusEntry } from '../../git/types';
 import { commitStaged, discard, stage, unstage } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
+import type { Loadable } from '../../state/store';
 import styles from './ChangesView.module.css';
 import {
   conflictDescription,
   discardQuestion,
   displayPath,
   groupEntries,
+  pathsOf,
+  pathsOfAll,
   recoveryMessage,
   STATE_LABELS,
   STATE_LETTERS,
@@ -38,11 +44,42 @@ export function ChangesView(): ReactNode {
   const store = useStore();
 
   const [pendingDiscard, setPendingDiscard] = useState<string[] | null>(null);
+  const [pendingChanged, setPendingChanged] = useState(false);
   const [recovery, setRecovery] = useState<Recovery | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
 
-  const runDiscard = async (paths: string[]): Promise<void> => {
+  const askDiscard = (paths: string[]): void => {
+    setRecovery(null);
+    setFailure(null);
+    setPendingChanged(false);
+    setPendingDiscard(paths);
+  };
+
+  const cancelDiscard = (): void => {
     setPendingDiscard(null);
+    setPendingChanged(false);
+  };
+
+  const runDiscard = async (paths: string[]): Promise<void> => {
+    // Read the status as it is *now*, not as it was when the dialog opened.
+    const available = discardablePaths(store.getState().status);
+    const stillThere = paths.filter((path) => available.has(path));
+
+    if (stillThere.length !== paths.length) {
+      setPendingChanged(true);
+      if (stillThere.length === 0) {
+        setPendingDiscard(null);
+        setFailure(
+          'Those paths no longer have unstaged changes, so nothing was discarded.',
+        );
+      } else {
+        setPendingDiscard(stillThere);
+      }
+      return;
+    }
+
+    setPendingDiscard(null);
+    setPendingChanged(false);
     setFailure(null);
     try {
       const result = await discard(store, paths);
@@ -60,8 +97,44 @@ export function ChangesView(): ReactNode {
     }
   };
 
+  const groups = status.state === 'ready' ? groupEntries(status.value.entries) : null;
+  const stagedPaths = new Set(groups === null ? [] : pathsOfAll(groups.staged));
+
   return (
     <section className={styles.panel} aria-label="Changes">
+      {/*
+        The recovery and failure notices live above the status switch on
+        purpose: a status read that fails right after a discard must not take
+        the only instructions for getting the work back off the screen.
+      */}
+      {recovery !== null && (
+        <RecoveryNotice recovery={recovery} onDismiss={() => setRecovery(null)} />
+      )}
+
+      {failure !== null && (
+        <div className={styles.failure} role="alert">
+          <p className={styles.noticeText}>{failure}</p>
+          <button
+            type="button"
+            className={styles.button}
+            onClick={() => setFailure(null)}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {pendingDiscard !== null && (
+        <DiscardConfirmation
+          paths={pendingDiscard}
+          stagedToo={pendingDiscard.filter((path) => stagedPaths.has(path))}
+          listChanged={pendingChanged}
+          busy={busy}
+          onCancel={cancelDiscard}
+          onConfirm={() => void runDiscard(pendingDiscard)}
+        />
+      )}
+
       {status.state === 'idle' && (
         <Notice title="No repository open">
           Open a repository to see its working-tree changes.
@@ -81,82 +154,51 @@ export function ChangesView(): ReactNode {
         </Notice>
       )}
 
-      {status.state === 'ready' && (
+      {status.state === 'ready' && groups !== null && (
         <ChangeLists
-          entries={status.value.entries}
+          groups={groups}
+          repoStatus={status.value}
           busy={busy}
-          recovery={recovery}
-          failure={failure}
-          pendingDiscard={pendingDiscard}
           onStage={(paths) => void stage(store, paths)}
           onUnstage={(paths) => void unstage(store, paths)}
-          onAskDiscard={(paths) => {
-            setRecovery(null);
-            setFailure(null);
-            setPendingDiscard(paths);
-          }}
-          onCancelDiscard={() => setPendingDiscard(null)}
-          onConfirmDiscard={(paths) => void runDiscard(paths)}
-          onDismissRecovery={() => setRecovery(null)}
-          onDismissFailure={() => setFailure(null)}
+          onAskDiscard={askDiscard}
         />
       )}
     </section>
   );
 }
 
+/** Paths the panel is currently willing to discard: unstaged, not conflicted. */
+function discardablePaths(status: Loadable<RepoStatus>): Set<string> {
+  if (status.state !== 'ready') return new Set();
+  return new Set(pathsOfAll(groupEntries(status.value.entries).unstaged));
+}
+
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-interface ListProps {
-  entries: StatusEntry[];
+function ChangeLists({
+  groups,
+  repoStatus,
+  busy,
+  onStage,
+  onUnstage,
+  onAskDiscard,
+}: {
+  groups: ReturnType<typeof groupEntries>;
+  repoStatus: RepoStatus;
   busy: boolean;
-  recovery: Recovery | null;
-  failure: string | null;
-  pendingDiscard: string[] | null;
   onStage: (paths: string[]) => void;
   onUnstage: (paths: string[]) => void;
   onAskDiscard: (paths: string[]) => void;
-  onCancelDiscard: () => void;
-  onConfirmDiscard: (paths: string[]) => void;
-  onDismissRecovery: () => void;
-  onDismissFailure: () => void;
-}
-
-function ChangeLists(props: ListProps): ReactNode {
-  const { staged, unstaged, conflicted } = groupEntries(props.entries);
+}): ReactNode {
+  const { staged, unstaged, conflicted } = groups;
   const nothingToShow =
     staged.length === 0 && unstaged.length === 0 && conflicted.length === 0;
 
   return (
     <div className={styles.body}>
-      {props.recovery !== null && (
-        <RecoveryNotice recovery={props.recovery} onDismiss={props.onDismissRecovery} />
-      )}
-
-      {props.failure !== null && (
-        <div className={styles.failure} role="alert">
-          <p className={styles.noticeText}>{props.failure}</p>
-          <button
-            type="button"
-            className={styles.button}
-            onClick={props.onDismissFailure}
-          >
-            Dismiss
-          </button>
-        </div>
-      )}
-
-      {props.pendingDiscard !== null && (
-        <DiscardConfirmation
-          paths={props.pendingDiscard}
-          busy={props.busy}
-          onCancel={props.onCancelDiscard}
-          onConfirm={() => props.onConfirmDiscard(props.pendingDiscard ?? [])}
-        />
-      )}
-
       {nothingToShow && (
         <Notice title="Working tree clean">
           Nothing is staged and nothing has changed since the last commit.
@@ -171,10 +213,10 @@ function ChangeLists(props: ListProps): ReactNode {
         side="index"
         emptyText="Nothing staged yet."
         bulkLabel="Unstage all"
-        busy={props.busy}
-        onBulk={props.onUnstage}
+        busy={busy}
+        onBulk={onUnstage}
         rowActions={(entry) => [
-          { label: 'Unstage', run: () => props.onUnstage([entry.path]) },
+          { label: 'Unstage', run: () => onUnstage(pathsOf(entry)) },
         ]}
       />
 
@@ -184,24 +226,25 @@ function ChangeLists(props: ListProps): ReactNode {
         side="worktree"
         emptyText="No unstaged changes."
         bulkLabel="Stage all"
-        busy={props.busy}
-        onBulk={props.onStage}
+        busy={busy}
+        onBulk={onStage}
         secondaryBulk={{
           label: 'Discard all',
           danger: true,
-          run: (paths) => props.onAskDiscard(paths),
+          run: (paths) => onAskDiscard(paths),
         }}
         rowActions={(entry) => [
-          { label: 'Stage', run: () => props.onStage([entry.path]) },
-          {
-            label: 'Discard',
-            danger: true,
-            run: () => props.onAskDiscard([entry.path]),
-          },
+          { label: 'Stage', run: () => onStage(pathsOf(entry)) },
+          { label: 'Discard', danger: true, run: () => onAskDiscard(pathsOf(entry)) },
         ]}
       />
 
-      <CommitBox stagedCount={staged.length} busy={props.busy} />
+      <CommitBox
+        stagedCount={staged.length}
+        hasConflicts={repoStatus.hasConflicts || conflicted.length > 0}
+        head={repoStatus.head}
+        busy={busy}
+      />
     </div>
   );
 }
@@ -233,11 +276,15 @@ function RecoveryNotice({
 
 function DiscardConfirmation({
   paths,
+  stagedToo,
+  listChanged,
   busy,
   onCancel,
   onConfirm,
 }: {
   paths: string[];
+  stagedToo: string[];
+  listChanged: boolean;
   busy: boolean;
   onCancel: () => void;
   onConfirm: () => void;
@@ -259,11 +306,26 @@ function DiscardConfirmation({
       }}
     >
       <strong className={styles.noticeTitle}>{discardQuestion(paths)}</strong>
+      {listChanged && (
+        <p className={styles.warning}>
+          The working tree changed while this was open, so the list below is not what you
+          first confirmed. Nothing has been discarded — review it and confirm again.
+        </p>
+      )}
       <p className={styles.noticeText}>
         These working-tree changes will be removed from the files below. Krakenless
         stashes them first, so you will be able to bring them back with{' '}
-        <code>git stash pop</code>.
+        <code>git stash pop --index</code>.
       </p>
+      {stagedToo.length > 0 && (
+        <p className={styles.warning}>
+          {stagedToo.length === 1
+            ? 'One of these paths also has staged changes; git stashes the staged side with it.'
+            : `${stagedToo.length} of these paths also have staged changes; git stashes the staged side with them.`}{' '}
+          Recover with <code>git stash pop --index</code> to get the staged version back
+          as well.
+        </p>
+      )}
       <ul className={styles.pathList}>
         {paths.map((path) => (
           <li key={path} className={styles.path}>
@@ -320,7 +382,7 @@ function FileSection({
   onBulk: (paths: string[]) => void;
   rowActions: (entry: StatusEntry) => RowAction[];
 }): ReactNode {
-  const paths = entries.map((entry) => entry.path);
+  const paths = pathsOfAll(entries);
   const label = `${title} (${entries.length})`;
 
   return (
@@ -355,7 +417,7 @@ function FileSection({
         <ul className={styles.list}>
           {entries.map((entry) => (
             <li key={entry.path} className={styles.row}>
-              <span className={styles.state} aria-hidden="true">
+              <span className={styles.state} title={STATE_LABELS[entry[side]]}>
                 {STATE_LETTERS[entry[side]]}
               </span>
               <span className={styles.path}>{displayPath(entry)}</span>
@@ -398,7 +460,7 @@ function ConflictList({ entries }: { entries: StatusEntry[] }): ReactNode {
       <ul className={styles.list}>
         {entries.map((entry) => (
           <li key={entry.path} className={`${styles.row} ${styles.conflictRow}`}>
-            <span className={styles.state} aria-hidden="true">
+            <span className={styles.state} title={STATE_LABELS.unmerged}>
               {STATE_LETTERS.unmerged}
             </span>
             <span className={styles.path}>{displayPath(entry)}</span>
@@ -414,9 +476,13 @@ function ConflictList({ entries }: { entries: StatusEntry[] }): ReactNode {
 
 function CommitBox({
   stagedCount,
+  hasConflicts,
+  head,
   busy,
 }: {
   stagedCount: number;
+  hasConflicts: boolean;
+  head: string | null;
   busy: boolean;
 }): ReactNode {
   const store = useStore();
@@ -426,9 +492,16 @@ function CommitBox({
 
   const empty = message.trim().length === 0;
   const disabled = busy || empty || stagedCount === 0;
+  // Amending mid-merge would rewrite a commit while the operation is still
+  // running, and unlike a plain commit git would not stop it.
+  const canAmend = !hasConflicts && head !== null;
 
   const submit = async (): Promise<void> => {
     setError(null);
+    if (store.getState().repo.state !== 'ready') {
+      setError('No repository is open.');
+      return;
+    }
     try {
       await commitStaged(store, { message, amend });
       setMessage('');
@@ -455,16 +528,22 @@ function CommitBox({
       <label className={styles.amend}>
         <input
           type="checkbox"
-          checked={amend}
-          disabled={busy}
+          checked={amend && canAmend}
+          disabled={busy || !canAmend}
           onChange={(event) => setAmend(event.target.checked)}
         />
         Amend the last commit
       </label>
-      {amend && (
+      {!canAmend && (
+        <p className={styles.commitHint}>
+          {hasConflicts
+            ? 'Amending is unavailable while the repository has conflicts.'
+            : 'Amending is unavailable: there is no commit yet.'}
+        </p>
+      )}
+      {amend && canAmend && (
         <p className={styles.amendWarning} role="status">
-          Amending rewrites the last commit: it gets a new hash, and anyone who already
-          fetched it will need to reconcile. Do not amend a commit you have pushed.
+          {`Amending rewrites the last commit${head === null ? '' : ` (${head.slice(0, 7)})`}: it gets a new hash, and anyone who already fetched it will need to reconcile. The old commit stays in the reflog. Do not amend a commit you have pushed.`}
         </p>
       )}
 
@@ -482,7 +561,7 @@ function CommitBox({
           disabled={disabled}
           onClick={() => void submit()}
         >
-          {amend ? 'Amend commit' : 'Commit'}
+          {amend && canAmend ? 'Amend commit' : 'Commit'}
         </button>
       </div>
     </section>

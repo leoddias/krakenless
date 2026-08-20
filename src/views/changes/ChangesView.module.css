@@ -58,6 +58,12 @@
   border-color: var(--danger);
 }
 
+.warning {
+  margin: 0.4rem 0 0;
+  color: var(--danger);
+  line-height: 1.45;
+}
+
 .confirmActions {
   display: flex;
   gap: 0.5rem;

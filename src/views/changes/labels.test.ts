@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { FileState, StatusEntry } from '../../git/types';
+import type { StatusEntry } from '../../git/types';
 import {
   conflictDescription,
   discardQuestion,
   displayPath,
   groupEntries,
+  pathsOf,
+  pathsOfAll,
   recoveryMessage,
   STATE_LABELS,
   STATE_LETTERS,
@@ -95,31 +97,58 @@ describe('displayPath', () => {
   });
 });
 
-describe('state wording', () => {
-  const states: FileState[] = [
-    'unmodified',
-    'modified',
-    'added',
-    'deleted',
-    'renamed',
-    'copied',
-    'type-changed',
-    'untracked',
-    'ignored',
-    'unmerged',
-  ];
-
-  it('has a letter and a label for every file state', () => {
-    for (const state of states) {
-      expect(STATE_LETTERS[state]).toMatch(/^.$/);
-      expect(STATE_LABELS[state].length).toBeGreaterThan(0);
-    }
+describe('pathsOf', () => {
+  it('names both sides of a rename', () => {
+    expect(
+      pathsOf(entry({ path: 'new.ts', origPath: 'old.ts', index: 'renamed' })),
+    ).toEqual(['old.ts', 'new.ts']);
   });
 
-  it('uses git letters for the common states', () => {
-    expect(STATE_LETTERS.modified).toBe('M');
-    expect(STATE_LETTERS.untracked).toBe('?');
-    expect(STATE_LETTERS.unmerged).toBe('U');
+  it('names one path for everything else', () => {
+    expect(pathsOf(entry({ path: 'a.ts', worktree: 'modified' }))).toEqual(['a.ts']);
+    expect(pathsOf(entry({ path: 'a.ts', origPath: 'a.ts' }))).toEqual(['a.ts']);
+  });
+
+  it('collects a list in order and without repeats', () => {
+    expect(
+      pathsOfAll([
+        entry({ path: 'a.ts', worktree: 'modified' }),
+        entry({ path: 'a.ts', index: 'modified' }),
+        entry({ path: 'new.ts', origPath: 'old.ts', index: 'renamed' }),
+      ]),
+    ).toEqual(['a.ts', 'old.ts', 'new.ts']);
+  });
+});
+
+describe('state wording', () => {
+  it('maps every file state to the letter git prints', () => {
+    expect(STATE_LETTERS).toEqual({
+      unmodified: '.',
+      modified: 'M',
+      added: 'A',
+      deleted: 'D',
+      renamed: 'R',
+      copied: 'C',
+      'type-changed': 'T',
+      untracked: '?',
+      ignored: '!',
+      unmerged: 'U',
+    });
+  });
+
+  it('spells every file state out in English', () => {
+    expect(STATE_LABELS).toEqual({
+      unmodified: 'Unmodified',
+      modified: 'Modified',
+      added: 'Added',
+      deleted: 'Deleted',
+      renamed: 'Renamed',
+      copied: 'Copied',
+      'type-changed': 'Type changed',
+      untracked: 'Untracked',
+      ignored: 'Ignored',
+      unmerged: 'Conflicted',
+    });
   });
 });
 
@@ -141,9 +170,13 @@ describe('discard wording', () => {
     expect(discardQuestion(['a.ts', 'b.ts'])).toBe('Discard changes to 2 files?');
   });
 
-  it('names the stash and the command that brings the changes back', () => {
+  it('names the stash and the commands that bring the changes back', () => {
     const text = recoveryMessage('krakenless: discarded 2026-08-20T10:00:00.000Z');
     expect(text).toContain('krakenless: discarded 2026-08-20T10:00:00.000Z');
-    expect(text).toContain('git stash pop');
+    // `git stash list` first: git creates no stash at all when the pathspec had
+    // nothing to save, and a blind pop would restore an unrelated stash.
+    expect(text).toContain('git stash list');
+    // `--index`, because the discard sweeps the staged side in as well.
+    expect(text).toContain('git stash pop --index');
   });
 });
