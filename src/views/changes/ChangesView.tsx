@@ -167,9 +167,10 @@ export function ChangesView(): ReactNode {
       ]);
     } catch (error) {
       // An interrupted `git stash push` can have written the entry and still
-      // reported failure, so this must not promise the changes are untouched.
+      // reported failure. The error carries the recovery route in that case, so
+      // it is shown verbatim rather than replaced with a guess.
       setFailure(
-        `Discard reported an error. Check \`git stash list\` before retrying: an interrupted stash can still have been created. ${messageOf(error)}`,
+        `The discard did not finish. ${messageOf(error)} Check \`git stash list\` before retrying.`,
       );
     }
   };

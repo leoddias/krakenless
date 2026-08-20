@@ -8,6 +8,7 @@ import {
   type CommitOptions,
 } from './commands/stage';
 import { pathspec } from './argsafety';
+import { recoveryFor, unrecoverableNote } from './recovery';
 import type { Confirmation } from './confirm';
 import { GitError } from './errors';
 import { serializeHunks } from './patch';
@@ -105,6 +106,8 @@ export interface DiscardResult {
   stashLabel?: string;
   /** Exact commands that bring the changes back, in order. */
   undoCommands: string[];
+  /** Anything the commands above cannot restore, said plainly. */
+  notes?: string[];
 }
 
 /** Resolves the current stash tip, or null when there are no stashes. */
@@ -149,12 +152,61 @@ async function planDiscard(
   };
 }
 
+/** What one stash phase produced, once it is known to have created an entry. */
+interface StashedPhase {
+  /** The stash entry itself, for `git stash show` and for naming it. */
+  stashOid: string;
+  /** Oid whose *tree* holds the content — the third parent for untracked. */
+  sourceOid: string;
+  /** Paths that tree actually contains. */
+  presentPaths: string[];
+  /** Paths the phase was asked to discard. */
+  requestedPaths: string[];
+}
+
 /**
- * Runs one stash phase and returns the oid it created, if any.
+ * Resolves where a phase's content really lives, and what is in it.
  *
- * A failure still has to report the oid: `stash push --keep-index` on an
- * untracked path can fail *after* stashing the file and removing it from disk,
- * and losing that oid to an exception means the file is gone with no route back.
+ * `stash push --include-untracked` stores untracked files in the stash's third
+ * parent, not its tree (verified against git 2.39), so restoring from the stash
+ * oid would fail for exactly the case where the file exists nowhere else.
+ */
+async function describeStash(
+  repo: string,
+  stashOid: string,
+  requestedPaths: string[],
+  untracked: boolean,
+): Promise<StashedPhase> {
+  let sourceOid = stashOid;
+  if (untracked) {
+    const parent = await runGit(
+      repo,
+      { args: ['rev-parse', '--verify', '--quiet', `${stashOid}^3`] },
+      { allowExitCodes: [1] },
+    );
+    const resolved = parent.stdout.trim();
+    // Resolved to a literal oid on purpose: `^` is an escape character in
+    // cmd.exe, so a copy-pasted `--source=<oid>^3` silently loses the `^3`.
+    if (resolved.length > 0) sourceOid = resolved;
+  }
+
+  const listed = await runGit(repo, {
+    args: ['ls-tree', '-r', '-z', '--name-only', sourceOid],
+  });
+  return {
+    stashOid,
+    sourceOid,
+    presentPaths: listed.stdout.split('\u0000').filter((path) => path.length > 0),
+    requestedPaths,
+  };
+}
+
+/**
+ * Runs one stash phase and describes what it created, if anything.
+ *
+ * A failure still has to report the stash: `stash push` can fail *after*
+ * stashing a file and removing it from disk, and losing that oid to an
+ * exception means the file is gone with no route back.
  */
 async function stashAway(
   repo: string,
@@ -162,7 +214,7 @@ async function stashAway(
   label: string,
   keepIndex: boolean,
   gate: { confirmed: true },
-): Promise<string | null> {
+): Promise<StashedPhase | null> {
   if (paths.length === 0) return null;
   const before = await stashTip(repo);
 
@@ -171,7 +223,7 @@ async function stashAway(
   } catch (error) {
     const created = await stashTip(repo);
     if (created !== null && created !== before) {
-      throw new StashedButFailed(created);
+      throw new StashedButFailed(await describeStash(repo, created, paths, !keepIndex));
     }
     throw error;
   }
@@ -180,18 +232,25 @@ async function stashAway(
   // nothing to save; reporting a recovery route then would point at an
   // unrelated, older entry.
   const after = await stashTip(repo);
-  return after === null || after === before ? null : after;
+  if (after === null || after === before) return null;
+  return describeStash(repo, after, paths, !keepIndex);
 }
 
-/** Carries the stash oid out of a failed phase so the undo route survives. */
+/** Carries a phase's stash out of a failure so the undo route survives. */
 class StashedButFailed extends Error {
-  readonly oid: string;
+  readonly phase: StashedPhase;
 
-  constructor(oid: string) {
+  constructor(phase: StashedPhase) {
     super('The discard failed after stashing');
     this.name = 'StashedButFailed';
-    this.oid = oid;
+    this.phase = phase;
   }
+}
+
+function collectRecovery(phase: StashedPhase): { commands: string[]; notes: string[] } {
+  const plan = recoveryFor(phase.sourceOid, phase.requestedPaths, phase.presentPaths);
+  const note = unrecoverableNote(phase.stashOid, plan.unrecoverable);
+  return { commands: plan.commands, notes: note === null ? [] : [note] };
 }
 
 /**
@@ -212,38 +271,36 @@ export async function discardPaths(
   const plan = await planDiscard(repo, paths);
 
   const undoCommands: string[] = [];
-  const addUndo = (oid: string, forPaths: string[]): void => {
-    // `git checkout <oid> -- <path>` would write the *index* too, clobbering
-    // the staged snapshot --keep-index just protected. `restore --worktree`
-    // touches only the working tree, which is the exact inverse of a discard.
-    undoCommands.push(`git restore --source=${oid} --worktree -- ${quote(forPaths)}`);
+  const notes: string[] = [];
+  const absorb = (phase: StashedPhase | null): void => {
+    if (phase === null) return;
+    const recovery = collectRecovery(phase);
+    undoCommands.push(...recovery.commands);
+    notes.push(...recovery.notes);
   };
 
   try {
-    const trackedOid = await stashAway(repo, plan.tracked, stashLabel, true, gate);
-    if (trackedOid !== null) addUndo(trackedOid, plan.tracked);
-
-    const untrackedOid = await stashAway(repo, plan.untracked, stashLabel, false, gate);
-    if (untrackedOid !== null) addUndo(untrackedOid, plan.untracked);
+    absorb(await stashAway(repo, plan.tracked, stashLabel, true, gate));
+    absorb(await stashAway(repo, plan.untracked, stashLabel, false, gate));
   } catch (error) {
-    if (error instanceof StashedButFailed) {
-      // Work was moved to a stash before the failure; the user must be told
-      // where it went, so the recovery route travels with the error.
-      addUndo(error.oid, paths);
-      throw new GitError(
-        'command-failed',
-        `The discard failed partway. Your changes are in a stash: ${undoCommands.join(' ; ')}`,
-        { args: ['stash', 'push'] },
-      );
-    }
-    throw error;
+    // Work may already be off disk. Whatever went wrong, the routes back that
+    // earlier phases earned must travel with the error, not be dropped with it.
+    if (error instanceof StashedButFailed) absorb(error.phase);
+    if (undoCommands.length === 0 && notes.length === 0) throw error;
+
+    throw new GitError(
+      'command-failed',
+      [
+        'The discard failed partway, and some changes are already in a stash.',
+        ...undoCommands.map((command) => `Recover with: ${command}`),
+        ...notes,
+      ].join(' '),
+      { args: ['stash', 'push'] },
+    );
   }
 
-  if (undoCommands.length === 0) return { discarded: false, undoCommands: [] };
-  return { discarded: true, stashLabel, undoCommands };
-}
-
-/** Quotes paths for a command the user copy-pastes into their own shell. */
-function quote(paths: string[]): string {
-  return paths.map((path) => `"${path.replace(/(["$`\\])/g, '\\$1')}"`).join(' ');
+  if (undoCommands.length === 0 && notes.length === 0) {
+    return { discarded: false, undoCommands: [] };
+  }
+  return { discarded: true, stashLabel, undoCommands, notes };
 }

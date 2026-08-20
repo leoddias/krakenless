@@ -227,10 +227,12 @@ export async function discard(
       result = await discardPaths(root, paths, userConfirmed(confirmationReason));
     });
   } catch (error) {
-    // A discard that failed partway may still have moved work into a stash;
-    // its message carries the recovery route, so it must reach the user.
+    // A discard that failed partway may still have moved work into a stash, and
+    // the message carries the route back. It is dispatched *and* rethrown: a
+    // caller that treated this as "nothing happened" would tell the user there
+    // is nothing to recover while a stash holds their work.
     store.dispatch({ type: 'notice', notice: { tone: 'error', ...describe(error) } });
-    return null;
+    throw error;
   }
 
   if (result !== null) {

@@ -366,7 +366,9 @@ describe('actions', () => {
     const store = createStore();
     await openRepo(store, 'C:/repos/app');
 
-    await expect(discard(store, ['a.txt'], 'Discard?')).resolves.toBeNull();
+    // Rethrown, not swallowed: a caller that read `null` as "nothing happened"
+    // would tell the user there is nothing to recover while a stash holds it.
+    await expect(discard(store, ['a.txt'], 'Discard?')).rejects.toThrow(/stash/);
     expect(store.getState().notice).toMatchObject({ tone: 'error' });
     expect(store.getState().notice?.message).toContain('git restore --source=');
     expect(store.getState().busy).toBe(false);
