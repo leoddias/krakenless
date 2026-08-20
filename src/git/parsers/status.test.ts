@@ -106,6 +106,17 @@ describe('buildStatusCommand', () => {
     ]);
   });
 
+  it('rejects the ignored + untracked=no combination git itself refuses', () => {
+    // Verified against git 2.39: exit 128, "Unsupported combination of ignored
+    // and untracked-files arguments".
+    expect(() => buildStatusCommand({ untracked: 'no', includeIgnored: true })).toThrow(
+      GitError,
+    );
+    expect(() =>
+      buildStatusCommand({ untracked: 'normal', includeIgnored: true }),
+    ).not.toThrow();
+  });
+
   it('puts paths after -- and routes them through the path guard', () => {
     expect(buildStatusCommand({ paths: ['src/a.ts', 'with space.txt'] }).args).toEqual([
       '--no-optional-locks',

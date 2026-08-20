@@ -58,6 +58,15 @@ export function buildStatusCommand(options: StatusOptions = {}): GitCommand {
     `--untracked-files=${untracked}`,
   ];
   if (options.includeIgnored) {
+    if (untracked === 'no') {
+      // git 2.39 exits 128 with "Unsupported combination of ignored and
+      // untracked-files arguments". Caught here so the caller gets a typed
+      // bad-argument instead of a generic command failure.
+      throw new GitError(
+        'bad-argument',
+        'ignored files cannot be listed with --untracked-files=no',
+      );
+    }
     // `matching` lists ignored files individually. The default (`traditional`)
     // collapses an ignored directory into one entry unless untracked=all, so
     // its output would silently change with the untracked mode.
