@@ -1,4 +1,5 @@
 mod config;
+mod external;
 mod git_runner;
 mod watcher;
 
@@ -23,7 +24,9 @@ pub fn run() {
             config::config_write,
             config::config_dir_path,
             watcher::watch_repo,
-            watcher::unwatch_repo
+            watcher::unwatch_repo,
+            external::open_external,
+            external::reveal_folder
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

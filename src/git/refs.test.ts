@@ -59,7 +59,9 @@ describe('network builders', () => {
 });
 
 describe('pull', () => {
-  beforeEach(() => invoke.mockReset());
+  beforeEach(() => {
+    invoke.mockReset();
+  });
 
   it('explains divergence instead of leaving the raw git error', () => {
     invoke.mockResolvedValue(
@@ -78,7 +80,9 @@ describe('pull', () => {
 });
 
 describe('push', () => {
-  beforeEach(() => invoke.mockReset());
+  beforeEach(() => {
+    invoke.mockReset();
+  });
 
   it('refuses a force push that nobody confirmed', async () => {
     // This is the one operation here that can destroy other people's work.
@@ -107,7 +111,9 @@ describe('push', () => {
 });
 
 describe('deleteBranch', () => {
-  beforeEach(() => invoke.mockReset());
+  beforeEach(() => {
+    invoke.mockReset();
+  });
 
   it('deletes with the safe form first', async () => {
     invoke.mockResolvedValue(raw());
@@ -152,7 +158,9 @@ describe('deleteBranch', () => {
 });
 
 describe('listStashes', () => {
-  beforeEach(() => invoke.mockReset());
+  beforeEach(() => {
+    invoke.mockReset();
+  });
 
   it('parses the NUL-framed list', async () => {
     const NUL = '\u0000';
