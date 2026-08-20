@@ -29,6 +29,7 @@ describe('runGit', () => {
       repo: 'C:/repo',
       args: ['status', '--porcelain=v2'],
       timeoutMs: null,
+      stdin: null,
     });
     expect(result.stdout).toBe('ok');
   });
@@ -99,6 +100,15 @@ describe('runGit', () => {
     await expect(runGit('C:/repo', { args: ['status'] })).rejects.toMatchObject({
       kind: expected,
     });
+  });
+
+  it('passes stdin through for commands that read a patch', async () => {
+    invoke.mockResolvedValue(raw());
+    await runGit('C:/repo', { args: ['apply', '--cached', '-'] }, { stdin: 'PATCH' });
+    expect(invoke).toHaveBeenCalledWith(
+      'git_run',
+      expect.objectContaining({ stdin: 'PATCH' }),
+    );
   });
 
   it('gates a destructive command even when the builder forgot the flag', async () => {

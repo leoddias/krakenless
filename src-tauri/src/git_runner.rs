@@ -4,7 +4,7 @@
 //! parsing. Those live in TypeScript (see `docs/ARCHITECTURE.md`). Git is
 //! always spawned with an argument array, never through a shell.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -167,10 +167,14 @@ fn kill_tree(child: &mut std::process::Child) {
 
 /// Runs `git` inside `repo` with `args`, capturing stdout, stderr and the exit
 /// code. Kills the process tree if the child outlives `timeout_ms`.
+///
+/// `stdin_text` feeds the child's standard input — `git apply` reads a patch
+/// that way, which keeps patch content out of the argument list entirely.
 pub fn run_git(
     repo: &str,
     args: &[String],
     timeout_ms: Option<u64>,
+    stdin_text: Option<String>,
 ) -> Result<GitOutput, GitRunError> {
     let cwd = validate_repo(repo)?;
     validate_args(args)?;
@@ -185,7 +189,11 @@ pub fn run_git(
         .current_dir(&cwd)
         .args(GIT_GLOBAL_ARGS)
         .args(args)
-        .stdin(Stdio::null())
+        .stdin(if stdin_text.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         // Keep output machine-stable regardless of the user's environment.
@@ -204,6 +212,17 @@ pub fn run_git(
     let mut child = command
         .spawn()
         .map_err(|e| GitRunError::SpawnFailed(e.to_string()))?;
+
+    // Write stdin on its own thread too: a patch larger than the pipe buffer
+    // would otherwise block us here while the child blocks writing output.
+    if let Some(text) = stdin_text {
+        if let Some(mut pipe) = child.stdin.take() {
+            std::thread::spawn(move || {
+                let _ = pipe.write_all(text.as_bytes());
+                // Dropping the handle closes the pipe, which is git's EOF.
+            });
+        }
+    }
 
     // Read both pipes on their own threads: a child that fills one pipe while
     // we block on the other would deadlock.
@@ -295,8 +314,9 @@ pub fn git_run(
     repo: String,
     args: Vec<String>,
     timeout_ms: Option<u64>,
+    stdin: Option<String>,
 ) -> Result<GitOutput, GitRunError> {
-    run_git(&repo, &args, timeout_ms)
+    run_git(&repo, &args, timeout_ms, stdin)
 }
 
 #[cfg(test)]
@@ -321,21 +341,21 @@ mod tests {
 
     #[test]
     fn rejects_relative_repo_path() {
-        let err = run_git("relative/path", &s(&["status"]), None).unwrap_err();
+        let err = run_git("relative/path", &s(&["status"]), None, None).unwrap_err();
         assert!(matches!(err, GitRunError::BadRepoPath(_)));
     }
 
     #[test]
     fn rejects_missing_repo_path() {
         let missing = std::env::temp_dir().join("krakenless-does-not-exist-9e1f");
-        let err = run_git(missing.to_str().unwrap(), &s(&["status"]), None).unwrap_err();
+        let err = run_git(missing.to_str().unwrap(), &s(&["status"]), None, None).unwrap_err();
         assert!(matches!(err, GitRunError::BadRepoPath(_)));
     }
 
     #[test]
     fn rejects_empty_args() {
         let dir = temp_dir("empty-args");
-        let err = run_git(dir.to_str().unwrap(), &[], None).unwrap_err();
+        let err = run_git(dir.to_str().unwrap(), &[], None, None).unwrap_err();
         assert!(matches!(err, GitRunError::BadArgument(_)));
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -343,7 +363,7 @@ mod tests {
     #[test]
     fn rejects_nul_in_argument() {
         let dir = temp_dir("nul-arg");
-        let err = run_git(dir.to_str().unwrap(), &s(&["log\0--all"]), None).unwrap_err();
+        let err = run_git(dir.to_str().unwrap(), &s(&["log\0--all"]), None, None).unwrap_err();
         assert!(matches!(err, GitRunError::BadArgument(_)));
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -351,7 +371,7 @@ mod tests {
     #[test]
     fn captures_stdout_and_zero_exit_code() {
         let dir = temp_dir("stdout");
-        let out = run_git(dir.to_str().unwrap(), &s(&["--version"]), None).unwrap();
+        let out = run_git(dir.to_str().unwrap(), &s(&["--version"]), None, None).unwrap();
         assert_eq!(out.code, Some(0));
         assert!(out.stdout.starts_with("git version"), "got {:?}", out.stdout);
         assert!(!out.timed_out);
@@ -362,7 +382,7 @@ mod tests {
     #[test]
     fn surfaces_nonzero_exit_code_and_stderr() {
         let dir = temp_dir("nonrepo");
-        let out = run_git(dir.to_str().unwrap(), &s(&["status"]), None).unwrap();
+        let out = run_git(dir.to_str().unwrap(), &s(&["status"]), None, None).unwrap();
         assert_ne!(out.code, Some(0));
         assert!(!out.stderr.is_empty());
         std::fs::remove_dir_all(&dir).ok();
@@ -372,7 +392,7 @@ mod tests {
     fn arguments_are_not_shell_interpreted() {
         // If this went through a shell, the `&&` would run a second command.
         let dir = temp_dir("shell");
-        let out = run_git(dir.to_str().unwrap(), &s(&["--version && echo pwned"]), None).unwrap();
+        let out = run_git(dir.to_str().unwrap(), &s(&["--version && echo pwned"]), None, None).unwrap();
         assert!(!out.stdout.contains("pwned"), "got {:?}", out.stdout);
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -400,6 +420,7 @@ mod tests {
             dir.to_str().unwrap(),
             &s(&["ls-remote", &format!("git://127.0.0.1:{port}/x")]),
             Some(timeout.as_millis() as u64),
+            None,
         )
         .unwrap();
         let elapsed = started.elapsed();
@@ -417,7 +438,7 @@ mod tests {
     #[test]
     fn a_zero_timeout_is_clamped_to_a_usable_floor() {
         let dir = temp_dir("zero-timeout");
-        let out = run_git(dir.to_str().unwrap(), &s(&["--version"]), Some(0)).unwrap();
+        let out = run_git(dir.to_str().unwrap(), &s(&["--version"]), Some(0), None).unwrap();
         assert_eq!(out.code, Some(0), "a trivial command must still complete");
         assert!(!out.timed_out);
         std::fs::remove_dir_all(&dir).ok();
@@ -451,6 +472,7 @@ mod tests {
             dir.to_str().unwrap(),
             &s(&["rev-parse", "--path-format=absolute", "--git-path", "index"]),
             None,
+            None,
         )
         .unwrap();
 
@@ -467,6 +489,53 @@ mod tests {
             "child saw a redirecting env var: {:?}",
             out.stdout
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn feeds_stdin_to_the_child() {
+        let dir = temp_dir("stdin");
+        // `hash-object --stdin` echoes back the oid of whatever it read, so the
+        // known oid of "hello" plus a newline proves the bytes arrived intact.
+        let out = run_git(
+            dir.to_str().unwrap(),
+            &s(&["hash-object", "--stdin"]),
+            None,
+            Some("hello\n".to_string()),
+        )
+        .unwrap();
+        assert_eq!(out.code, Some(0), "stderr: {}", out.stderr);
+        assert_eq!(out.stdout.trim(), "ce013625030ba8dba906f756967f9e9ca394464a");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_large_stdin_payload_does_not_deadlock() {
+        let dir = temp_dir("stdin-big");
+        // Well past any pipe buffer: if stdin were written on this thread while
+        // the child wrote output, both sides would block forever.
+        let payload = "x".repeat(4 * 1024 * 1024);
+        let started = Instant::now();
+        let out = run_git(
+            dir.to_str().unwrap(),
+            &s(&["hash-object", "--stdin"]),
+            Some(20_000),
+            Some(payload),
+        )
+        .unwrap();
+        assert_eq!(out.code, Some(0));
+        assert!(!out.timed_out);
+        assert!(started.elapsed() < Duration::from_secs(20));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn without_stdin_the_child_sees_eof_immediately() {
+        let dir = temp_dir("stdin-null");
+        let out = run_git(dir.to_str().unwrap(), &s(&["hash-object", "--stdin"]), None, None)
+            .unwrap();
+        // The empty blob's oid: git read EOF rather than waiting for input.
+        assert_eq!(out.stdout.trim(), "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
         std::fs::remove_dir_all(&dir).ok();
     }
 

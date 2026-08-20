@@ -18,6 +18,11 @@ interface RawGitRunError {
 }
 
 export interface RunOptions {
+  /**
+   * Text fed to git's standard input. `git apply` reads its patch this way,
+   * which keeps patch content out of the argument list entirely.
+   */
+  stdin?: string;
   /** Required for commands that can destroy work. */
   confirmed?: boolean;
   /** Exit codes that are expected and must not throw (e.g. 1 from `diff --quiet`). */
@@ -87,6 +92,7 @@ export async function runGit(
       repo,
       args: command.args,
       timeoutMs: command.timeoutMs ?? null,
+      stdin: options.stdin ?? null,
     });
   } catch (error) {
     throw toGitError(command.args, error);

@@ -127,7 +127,9 @@ export function isDestructive(args: string[]): boolean {
         rest.some((arg) => /^\+[^-]/.test(arg))
       );
     case 'stash':
-      return hasFlag(rest, 'drop', 'clear', 'pop');
+      // Bare `git stash` means `push`, which moves the working tree aside.
+      // Recoverable, but the user must have asked for it.
+      return rest.length === 0 || hasFlag(rest, 'drop', 'clear', 'pop', 'push');
     case 'rebase':
     case 'filter-branch':
     case 'gc':

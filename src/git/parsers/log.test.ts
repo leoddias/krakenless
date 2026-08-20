@@ -408,6 +408,7 @@ describe('readLog', () => {
 
     expect(invoke).toHaveBeenCalledWith('git_run', {
       repo: 'C:/repo',
+      stdin: null,
       args: buildLogCommand({ limit: 4 }).args,
       timeoutMs: null,
     });

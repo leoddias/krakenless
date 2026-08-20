@@ -621,6 +621,7 @@ describe('getStatus', () => {
 
     expect(invoke).toHaveBeenCalledWith('git_run', {
       repo: 'C:/repo',
+      stdin: null,
       args: buildStatusCommand().args,
       timeoutMs: null,
     });

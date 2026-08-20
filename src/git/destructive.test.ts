@@ -15,6 +15,8 @@ describe('isDestructive', () => {
     [['push', 'origin', '+main:main']],
     [['push', '--delete', 'origin', 'topic']],
     [['stash', 'drop', 'stash@{0}']],
+    [['stash', 'push', '--include-untracked', '--message', 'm', '--', 'a.txt']],
+    [['stash']],
     [['stash', 'clear']],
     [['rebase', 'main']],
     [['merge', '--abort']],
