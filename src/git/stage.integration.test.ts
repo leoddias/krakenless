@@ -49,6 +49,11 @@ beforeEach(() => {
   git(['init', '--quiet']);
   git(['config', 'user.email', 'test@example.com']);
   git(['config', 'user.name', 'Test']);
+  // Line-ending conversion off: these tests assert what *this code* does to
+  // content, and `core.autocrlf=true` — the Git for Windows default, and what
+  // GitHub's Windows runners use — would have git rewrite it underneath them.
+  // The autocrlf=true behaviour is covered separately and deliberately.
+  git(['config', 'core.autocrlf', 'false']);
   write('keep.txt', 'keep original\n');
   write('drop.txt', 'drop original\n');
   git(['add', '.']);

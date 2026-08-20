@@ -14,6 +14,11 @@
   commit**. No exceptions, including "trivial" changes.
 - Integration tests create disposable temp repos and run the real git binary;
   they must pass on a clean Windows machine with only git installed.
+- Those repos pin `core.autocrlf=false`, so a test asserts what *this code* does
+  to content rather than what git's line-ending conversion did. The
+  `autocrlf=true` case — the Git for Windows default — has its own file,
+  `src/git/autocrlf.integration.test.ts`, which checks the patch path agrees
+  with `git add` byte for byte.
 - Run `npm test` before declaring any task done; broken tests block handoff.
 - Destructive-operation code paths (discard, force-push, `branch -D`) need an
   integration test proving the recoverable path (e.g. stash created).
