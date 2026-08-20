@@ -1,10 +1,18 @@
 import { GitError } from '../errors';
 import type { FileState, RepoStatus, StatusEntry } from '../types';
 
-const ARGS = ['status', '--porcelain=v2', '--branch', '-z'];
-
+/**
+ * No `args` is attached: the parser is pure and does not know which flags the
+ * builder actually used, and a hand-copied argument list on the error would
+ * name a command that was never run.
+ */
 function fail(message: string): never {
-  throw new GitError('parse-failed', `git status: ${message}`, { args: ARGS });
+  throw new GitError('parse-failed', `git status: ${message}`);
+}
+
+/** Keeps a failure message bounded; a record can be as long as a path. */
+function excerpt(record: string): string {
+  return record.length > 120 ? `${record.slice(0, 120)}…` : record;
 }
 
 /**
@@ -56,12 +64,13 @@ function fields(record: string, count: number): string[] {
   let pos = 0;
   for (let i = 0; i < count; i += 1) {
     const space = record.indexOf(' ', pos);
-    if (space === -1) fail(`record has fewer than ${count + 1} fields: ${record}`);
+    if (space === -1)
+      fail(`record has fewer than ${count + 1} fields: ${excerpt(record)}`);
     out.push(record.slice(pos, space));
     pos = space + 1;
   }
   const rest = record.slice(pos);
-  if (rest.length === 0) fail(`record has an empty path: ${record}`);
+  if (rest.length === 0) fail(`record has an empty path: ${excerpt(record)}`);
   out.push(rest);
   return out;
 }
@@ -69,7 +78,7 @@ function fields(record: string, count: number): string[] {
 /** Indexed access with a loud failure instead of `undefined` leaking onward. */
 function at(parts: string[], index: number, record: string): string {
   const value = parts[index];
-  if (value === undefined) fail(`missing field ${index} in: ${record}`);
+  if (value === undefined) fail(`missing field ${index} in: ${excerpt(record)}`);
   return value;
 }
 
@@ -87,7 +96,7 @@ const STATE_BY_CODE: Readonly<Record<string, FileState>> = {
 function toState(code: string, record: string): FileState {
   const state = STATE_BY_CODE[code];
   if (state === undefined) {
-    fail(`unknown state code ${JSON.stringify(code)} in: ${record}`);
+    fail(`unknown state code ${JSON.stringify(code)} in: ${excerpt(record)}`);
   }
   return state;
 }
@@ -95,21 +104,21 @@ function toState(code: string, record: string): FileState {
 /** `N...` for a regular file, `S<c><m><u>` for a submodule. */
 function submoduleField(field: string, record: string): string | undefined {
   if (!/^(N\.\.\.|S[.C][.M][.U])$/.test(field)) {
-    fail(`malformed submodule field ${JSON.stringify(field)} in: ${record}`);
+    fail(`malformed submodule field ${JSON.stringify(field)} in: ${excerpt(record)}`);
   }
   return field.startsWith('S') ? field : undefined;
 }
 
 function assertMode(mode: string, record: string): void {
   if (!/^[0-7]{6}$/.test(mode)) {
-    fail(`malformed file mode ${JSON.stringify(mode)} in: ${record}`);
+    fail(`malformed file mode ${JSON.stringify(mode)} in: ${excerpt(record)}`);
   }
 }
 
 function assertOid(oid: string, record: string): void {
   // 40 hex digits for sha1, 64 for sha256; all-zero is git's "no object".
   if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(oid)) {
-    fail(`malformed object id ${JSON.stringify(oid)} in: ${record}`);
+    fail(`malformed object id ${JSON.stringify(oid)} in: ${excerpt(record)}`);
   }
 }
 
@@ -119,7 +128,9 @@ function statePair(
   record: string,
 ): { index: FileState; worktree: FileState } {
   if (xy.length !== 2) {
-    fail(`expected a two-letter status field, got ${JSON.stringify(xy)} in: ${record}`);
+    fail(
+      `expected a two-letter status field, got ${JSON.stringify(xy)} in: ${excerpt(record)}`,
+    );
   }
   return {
     index: toState(xy.charAt(0), record),
@@ -132,10 +143,10 @@ function similarityOf(field: string, record: string): number {
   const match = /^[RC](\d{1,3})$/.exec(field);
   const digits = match === null ? undefined : match[1];
   if (digits === undefined) {
-    fail(`malformed rename score ${JSON.stringify(field)} in: ${record}`);
+    fail(`malformed rename score ${JSON.stringify(field)} in: ${excerpt(record)}`);
   }
   const score = Number(digits);
-  if (score > 100) fail(`rename score above 100 in: ${record}`);
+  if (score > 100) fail(`rename score above 100 in: ${excerpt(record)}`);
   return score;
 }
 
@@ -165,7 +176,8 @@ function parseRenamed(record: string, reader: RecordReader): StatusEntry {
   const similarity = similarityOf(at(parts, 7, record), record);
   const path = at(parts, 8, record);
   const origPath = reader.next();
-  if (origPath.length === 0) fail(`rename record has an empty source path: ${record}`);
+  if (origPath.length === 0)
+    fail(`rename record has an empty source path: ${excerpt(record)}`);
   const entry: StatusEntry = {
     path,
     origPath,
@@ -178,14 +190,36 @@ function parseRenamed(record: string, reader: RecordReader): StatusEntry {
   return entry;
 }
 
-/** `u <XY> <sub> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <path>` */
+/**
+ * The seven conflict types porcelain v2 can report on a `u` record. This is a
+ * *different* vocabulary from the `<XY>` of an ordinary entry: `UD` means
+ * "modified by us, deleted by them", not "unmerged in the index, deleted in
+ * the worktree".
+ */
+const CONFLICT_CODES = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
+
+/**
+ * `u <XY> <sub> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <path>`
+ *
+ * Both sides are reported as `unmerged`, never as the letters of the conflict
+ * code. Mapping `UD` to `worktree: 'deleted'` would make a conflicted path
+ * indistinguishable from an ordinary deletion, and a "discard working-tree
+ * changes" action keyed on `worktree !== 'unmodified'` would then run checkout
+ * against an unmerged index — collapsing the user's half-finished conflict
+ * resolution to one stage, with nothing committed to recover from.
+ */
 function parseUnmerged(record: string): StatusEntry {
   const parts = fields(record.slice(2), 9);
+  const code = at(parts, 0, record);
+  if (!CONFLICT_CODES.has(code)) {
+    fail(`unknown conflict code ${JSON.stringify(code)} in: ${excerpt(record)}`);
+  }
   for (const index of [2, 3, 4, 5]) assertMode(at(parts, index, record), record);
   for (const index of [6, 7, 8]) assertOid(at(parts, index, record), record);
   const entry: StatusEntry = {
     path: at(parts, 9, record),
-    ...statePair(at(parts, 0, record), record),
+    index: 'unmerged',
+    worktree: 'unmerged',
     conflicted: true,
   };
   const submodule = submoduleField(at(parts, 1, record), record);
@@ -202,7 +236,7 @@ function parseUnmerged(record: string): StatusEntry {
  */
 function parseUnlisted(record: string, worktree: FileState): StatusEntry {
   const path = record.slice(2);
-  if (path.length === 0) fail(`record has an empty path: ${record}`);
+  if (path.length === 0) fail(`record has an empty path: ${excerpt(record)}`);
   return { path, index: 'unmodified', worktree, conflicted: false };
 }
 
@@ -266,8 +300,10 @@ export function parseStatus(stdout: string): RepoStatus {
     const record = reader.next();
     if (record.length === 0) fail('empty record');
     const kind = record.charAt(0);
-    if (record.charAt(1) !== ' ') {
-      fail(`malformed record: ${JSON.stringify(record)}`);
+    // Only entry records are required to have `<kind> ` framing; headers are
+    // checked by parseHeader, which tolerates keys a newer git may add.
+    if (kind !== '#' && record.charAt(1) !== ' ') {
+      fail(`malformed record: ${JSON.stringify(excerpt(record))}`);
     }
     switch (kind) {
       case '#':
@@ -296,6 +332,10 @@ export function parseStatus(stdout: string): RepoStatus {
   if (headers.oid === undefined || headers.head === undefined) {
     fail('missing # branch.oid / # branch.head headers (was --branch passed?)');
   }
+  // Ambiguity inherited from git's own format: a branch may legally be *named*
+  // `(detached)`, and porcelain v2 gives no way to tell the two apart. Reading
+  // it as detached is the conservative side — the UI then offers "create a
+  // branch here" instead of assuming a branch is checked out.
   const detached = headers.head === '(detached)';
   const status: RepoStatus = {
     branch: detached ? null : headers.head,

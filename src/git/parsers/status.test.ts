@@ -1,7 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GitError } from '../errors';
+import { isDestructive } from '../destructive';
 import { buildStatusCommand } from '../commands/status';
+import { getStatus } from '../status';
 import { parseStatus } from './status';
+
+const invoke = vi.hoisted(() => vi.fn());
+vi.mock('@tauri-apps/api/core', () => ({ invoke }));
 
 /**
  * Every fixture below is verbatim output of git 2.39.2 captured from a
@@ -37,6 +42,8 @@ const MIXED = [
 describe('buildStatusCommand', () => {
   it('emits the exact porcelain v2 argument array', () => {
     expect(buildStatusCommand().args).toEqual([
+      '--no-optional-locks',
+      '--literal-pathspecs',
       'status',
       '--porcelain=v2',
       '--branch',
@@ -51,8 +58,29 @@ describe('buildStatusCommand', () => {
     expect(args).not.toContain('-c');
   });
 
-  it('is not marked destructive', () => {
+  it('is not marked destructive, and the arg-level gate agrees', () => {
     expect(buildStatusCommand().destructive).toBeUndefined();
+    // The two leading global options must not hide the subcommand from the
+    // deny-list, which fails closed on anything it cannot recognize.
+    expect(isDestructive(buildStatusCommand().args)).toBe(false);
+    expect(isDestructive(buildStatusCommand({ paths: ['a.txt'] }).args)).toBe(false);
+  });
+
+  it('takes no index lock and disables pathspec magic', () => {
+    // status rewrites the index under .git/index.lock unless told not to, and
+    // the runner kills a timed-out git with SIGKILL, which would leave the
+    // lock behind. --literal-pathspecs stops `:(top)` and friends from
+    // widening the report - and later, a discard - to the whole repository.
+    const { args } = buildStatusCommand();
+    expect(args.slice(0, 2)).toEqual(['--no-optional-locks', '--literal-pathspecs']);
+    expect(args.indexOf('status')).toBe(2);
+  });
+
+  it('rejects an untracked mode that did not come from the type system', () => {
+    const smuggled = { untracked: 'all --exec=evil' } as unknown as {
+      untracked: 'all';
+    };
+    expect(() => buildStatusCommand(smuggled)).toThrow(GitError);
   });
 
   it('honours the untracked mode', () => {
@@ -67,6 +95,8 @@ describe('buildStatusCommand', () => {
   it('adds --ignored=matching only when asked', () => {
     expect(buildStatusCommand().args).not.toContain('--ignored=matching');
     expect(buildStatusCommand({ includeIgnored: true }).args).toEqual([
+      '--no-optional-locks',
+      '--literal-pathspecs',
       'status',
       '--porcelain=v2',
       '--branch',
@@ -78,6 +108,8 @@ describe('buildStatusCommand', () => {
 
   it('puts paths after -- and routes them through the path guard', () => {
     expect(buildStatusCommand({ paths: ['src/a.ts', 'with space.txt'] }).args).toEqual([
+      '--no-optional-locks',
+      '--literal-pathspecs',
       'status',
       '--porcelain=v2',
       '--branch',
@@ -314,8 +346,8 @@ describe('parseStatus entries', () => {
     expect(status.entries).toEqual([
       {
         path: 'added-both.txt',
-        index: 'added',
-        worktree: 'added',
+        index: 'unmerged',
+        worktree: 'unmerged',
         conflicted: true,
       },
       {
@@ -324,6 +356,31 @@ describe('parseStatus entries', () => {
         worktree: 'unmerged',
         conflicted: true,
       },
+    ]);
+  });
+
+  it('never reports a delete-side conflict as an ordinary deletion', () => {
+    // `u DU` = deleted by us, modified by them; `u UD` = the mirror. Mapping
+    // those letters onto index/worktree states would make a conflicted path
+    // look like a plain deletion, and a discard action keyed on
+    // `worktree !== 'unmodified'` would run checkout against an unmerged index.
+    const status = parseStatus(
+      nul([
+        '# branch.oid 62edacbd90ee015dace0709cd5ee1ca1061a33f6',
+        '# branch.head main',
+        `u DU N... 100644 000000 100644 100644 df967b96a579e45a18b8251732d16804b2e56a55 ${ZERO} e45c9c2666d44e0327c1f9c239a74c508336053e del-mine.txt`,
+        `u UD N... 100644 100644 000000 100644 df967b96a579e45a18b8251732d16804b2e56a55 351be5bf6e17c59ea560546d69654115ecb2fd8d ${ZERO} del-theirs.txt`,
+      ]),
+    );
+    expect(status.hasConflicts).toBe(true);
+    for (const entry of status.entries) {
+      expect(entry.conflicted).toBe(true);
+      expect(entry.index).toBe('unmerged');
+      expect(entry.worktree).toBe('unmerged');
+    }
+    expect(status.entries.map((entry) => entry.path)).toEqual([
+      'del-mine.txt',
+      'del-theirs.txt',
     ]);
   });
 
@@ -490,9 +547,101 @@ describe('parseStatus rejects malformed input', () => {
     expectParseFailure(nul([`# branch.oid ${HEAD_OID}`]));
   });
 
+  it('refuses a conflict code git never emits', () => {
+    expectParseFailure(
+      nul([
+        `# branch.oid ${HEAD_OID}`,
+        '# branch.head main',
+        `u MM N... 100644 100644 100644 100644 ${BLOB_A} ${BLOB_A} ${BLOB_A} f.txt`,
+      ]),
+    );
+  });
+
+  it('keeps failure messages bounded instead of echoing a huge record', () => {
+    const longPath = 'a'.repeat(5000);
+    let thrown: unknown;
+    try {
+      parseStatus(
+        nul([
+          `# branch.oid ${HEAD_OID}`,
+          '# branch.head main',
+          `1 ZM N... 100644 100644 100644 ${BLOB_A} ${BLOB_A} ${longPath}`,
+        ]),
+      );
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(GitError);
+    expect((thrown as GitError).message.length).toBeLessThan(400);
+  });
+
+  it('attaches no argument list it cannot know', () => {
+    let thrown: unknown;
+    try {
+      parseStatus(nul(['? untracked.txt']));
+    } catch (error) {
+      thrown = error;
+    }
+    expect((thrown as GitError).args).toEqual([]);
+  });
+
   it('refuses completely empty output', () => {
     // A repository always reports at least the two branch headers; empty
     // stdout means the command did not run the way we think it did.
     expectParseFailure('');
+  });
+});
+
+describe('getStatus', () => {
+  beforeEach(() => {
+    invoke.mockReset();
+  });
+
+  it('runs the built command and returns the parsed status', async () => {
+    invoke.mockResolvedValue({
+      stdout: nul(MIXED),
+      stderr: '',
+      code: 0,
+      timed_out: false,
+      stdout_lossy: false,
+    });
+
+    const status = await getStatus('C:/repo');
+
+    expect(invoke).toHaveBeenCalledWith('git_run', {
+      repo: 'C:/repo',
+      args: buildStatusCommand().args,
+      timeoutMs: null,
+    });
+    expect(status.branch).toBe('main');
+    expect(status.entries.map((entry) => entry.path)).toContain('renamed name.txt');
+  });
+
+  it('refuses lossily decoded output instead of parsing invented paths', async () => {
+    invoke.mockResolvedValue({
+      stdout: nul(MIXED),
+      stderr: '',
+      code: 0,
+      timed_out: false,
+      stdout_lossy: true,
+    });
+
+    await expect(getStatus('C:/repo')).rejects.toMatchObject({
+      kind: 'undecodable-output',
+    });
+  });
+
+  it('surfaces a failed git run rather than an empty status', async () => {
+    invoke.mockResolvedValue({
+      stdout: '',
+      stderr: 'fatal: not a git repository (or any of the parent directories): .git',
+      code: 128,
+      timed_out: false,
+      stdout_lossy: false,
+    });
+
+    await expect(getStatus('C:/nope')).rejects.toMatchObject({
+      kind: 'not-a-repository',
+    });
   });
 });
