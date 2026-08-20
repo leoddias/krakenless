@@ -96,23 +96,44 @@ jobs:
       # log never published), so the OS one is what guarantees the step ends and
       # the log becomes readable. One thread and unbuffered output mean the last
       # line names the test that hung.
-      # Only Linux gets the OS-level wrapper: `timeout` is GNU coreutils, which
-      # macOS does not ship, and Linux is where the hang happens.
-      #
-      # Output goes to a file rather than straight to the step's stdout. Killing
-      # cargo does not kill the test binary it spawned, and that grandchild keeps
-      # the inherited stdout pipe open — so the step would sit waiting for EOF
-      # even after the timeout fired, and publish no log at all. (The same
-      # grandchild-holds-the-pipe problem the git runner has to handle.)
-      - name: Rust tests (Linux)
+      # Linux has hung here three times with no log — the job gets cancelled by
+      # the infrastructure before anything publishes, and even an OS-level
+      # `timeout` around cargo did not end the step. So this is split to say
+      # *where* it stops: resources first, then build, then the lib tests (all
+      # of ours live there), then the binary's empty harness, which links
+      # WebKitGTK and is the one part that could block on a headless machine.
+      - name: Resources before Rust tests (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          df -h /
+          free -m
+          nproc
+
+      - name: Build tests (Linux)
         if: matrix.os == 'ubuntu-latest'
         timeout-minutes: 20
+        run: cargo test --manifest-path src-tauri/Cargo.toml --no-run
+
+      - name: Lib tests (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        timeout-minutes: 10
         run: |
           set +e
-          timeout --signal=KILL 900 cargo test --manifest-path src-tauri/Cargo.toml             -- --test-threads=1 --nocapture > rust-tests.log 2>&1
+          timeout --signal=KILL 300 cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1 --nocapture > lib-tests.log 2>&1
           status=$?
-          echo "--- cargo test exited with $status ---"
-          tail -n 200 rust-tests.log
+          echo "--- lib tests exited with $status ---"
+          tail -n 200 lib-tests.log
+          exit $status
+
+      - name: Binary harness (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        timeout-minutes: 10
+        run: |
+          set +e
+          timeout --signal=KILL 300 cargo test --manifest-path src-tauri/Cargo.toml --bins -- --test-threads=1 --nocapture > bin-tests.log 2>&1
+          status=$?
+          echo "--- binary harness exited with $status ---"
+          tail -n 50 bin-tests.log
           exit $status
 
       - name: Rust tests
