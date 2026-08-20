@@ -139,17 +139,6 @@ pub fn reveal_folder(path: String) -> Result<(), ExternalError> {
 mod tests {
     use super::*;
 
-    fn temp_dir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "krakenless-ext-{name}-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
 
     #[test]
     fn rejects_an_empty_program() {
