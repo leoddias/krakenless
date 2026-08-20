@@ -121,3 +121,36 @@ React/TS rules, and runs fast enough to sit in every task loop's gate. ESLint's
 extra configuration surface buys nothing this project needs.
 **Consequences:** Rules live in `.oxlintrc.json`. If a rule we need turns out to
 be ESLint-only, add ESLint alongside rather than switching back.
+
+## ADR-0015 — Path encoding and git invocation defaults are decided at the runner
+**Date:** 2026-08-19 · **Status:** accepted
+**Decision:** Every git invocation is prefixed by the Rust runner with
+`--no-pager -c core.quotePath=false`, runs with a scrubbed `GIT_*` environment,
+and reports whether stdout decoded as valid UTF-8. Output that decoded lossily
+is refused by the TypeScript runner unless the caller explicitly opts in, and
+never for output that will be parsed into paths.
+**Why:** Path quoting, paging and environment inheritance are properties of
+*how git is called*, not of any single command; deciding them per builder means
+the first author who forgets produces a parser that silently mangles non-ASCII
+paths. Inherited `GIT_INDEX_FILE`/`GIT_DIR`-style variables can redirect writes
+to a foreign index — launching the app from inside a rebase hook would be enough.
+A lossy path fed back into a write command is the exact "misparse becomes data
+loss" case the safety bar exists to prevent.
+**Consequences:** Parsers may assume unquoted UTF-8 paths. Builders must not
+re-specify these globals. Binary-ish output (e.g. `show` of a binary blob) needs
+`allowLossyOutput` at the call site.
+
+## ADR-0016 — Destructiveness is derived from the arguments, not declared
+**Date:** 2026-08-19 · **Status:** accepted
+**Decision:** `runGit` refuses to execute an unconfirmed command when either the
+builder marked it destructive *or* `isDestructive(args)` recognizes it from the
+argument array (`reset --hard`, `checkout/restore`, `clean`, `branch -D`,
+`push --force`/`+refspec`, `stash drop|clear|pop`, `rebase`, `gc`, ...).
+Supersedes the flag-only gate described in ADR-0008's original wording.
+**Why:** A gate that depends on every future builder remembering a boolean fails
+the first time someone forgets one — and the failure mode is an unconfirmed
+`reset --hard`. Deriving it from the args makes the check mechanical at a single
+chokepoint. The list is deliberately over-inclusive: a false positive costs one
+confirmation dialog, a false negative costs the user's work.
+**Consequences:** Read-only commands that happen to match must pass
+`confirmed: true` explicitly, which is intentional friction.

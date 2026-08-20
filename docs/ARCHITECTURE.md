@@ -1,7 +1,8 @@
 # Architecture
 
-> Status: **planned** — no code exists yet. Update this file as the real
-> structure lands (M0+). Diverging from this doc without an ADR is a bug.
+> Status: **in progress** — M0 scaffold and the git layer contract exist; the
+> layout below marks what has landed. Diverging from this doc without an ADR
+> is a bug.
 
 ## Big picture
 
@@ -39,15 +40,18 @@
 ```
 src/                    # React + TS
   git/
+    types.ts            # [done] shared contract: GitCommand, RepoStatus, Commit, FileDiff...
+    errors.ts           # [done] GitError + stderr classification
+    runner.ts           # [done] invoke('git_run'), timeouts, destructive gate
+    repository.ts       # [done] open/identify a repository
     commands/           # builders: pure fns → GitCommand { args: string[] }
     parsers/            # porcelain/log/diff parsers + unit tests
-    runner.ts           # invoke('run_git'), timeouts, error typing
   views/                # Welcome, Repo (Graph, Status, DiffViewer, ...)
   state/                # open-repo store, refresh orchestration
   config/               # typed settings schema + load/save via IPC
 src-tauri/              # Rust shell
   src/
-    git_runner.rs       # spawn git, no shell, args array, capture, timeout
+    git_runner.rs       # [done] spawn git, no shell, args array, capture, timeout
     watcher.rs
     config.rs
 tests/
