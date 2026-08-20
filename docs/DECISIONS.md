@@ -91,3 +91,22 @@ in v0.1.
 **Decision:** 2 weeks solo dogfood (GitKraken closed) → builds to 3–5 friends
 → ≥2 friends still using after 2 more weeks ⇒ invest in v0.2 + real name +
 wedge. Otherwise stop investing; keep as personal tool.
+
+## ADR-0013 — Work is executed as capped loops, parallelized by worktree packets
+**Date:** 2026-08-19 · **Status:** accepted
+**Decision:** Every non-trivial task runs the loop build → test → review → fix
+with a hard gate (green suite + no unresolved critical/major findings) and a
+cap of 3 passes before it must escalate as blocked. Parallel work is done by
+splitting a milestone into task packets with *disjoint owned file globs*, one
+`task-worker` agent per packet in its own git worktree, integrated one at a
+time by the orchestrator. Protocol: `docs/PARALLEL.md`.
+**Why:** Agent-written code is cheap to produce and expensive to trust; the
+bottleneck is verification, so verification is built into the unit of work
+rather than left to a later pass. Worktree isolation with exclusive file
+ownership is what makes concurrency safe without runtime coordination — the
+alternative (several agents editing one tree) trades review time for merge
+archaeology. The iteration cap exists because a loop that can't converge in 3
+passes signals a mis-specified task, not insufficient effort.
+**Consequences:** Splitting cost is paid up front (contracts committed before
+fan-out); shared files are orchestrator-only, so workers *request* those edits.
+Max 4 concurrent packets. Sequential single-agent work remains the default.
