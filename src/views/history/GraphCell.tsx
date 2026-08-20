@@ -1,6 +1,6 @@
 import { useId, type ReactNode } from 'react';
 import { avatarFill, initials } from './avatar';
-import type { GraphRow } from './graph';
+import type { GraphAnchor, GraphEdge, GraphRow } from './graph';
 import styles from './history.module.css';
 
 /** Horizontal distance between lanes, in pixels. Wide enough for a badge. */
@@ -21,6 +21,33 @@ const MAX_RESERVED_LANES = 4;
 
 function laneX(lane: number): number {
   return lane * LANE_WIDTH + LANE_WIDTH / 2;
+}
+
+/**
+ * Vertical position of an edge's end inside the row.
+ *
+ * `top` and `bottom` are the row's exact boundaries, so a lane occupied in two
+ * consecutive rows draws one unbroken line across them.
+ */
+function anchorY(anchor: GraphAnchor, rowHeight: number): number {
+  if (anchor === 'top') return 0;
+  if (anchor === 'bottom') return rowHeight;
+  return rowHeight / 2;
+}
+
+/** The `d` of one edge: a straight run in a lane, or an S-curve between two. */
+function edgePath(edge: GraphEdge, rowHeight: number): string {
+  const x1 = laneX(edge.fromLane);
+  const x2 = laneX(edge.toLane);
+  const y1 = anchorY(edge.from, rowHeight);
+  const y2 = anchorY(edge.to, rowHeight);
+  if (edge.fromLane === edge.toLane) return `M ${x1} ${y1} L ${x2} ${y2}`;
+  // A curve rather than a diagonal: where two lanes join, a straight line
+  // crossing the node reads as passing through it. The control points sit
+  // halfway down, so the curve leaves and arrives vertically and meets the
+  // straight segments above and below without a kink.
+  const middle = (y1 + y2) / 2;
+  return `M ${x1} ${y1} C ${x1} ${middle}, ${x2} ${middle}, ${x2} ${y2}`;
 }
 
 /**
@@ -78,13 +105,7 @@ export function GraphCell({
           // lane-pair key would collide and drop one of the edges.
           key={index}
           className={styles.graphEdge}
-          d={
-            edge.fromLane === edge.toLane
-              ? `M ${laneX(edge.fromLane)} 0 L ${laneX(edge.fromLane)} ${rowHeight}`
-              : // A curve rather than a diagonal: where two lanes join, a
-                // straight line crossing the node reads as passing through it.
-                `M ${laneX(edge.fromLane)} ${middle} C ${laneX(edge.fromLane)} ${rowHeight}, ${laneX(edge.toLane)} ${middle}, ${laneX(edge.toLane)} ${rowHeight}`
-          }
+          d={edgePath(edge, rowHeight)}
           fill="none"
         />
       ))}
