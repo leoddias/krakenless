@@ -6,6 +6,7 @@ import {
   refreshStatus,
 } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
+import { isBusy } from '../../state/store';
 import { conflictDescription, offersMergetool } from './conflicts';
 import styles from './ConflictBanner.module.css';
 
@@ -19,7 +20,7 @@ import styles from './ConflictBanner.module.css';
 export function ConflictBanner(): ReactNode {
   const store = useStore();
   const status = useAppState((state) => state.status);
-  const busy = useAppState((state) => state.busy);
+  const busy = useAppState(isBusy);
   const [confirmingAbort, setConfirmingAbort] = useState(false);
 
   if (status.state !== 'ready' || !status.value.hasConflicts) return null;

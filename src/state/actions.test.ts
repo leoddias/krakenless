@@ -16,7 +16,7 @@ import {
   stageHunks,
   unstage,
 } from './actions';
-import { createStore } from './store';
+import { createStore, isBusy } from './store';
 import { GitError } from '../git/errors';
 
 const openRepository = vi.hoisted(() => vi.fn());
@@ -255,7 +255,7 @@ describe('actions', () => {
 
     expect(stagePaths).toHaveBeenCalledWith(REPO.root, ['a.txt']);
     expect(getStatus).toHaveBeenCalledTimes(1);
-    expect(store.getState().busy).toBe(false);
+    expect(isBusy(store.getState())).toBe(false);
   });
 
   it('ignores an empty selection instead of staging everything', async () => {
@@ -279,10 +279,10 @@ describe('actions', () => {
     await openRepo(store, 'C:/repos/app');
 
     const pending = stage(store, ['a.txt']);
-    expect(store.getState().busy).toBe(true);
+    expect(isBusy(store.getState())).toBe(true);
     release();
     await pending;
-    expect(store.getState().busy).toBe(false);
+    expect(isBusy(store.getState())).toBe(false);
   });
 
   it('clears busy even when the git command fails', async () => {
@@ -291,7 +291,7 @@ describe('actions', () => {
     await openRepo(store, 'C:/repos/app');
 
     await expect(stage(store, ['a.txt'])).rejects.toThrow();
-    expect(store.getState().busy).toBe(false);
+    expect(isBusy(store.getState())).toBe(false);
   });
 
   it('passes hunk selections through to the patch path', async () => {
@@ -390,7 +390,7 @@ describe('actions', () => {
     await expect(discard(store, ['a.txt'], 'Discard?')).rejects.toThrow(/stash/);
     expect(store.getState().notice).toMatchObject({ tone: 'error' });
     expect(store.getState().notice?.message).toContain('git restore --source=');
-    expect(store.getState().busy).toBe(false);
+    expect(isBusy(store.getState())).toBe(false);
   });
 
   it('refreshes the history after committing', async () => {
@@ -427,7 +427,7 @@ describe('actions', () => {
     expect(fetchRemoteFn).toHaveBeenCalledWith(REPO.root, { prune: true });
     expect(listBranches).toHaveBeenCalled();
     expect(listStashes).toHaveBeenCalled();
-    expect(store.getState().busy).toBe(false);
+    expect(isBusy(store.getState())).toBe(false);
   });
 
   it('keeps the panels consistent when a branch switch fails', async () => {

@@ -34,6 +34,7 @@ import {
   switchTo,
 } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
+import { isBusy } from '../../state/store';
 import styles from './RefsView.module.css';
 import {
   applyStashQuestion,
@@ -147,7 +148,7 @@ type CreateBranch = (name: string, startPoint?: string) => Promise<CreateResult>
 
 export function RefsView(): ReactNode {
   const store = useStore();
-  const busy = useAppState((state) => state.busy);
+  const busy = useAppState(isBusy);
   const selectedOid = useAppState((state) => state.selection.commitOid);
   const root = useAppState((state) =>
     state.repo.state === 'ready' ? state.repo.value.root : null,

@@ -12,6 +12,7 @@ import type {
   Branch,
   Commit,
   FileDiff,
+  Remote,
   RepoInfo,
   RepoStatus,
   StashEntry,
@@ -64,12 +65,24 @@ export interface AppState {
   commits: Loadable<Commit[]>;
   diff: Loadable<FileDiff[]>;
   branches: Loadable<Branch[]>;
+  /**
+   * Read from `git remote`, not reconstructed from remote-tracking branches: a
+   * remote that has never been fetched from has no tracking refs at all, and
+   * inferring the list from branches makes it invisible in the publish picker.
+   */
+  remotes: Loadable<Remote[]>;
   stashes: Loadable<StashEntry[]>;
   /** Last thing a write operation did, shown until the user moves on. */
   notice: Notice | null;
   selection: Selection;
-  /** Set while a git command that changes the repository is in flight. */
-  busy: boolean;
+  /**
+   * How many repository-changing commands are in flight.
+   *
+   * A counter rather than a flag: with a boolean, two overlapping operations
+   * clear it when the *first* finishes, re-enabling every destructive control
+   * while the second is still writing.
+   */
+  busyDepth: number;
 }
 
 export function initialState(): AppState {
@@ -80,10 +93,11 @@ export function initialState(): AppState {
     commits: idle(),
     diff: idle(),
     branches: idle(),
+    remotes: idle(),
     stashes: idle(),
     notice: null,
     selection: { commitOid: null, path: null },
-    busy: false,
+    busyDepth: 0,
   };
 }
 
@@ -105,6 +119,9 @@ export type Action =
   | { type: 'branches/loading' }
   | { type: 'branches/loaded'; branches: Branch[] }
   | { type: 'branches/failed'; message: string; kind?: string }
+  | { type: 'remotes/loading' }
+  | { type: 'remotes/loaded'; remotes: Remote[] }
+  | { type: 'remotes/failed'; message: string; kind?: string }
   | { type: 'stashes/loading' }
   | { type: 'stashes/loaded'; stashes: StashEntry[] }
   | { type: 'stashes/failed'; message: string; kind?: string }
@@ -112,6 +129,11 @@ export type Action =
   | { type: 'selection/commit'; oid: string | null }
   | { type: 'selection/path'; path: string | null }
   | { type: 'busy'; busy: boolean };
+
+/** True while any repository-changing command is running. */
+export function isBusy(state: AppState): boolean {
+  return state.busyDepth > 0;
+}
 
 export function reduce(state: AppState, action: Action): AppState {
   switch (action.type) {
@@ -177,6 +199,16 @@ export function reduce(state: AppState, action: Action): AppState {
         branches: { state: 'error', message: action.message, ...kindOf(action.kind) },
       };
 
+    case 'remotes/loading':
+      return { ...state, remotes: { state: 'loading' } };
+    case 'remotes/loaded':
+      return { ...state, remotes: { state: 'ready', value: action.remotes } };
+    case 'remotes/failed':
+      return {
+        ...state,
+        remotes: { state: 'error', message: action.message, ...kindOf(action.kind) },
+      };
+
     case 'stashes/loading':
       return { ...state, stashes: { state: 'loading' } };
     case 'stashes/loaded':
@@ -205,7 +237,12 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, selection: { ...state.selection, path: action.path } };
 
     case 'busy':
-      return { ...state, busy: action.busy };
+      return {
+        ...state,
+        // Never below zero: an unbalanced release would otherwise leave the
+        // counter negative and the controls permanently enabled.
+        busyDepth: Math.max(0, state.busyDepth + (action.busy ? 1 : -1)),
+      };
   }
 }
 

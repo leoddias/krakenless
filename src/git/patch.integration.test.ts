@@ -12,9 +12,15 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
 import { parseDiff } from './parsers/diff';
 import { serializeFile, serializeHunks } from './patch';
+
+// These spawn dozens of real git processes against fresh repositories. Under
+// the parallel runner that comfortably exceeds the 5s default, and a timeout
+// here reads as a product failure when it is only contention for the CPU.
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 
 let repo: string;
 

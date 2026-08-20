@@ -23,6 +23,7 @@ import {
   refreshBranches,
 } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
+import { isBusy } from '../../state/store';
 import styles from './RemoteBar.module.css';
 import {
   candidateRemotes,
@@ -77,7 +78,8 @@ export function RemoteBar(): ReactNode {
   const repo = useAppState((state) => state.repo);
   const status = useAppState((state) => state.status);
   const branches = useAppState((state) => state.branches);
-  const busy = useAppState((state) => state.busy);
+  const remoteList = useAppState((state) => state.remotes);
+  const busy = useAppState(isBusy);
 
   const [running, setRunning] = useState<ActionKind | null>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
@@ -94,7 +96,9 @@ export function RemoteBar(): ReactNode {
   const repoRoot = repo.state === 'ready' ? repo.value.root : null;
   const upstream = readUpstream(status);
   const branchNow = 'branch' in upstream ? upstream.branch : null;
-  const remotes = candidateRemotes(branches);
+  // `git remote` first, branch-derived names only as a fallback: a remote that
+  // has never been fetched from has no tracking refs to derive a name from.
+  const remotes = candidateRemotes(branches, remoteList);
   const chosenRemote =
     choice !== null && choice.repoRoot === repoRoot ? choice.remote : null;
   // A chosen remote that has vanished from the list (the branch list was

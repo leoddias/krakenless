@@ -7,7 +7,7 @@
  * each one is derived by something that can be unit tested on its own.
  */
 
-import type { Branch, RepoStatus } from '../../git/types';
+import type { Branch, Remote, RepoStatus } from '../../git/types';
 import type { Loadable } from '../../state/store';
 
 /** A remote-tracking ref split into the two halves push needs. */
@@ -165,14 +165,24 @@ function countsSentence(ahead: number | undefined, behind: number | undefined): 
 }
 
 /**
- * Remote names the app can name with certainty, from the branch list.
+ * Remote names the app can offer as a publish target.
  *
- * The store has no remote list, so these are recovered from remote-tracking
- * branches and from the upstreams of local ones. `origin` sorts first because
- * it is the conventional default; the rest are alphabetical so the order does
- * not shift under the cursor between reads.
+ * `git remote` is the authority: a remote that has never been fetched from has
+ * no tracking refs at all, so a list reconstructed from branches would leave it
+ * invisible in the picker. The branch list stays as the fallback for the moment
+ * before the remotes read lands (or if it fails), because a picker with the
+ * obvious name in it beats an empty one.
+ *
+ * `origin` sorts first because it is the conventional default; the rest are
+ * alphabetical so the order does not shift under the cursor between reads.
  */
-export function candidateRemotes(branches: Loadable<Branch[]>): string[] {
+export function candidateRemotes(
+  branches: Loadable<Branch[]>,
+  remotes: Loadable<Remote[]> = { state: 'idle' },
+): string[] {
+  if (remotes.state === 'ready' && remotes.value.length > 0) {
+    return sortRemotes(remotes.value.map((remote) => remote.name));
+  }
   if (branches.state !== 'ready') return [];
   const names = new Set<string>();
   for (const branch of branches.value) {
@@ -185,7 +195,11 @@ export function candidateRemotes(branches: Loadable<Branch[]>): string[] {
       if (parsed !== null) names.add(parsed.remote);
     }
   }
-  const sorted = [...names].sort((a, b) => a.localeCompare(b));
+  return sortRemotes([...names]);
+}
+
+function sortRemotes(names: string[]): string[] {
+  const sorted = [...new Set(names)].sort((a, b) => a.localeCompare(b));
   return sorted.sort((a, b) => Number(b === 'origin') - Number(a === 'origin'));
 }
 

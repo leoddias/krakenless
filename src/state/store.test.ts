@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createStore, initialState, reduce } from './store';
+import { createStore, initialState, isBusy, reduce } from './store';
 import type { AppState } from './store';
 import type { Commit, RepoInfo, RepoStatus } from '../git/types';
 
@@ -104,7 +104,7 @@ describe('reduce', () => {
 
   it('tracks the busy flag independently of panel state', () => {
     const state = reduce(loaded(), { type: 'busy', busy: true });
-    expect(state.busy).toBe(true);
+    expect(isBusy(state)).toBe(true);
     expect(state.status.state).toBe('ready');
   });
 

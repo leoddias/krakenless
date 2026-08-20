@@ -31,6 +31,7 @@ import {
   dropStash,
   fetch,
   listBranches,
+  listRemotes,
   listStashes,
   pull,
   push,
@@ -66,6 +67,7 @@ export async function openRepo(store: Store, path: string): Promise<void> {
       refreshCommits(store),
       refreshDiff(store),
       refreshBranches(store),
+      refreshRemotes(store),
       refreshStashes(store),
     ]);
   } catch (error) {
@@ -286,6 +288,17 @@ export async function refreshBranches(store: Store): Promise<void> {
   }
 }
 
+export async function refreshRemotes(store: Store): Promise<void> {
+  const root = currentRoot(store);
+  if (root === null) return;
+  store.dispatch({ type: 'remotes/loading' });
+  try {
+    store.dispatch({ type: 'remotes/loaded', remotes: await listRemotes(root) });
+  } catch (error) {
+    store.dispatch({ type: 'remotes/failed', ...describe(error) });
+  }
+}
+
 export async function refreshStashes(store: Store): Promise<void> {
   const root = currentRoot(store);
   if (root === null) return;
@@ -308,6 +321,7 @@ async function refreshAll(store: Store): Promise<void> {
     refreshCommits(store),
     refreshDiff(store),
     refreshBranches(store),
+    refreshRemotes(store),
     refreshStashes(store),
   ]);
 }

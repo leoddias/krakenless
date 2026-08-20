@@ -189,6 +189,72 @@ describe('summarize', () => {
   });
 });
 
+describe('candidateRemotes — the real remote list wins', () => {
+  const remote = (name: string) => ({
+    name,
+    fetchUrl: `https://x/${name}`,
+    pushUrl: `https://x/${name}`,
+  });
+
+  it('names a remote that has never been fetched from', () => {
+    // Its tracking refs do not exist yet, so a branch-derived list cannot see
+    // it and the publish picker would silently omit it.
+    const names = candidateRemotes(
+      { state: 'ready', value: [] },
+      { state: 'ready', value: [remote('upstream'), remote('origin')] },
+    );
+    expect(names).toEqual(['origin', 'upstream']);
+  });
+
+  it('falls back to branch-derived names while the remotes read is pending', () => {
+    const names = candidateRemotes(
+      {
+        state: 'ready',
+        value: [
+          {
+            name: 'origin/main',
+            current: false,
+            oid: 'a'.repeat(40),
+            ahead: 0,
+            behind: 0,
+            remote: true,
+          },
+        ],
+      },
+      { state: 'loading' },
+    );
+    expect(names).toEqual(['origin']);
+  });
+
+  it('falls back when the remotes read failed', () => {
+    const names = candidateRemotes(
+      {
+        state: 'ready',
+        value: [
+          {
+            name: 'origin/main',
+            current: false,
+            oid: 'a'.repeat(40),
+            ahead: 0,
+            behind: 0,
+            remote: true,
+          },
+        ],
+      },
+      { state: 'error', message: 'boom' },
+    );
+    expect(names).toEqual(['origin']);
+  });
+
+  it('keeps origin first and the rest alphabetical', () => {
+    const names = candidateRemotes(
+      { state: 'idle' },
+      { state: 'ready', value: [remote('zeta'), remote('alpha'), remote('origin')] },
+    );
+    expect(names).toEqual(['origin', 'alpha', 'zeta']);
+  });
+});
+
 describe('candidateRemotes', () => {
   it('is empty until the branch list is read', () => {
     expect(candidateRemotes({ state: 'idle' })).toEqual([]);

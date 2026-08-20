@@ -71,14 +71,14 @@ after 2 more weeks → proceed to v0.2. Else: keep as personal tool, stop invest
 
 Found during M3/M4 fan-out (2026-08-20), by the workers and their reviewers:
 
-- `state.remotes` slice fed by `listRemotes`: the publish target is currently
-  reconstructed from remote-tracking refs, so an unfetched remote is invisible.
+- ~~`state.remotes` slice~~ — done: `git remote` is the authority, the
+  branch-derived list stays as the fallback while the read is pending.
 - Force-push-with-lease needs an explicit `<branch>:<oid>` lease plus a
   confirmation dialog before any UI may offer it.
 - Push to a differently-named upstream needs a `<local>:<upstream>` refspec;
   until then the remote bar disables that case and prints the command.
-- `state.busy` is a boolean, not a depth counter: two overlapping operations
-  clear it when the first finishes.
+- ~~`state.busy` as a depth counter~~ — done: `busyDepth` with an `isBusy()`
+  reader, so an overlapping operation cannot re-enable destructive controls.
 - No integration test proves the `stash drop` recovery route or that
   `assertStashUnchanged` refuses a shifted list.
 - `restoreStash`/`removeStash` return a bare boolean; a discriminated result

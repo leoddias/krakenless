@@ -25,6 +25,7 @@ import {
   unstage,
 } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
+import { isBusy } from '../../state/store';
 import type { Loadable } from '../../state/store';
 import styles from './ChangesView.module.css';
 import {
@@ -74,7 +75,7 @@ interface CommitDraft {
 /** The working-tree panel. Reads the store, acts only through the action layer. */
 export function ChangesView(): ReactNode {
   const status = useAppState((state) => state.status);
-  const busy = useAppState((state) => state.busy);
+  const busy = useAppState(isBusy);
   const store = useStore();
 
   const [pending, setPending] = useState<Pending | null>(null);
