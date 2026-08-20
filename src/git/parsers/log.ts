@@ -40,7 +40,12 @@ function classifyRef(ref: string): CommitRef | null {
   for (const [prefix, kind] of prefixes) {
     if (ref.startsWith(prefix)) {
       const name = ref.slice(prefix.length);
-      return name.length === 0 ? null : { kind, name };
+      if (name.length === 0) return null;
+      // `refs/remotes/<remote>/HEAD` is the symref recording the remote's
+      // default branch, present in every clone. Drawing it as a branch chip
+      // would offer the user a branch that cannot be checked out by that name.
+      if (kind === 'remote-branch' && name.endsWith('/HEAD')) return null;
+      return { kind, name };
     }
   }
   return null;

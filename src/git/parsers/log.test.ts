@@ -75,10 +75,18 @@ describe('buildLogCommand', () => {
       '-z',
       '--no-color',
       '--no-show-signature',
+      '--encoding=UTF-8',
       '--decorate=full',
       `--format=${LOG_FORMAT}`,
       '--',
     ]);
+  });
+
+  it('pins the output encoding so a config line cannot make the log undecodable', () => {
+    // With i18n.logOutputEncoding=ISO-8859-1, git re-encodes any commit that
+    // declares an encoding header and returns bytes that are not valid UTF-8
+    // (verified with git 2.39); the runner would then reject the whole output.
+    expect(buildLogCommand().args).toContain('--encoding=UTF-8');
   });
 
   it('is never treated as a destructive command', () => {
@@ -92,6 +100,7 @@ describe('buildLogCommand', () => {
       '-z',
       '--no-color',
       '--no-show-signature',
+      '--encoding=UTF-8',
       '--decorate=full',
       `--format=${LOG_FORMAT}`,
       '--all',
@@ -357,6 +366,22 @@ describe('parseDecorations', () => {
       { kind: 'branch', name: 'feature/log' },
       { kind: 'tag', name: 'rel/1.0' },
       { kind: 'remote-branch', name: 'upstream/feature/log' },
+    ]);
+  });
+
+  it('ignores the remote HEAD symref every clone carries', () => {
+    // Real `%D` of a commit in a clone whose origin/HEAD is set. origin/HEAD is
+    // a symref, not a branch: offering it as one would offer a checkout that
+    // cannot work under that name.
+    expect(
+      parseDecorations(
+        'tag: refs/tags/annotated, refs/remotes/origin/main, refs/remotes/origin/HEAD, refs/heads/main, refs/heads/comma,name',
+      ),
+    ).toEqual([
+      { kind: 'tag', name: 'annotated' },
+      { kind: 'remote-branch', name: 'origin/main' },
+      { kind: 'branch', name: 'main' },
+      { kind: 'branch', name: 'comma,name' },
     ]);
   });
 

@@ -77,6 +77,11 @@ function assertCount(name: string, value: number, minimum: number): number {
  *   output to every record.
  * - `--decorate=full`: full ref paths are what makes a tag distinguishable
  *   from a branch of the same name.
+ * - `--encoding=UTF-8`: with `i18n.logOutputEncoding=ISO-8859-1` in the user's
+ *   config, git re-encodes the message of any commit that declares an encoding
+ *   header and returns bytes that are not valid UTF-8 (verified with git
+ *   2.39); the runner then rejects the whole output as undecodable and the
+ *   history becomes unreadable because of one config line.
  * - the trailing `--`: it ends the revision list, so a revision is never
  *   reinterpreted as a path (nor a path as a revision).
  *
@@ -101,6 +106,7 @@ export function buildLogCommand(options: LogOptions = {}): GitCommand {
     '-z',
     '--no-color',
     '--no-show-signature',
+    '--encoding=UTF-8',
     '--decorate=full',
     `--format=${LOG_FORMAT}`,
   ];
