@@ -11,6 +11,7 @@
  * coming back as an opaque failure.
  */
 
+import { BRANCH_NOUN, refNameError } from '../shell/refName';
 import type { Branch, StashEntry } from '../../git/types';
 
 export interface BranchGroups {
@@ -63,31 +64,12 @@ export function trackingSummary(branch: Branch): string {
 /**
  * Why this branch name cannot be used, or `null` when it can.
  *
- * A deliberate mirror of `assertRefName` in `src/git/argsafety.ts`, which stays
- * the authority — this exists so the rejection lands on the field the user is
- * typing in rather than as a failed command.
+ * The rules live in `views/shell/refName.ts`, which branch and tag names share
+ * — git checks both with `git check-ref-format`, and two copies of that list
+ * would drift.
  */
 export function branchNameError(name: string): string | null {
-  if (name.length === 0) return 'Enter a branch name.';
-  if (name.startsWith('-')) return 'A branch name may not start with a dash.';
-  if (name.startsWith('+')) return 'A branch name may not start with a plus.';
-  if (name.includes('\0')) return 'A branch name may not contain a NUL character.';
-  if (name.startsWith('refs/')) {
-    return 'Use the short name, not a full ref path like "refs/heads/main".';
-  }
-  if (/[\s~^:?*[\\]/.test(name)) {
-    return 'A branch name may not contain spaces or any of ~ ^ : ? * [ \\.';
-  }
-  if (name.includes('..')) return 'A branch name may not contain "..".';
-  if (name.includes('@{')) return 'A branch name may not contain "@{".';
-  if (name.endsWith('.') || name.endsWith('/') || name.endsWith('.lock')) {
-    return 'A branch name may not end with ".", "/" or ".lock".';
-  }
-  if (name.startsWith('/') || name.includes('//')) {
-    return 'A branch name may not have an empty path component.';
-  }
-  if (name === '@') return 'A branch name may not be "@".';
-  return null;
+  return refNameError(name, BRANCH_NOUN);
 }
 
 /** Question the first delete step asks. Also the confirmation reason. */

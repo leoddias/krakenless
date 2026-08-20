@@ -8,6 +8,8 @@
  * and carries what they were told, so the reason can be logged or shown.
  */
 
+import { GitError } from './errors';
+
 const TOKEN = Symbol('krakenless.confirmation');
 
 export interface Confirmation {
@@ -30,4 +32,18 @@ export function userConfirmed(reason: string): Confirmation {
 /** Type guard used by the git layer before running anything destructive. */
 export function isConfirmation(value: unknown): value is Confirmation {
   return typeof value === 'object' && value !== null && TOKEN in value;
+}
+
+/**
+ * Turns a token into the runner's gate.
+ *
+ * The reason is re-checked here rather than trusted from minting time: this is
+ * the last point before a destructive command runs, and a token whose reason
+ * was emptied says the user agreed to nothing.
+ */
+export function approve(confirmation: Confirmation): { confirmed: true } {
+  if (confirmation.reason.length === 0) {
+    throw new GitError('needs-confirmation', 'Confirmation is missing its reason');
+  }
+  return { confirmed: true };
 }

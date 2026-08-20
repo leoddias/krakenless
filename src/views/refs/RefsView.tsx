@@ -15,14 +15,7 @@
  * the git layer validates is literally what they agreed to.
  */
 
-import {
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type ReactNode,
-} from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import type { Branch, StashEntry } from '../../git/types';
 import {
   createAndSwitch,
@@ -36,6 +29,7 @@ import {
 import { useAppState, useStore } from '../../state/hooks';
 import { isBusy } from '../../state/store';
 import { BranchIcon, RepoIcon, StashIcon } from '../shell/icons';
+import { trapTab } from '../shell/trapTab';
 import styles from './RefsView.module.css';
 import {
   applyStashQuestion,
@@ -84,34 +78,6 @@ interface DropRecovery {
   oid: string;
   /** Repository the oid lives in; it names nothing in any other one. */
   root: string;
-}
-
-/**
- * Keeps Tab inside an open question.
- *
- * `aria-modal` promises assistive technology that the rest of the panel is out
- * of reach; without this the promise is false, and Tab walks straight onto the
- * Delete button of another row while a destructive question is on screen.
- */
-function trapTab(event: ReactKeyboardEvent<HTMLDivElement>): void {
-  if (event.key !== 'Tab') return;
-  const focusable = [
-    ...event.currentTarget.querySelectorAll<HTMLElement>('button, input'),
-  ].filter((element) => !element.hasAttribute('disabled'));
-  const first = focusable[0];
-  const last = focusable[focusable.length - 1];
-  if (first === undefined || last === undefined) return;
-
-  const active = document.activeElement;
-  if (event.shiftKey && active === first) {
-    event.preventDefault();
-    last.focus();
-    return;
-  }
-  if (!event.shiftKey && active === last) {
-    event.preventDefault();
-    first.focus();
-  }
 }
 
 /**

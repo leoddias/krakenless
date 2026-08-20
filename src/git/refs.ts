@@ -21,7 +21,7 @@ import {
   buildStashDropCommand,
   buildStashListCommand,
 } from './commands/stage';
-import type { Confirmation } from './confirm';
+import { approve, type Confirmation } from './confirm';
 import { GitError } from './errors';
 import { parseBranches, parseRemotes, parseStashes } from './parsers/branch';
 import { runGit } from './runner';
@@ -29,18 +29,6 @@ import type { Branch, Remote, StashEntry } from './types';
 
 /** Read-only and additive commands; nothing here can lose work. */
 const SAFE = { confirmed: true } as const;
-
-/**
- * Gate for the destructive half. The token can only be minted where the user
- * was actually asked (`userConfirmed`), so no module-level constant can stand
- * in for their answer.
- */
-function approved(confirmation: Confirmation): { confirmed: true } {
-  if (confirmation.reason.length === 0) {
-    throw new GitError('needs-confirmation', 'Confirmation is missing its reason');
-  }
-  return { confirmed: true };
-}
 
 // --- reads -----------------------------------------------------------------
 
@@ -110,13 +98,13 @@ export async function push(
         { args: ['push'] },
       );
     }
-    return runGit(repo, buildPushCommand(options), approved(confirmation));
+    return runGit(repo, buildPushCommand(options), approve(confirmation));
   }
   return runGit(repo, buildPushCommand(options), SAFE);
 }
 
 export function abortMerge(repo: string, confirmation: Confirmation): Promise<unknown> {
-  return runGit(repo, buildMergeAbortCommand(), approved(confirmation));
+  return runGit(repo, buildMergeAbortCommand(), approve(confirmation));
 }
 
 // --- branches --------------------------------------------------------------
@@ -164,7 +152,7 @@ export async function deleteBranch(
   confirmation: Confirmation,
   options: { force: boolean } = { force: false },
 ): Promise<DeleteBranchOutcome> {
-  const gate = approved(confirmation);
+  const gate = approve(confirmation);
   if (options.force) {
     await runGit(repo, buildDeleteBranchCommand(name, { force: true }), gate);
     return { deleted: true };
@@ -218,7 +206,7 @@ export async function applyStash(
   confirmation: Confirmation,
 ): Promise<void> {
   await assertStashUnchanged(repo, entry.ref, entry.oid);
-  await runGit(repo, buildStashApplyCommand(entry.ref, options), approved(confirmation));
+  await runGit(repo, buildStashApplyCommand(entry.ref, options), approve(confirmation));
 }
 
 export async function dropStash(
@@ -227,5 +215,5 @@ export async function dropStash(
   confirmation: Confirmation,
 ): Promise<void> {
   await assertStashUnchanged(repo, entry.ref, entry.oid);
-  await runGit(repo, buildStashDropCommand(entry.ref), approved(confirmation));
+  await runGit(repo, buildStashDropCommand(entry.ref), approve(confirmation));
 }
