@@ -1,13 +1,14 @@
 import { render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { GraphCell } from './GraphCell';
-import type { GraphRow } from './graph';
+import { buildGraph, type GraphRow } from './graph';
+import type { Commit } from '../../git/types';
 
 function row(overrides: Partial<GraphRow> = {}): GraphRow {
   return {
     oid: 'abc1234',
     lane: 0,
-    edges: [{ fromLane: 0, toLane: 0 }],
+    edges: [{ fromLane: 0, toLane: 0, from: 'top', to: 'bottom' }],
     isMerge: false,
     ...overrides,
   };
@@ -66,8 +67,8 @@ describe('GraphCell', () => {
     const svg = renderCell(
       row({
         edges: [
-          { fromLane: 0, toLane: 0 },
-          { fromLane: 0, toLane: 1 },
+          { fromLane: 0, toLane: 0, from: 'top', to: 'bottom' },
+          { fromLane: 0, toLane: 1, from: 'node', to: 'bottom' },
         ],
       }),
       2,
@@ -81,8 +82,8 @@ describe('GraphCell', () => {
     const svg = renderCell(
       row({
         edges: [
-          { fromLane: 0, toLane: 1 },
-          { fromLane: 0, toLane: 1 },
+          { fromLane: 0, toLane: 1, from: 'node', to: 'bottom' },
+          { fromLane: 0, toLane: 1, from: 'node', to: 'bottom' },
         ],
       }),
       2,
@@ -115,5 +116,91 @@ describe('GraphCell', () => {
 
   it('is hidden from assistive technology, since the row already says it', () => {
     expect(renderCell(row(), 1).getAttribute('aria-hidden')).toBe('true');
+  });
+});
+
+/** Lane 0 sits at x=9, lane 1 at x=27; the rows rendered here are 44 high. */
+describe('GraphCell geometry (regression: dangling edges)', () => {
+  function paths(graphRow: GraphRow, laneCount: number): string[] {
+    return [...renderCell(graphRow, laneCount).querySelectorAll('path')].map(
+      (path) => path.getAttribute('d') ?? '',
+    );
+  }
+
+  it('runs a passing lane the full height of the row', () => {
+    expect(
+      paths(row({ edges: [{ fromLane: 1, toLane: 1, from: 'top', to: 'bottom' }] }), 2),
+    ).toEqual(['M 27 0 L 27 44']);
+  });
+
+  it('stops an arriving line at the node instead of overshooting', () => {
+    expect(
+      paths(row({ edges: [{ fromLane: 0, toLane: 0, from: 'top', to: 'node' }] }), 1),
+    ).toEqual(['M 9 0 L 9 22']);
+  });
+
+  it('starts a leaving line at the node instead of at the row top', () => {
+    expect(
+      paths(row({ edges: [{ fromLane: 0, toLane: 0, from: 'node', to: 'bottom' }] }), 1),
+    ).toEqual(['M 9 22 L 9 44']);
+  });
+
+  it('curves from the node to the target lane, ending on the row boundary', () => {
+    expect(
+      paths(row({ edges: [{ fromLane: 0, toLane: 1, from: 'node', to: 'bottom' }] }), 2),
+    ).toEqual(['M 9 22 C 9 33, 27 33, 27 44']);
+  });
+});
+
+describe('GraphCell over a real graph', () => {
+  function commit(oid: string, parents: string[] = []): Commit {
+    return {
+      oid,
+      shortOid: oid.slice(0, 7),
+      parents,
+      authorName: 'A',
+      authorEmail: 'a@example.com',
+      authorDate: '2026-08-20T10:00:00+00:00',
+      committerName: 'A',
+      committerDate: '2026-08-20T10:00:00+00:00',
+      subject: oid,
+      body: '',
+      refs: [],
+    };
+  }
+
+  // The shape from the bug report: a merge whose second parent sits on another
+  // lane, with commits above and below it on the main lane.
+  const graph = buildGraph([
+    commit('top', ['merge']),
+    commit('merge', ['main1', 'topic']),
+    commit('main1', ['base']),
+    commit('topic', ['base']),
+    commit('base'),
+  ]);
+
+  function pathsOfRow(index: number): string[] {
+    const graphRow = graph.rows[index];
+    if (graphRow === undefined) throw new Error(`no row ${index}`);
+    return [...renderCell(graphRow, graph.laneCount).querySelectorAll('path')].map(
+      (path) => path.getAttribute('d') ?? '',
+    );
+  }
+
+  it('draws nothing in the merge row above the lane the merge opens', () => {
+    // The defect: lane 1 got a full-height vertical here, so a line began in
+    // mid-air beside the merge node and ran down connected to nothing.
+    expect(pathsOfRow(1)).toEqual(['M 9 0 L 9 44', 'M 9 22 C 9 33, 27 33, 27 44']);
+  });
+
+  it('carries lane 1 from the merge down to the parent without a break', () => {
+    // The merge's curve ends at (27, 44); the row below runs 27 from 0 to 44;
+    // the parent's own row takes it from 0 down to its node at 22.
+    expect(pathsOfRow(2)).toContain('M 27 0 L 27 44');
+    expect(pathsOfRow(3)).toContain('M 27 0 L 27 22');
+  });
+
+  it('draws no line in a lane after its branch has rejoined the main one', () => {
+    expect(pathsOfRow(4)).toEqual(['M 9 0 L 9 22']);
   });
 });
