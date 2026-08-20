@@ -31,6 +31,15 @@ import type { GitCommand } from '../types';
  * - `--inter-hunk-context=0`: `diff.interHunkContext` decides when two nearby
  *   hunks are merged into one, i.e. how coarse the user's staging choices are.
  *
+ * - `--full-index`: `core.abbrev` decides how short the `index <a>..<b>` blob
+ *   ids are. `git apply --3way` — the recoverable form M2 wants for staging
+ *   against a moving index — has to resolve them, and an abbreviation that has
+ *   become ambiguous makes the 3-way fallback fail.
+ *
+ * `diff.algorithm` and `diff.indentHeuristic` are deliberately *not* pinned:
+ * they move where hunk boundaries fall, but every output they produce is a
+ * valid, appliable patch, and a user who chose an algorithm should keep it.
+ *
  * One config is not fixable from here: `diff.suppressBlankEmpty` prints an
  * empty context line with no leading space, and there is no command-line
  * override. The parser accepts that shape instead.
@@ -48,6 +57,7 @@ const DIFF_FLAGS = [
   '--submodule=short',
   '--ignore-submodules=none',
   '--inter-hunk-context=0',
+  '--full-index',
   '-U3',
   '--find-renames',
   '--find-copies',

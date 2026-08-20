@@ -342,6 +342,9 @@ const INERT_HEADERS = [
   'index ',
   'old mode ',
   'new mode ',
+  // Combined diffs spell a mode change `mode <a>,<b>..<c>` on one line; a
+  // two-side patch never writes a bare `mode `.
+  'mode ',
   'similarity index ',
   'dissimilarity index ',
 ];
@@ -499,11 +502,21 @@ function parseCombinedEntry(
   }
 
   // Consume the `@@@` bodies. Every combined content line still begins with a
-  // marker column, so anything else ends the entry.
+  // marker column, so anything else ends the entry. A bare empty line counts
+  // as content too, for the same `diff.suppressBlankEmpty` reason as above,
+  // and `\ No newline at end of file` belongs to the body it follows.
+  let inBody = false;
   while (i < lines.length) {
     const line = lines[i] as string;
     const first = line[0] ?? '';
-    if (first !== '@' && first !== ' ' && first !== '+' && first !== '-') break;
+    if (first === '@') {
+      inBody = true;
+    } else if (
+      !(first === ' ' || first === '+' || first === '-' || first === '\\') &&
+      !(inBody && line.length === 0)
+    ) {
+      break;
+    }
     i += 1;
   }
 
@@ -520,7 +533,8 @@ function parseCombinedEntry(
     file: {
       oldPath: facts.oldPath ?? path,
       newPath: path,
-      kind: 'modified',
+      // An add/add or delete/delete conflict does say so in its header.
+      kind: facts.kind,
       binary: facts.binary,
       headerLines,
       hunks: [],
@@ -583,9 +597,10 @@ export function parseDiff(text: string): FileDiff[] {
     } else if (line.startsWith(UNMERGED_NOTICE)) {
       files.push(parseUnmergedNotice(line));
       i += 1;
-    } else if (line.length === 0) {
-      // Git never writes a blank line between entries; tolerating one only at
-      // the very top keeps `git show` usable without a `--format=`.
+    } else if (line.length === 0 && files.length === 0) {
+      // Git writes no blank line before the first entry either, but tolerating
+      // one costs nothing and cannot hide a change. Between entries it is not
+      // tolerated: there a blank line would mean something was misread.
       i += 1;
     } else {
       // Everything else is rejected rather than skipped: a skipped line is a

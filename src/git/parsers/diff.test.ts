@@ -269,6 +269,31 @@ index 2c27abe..82bd35d 100644
 +omega changed
 `;
 
+// A conflict where the two sides also disagree on the file mode. Combined
+// diffs spell that as one `mode <a>,<b>..<c>` line, which no two-side patch
+// ever contains — and captured with `--full-index`, as the builders ask.
+const CONFLICT_MODE_COMBINED = `diff --cc f.sh
+index af703352c64a2d88d4f62818fa68e6ae91241dfd,f794161ca7f359f1bc311e2276a9a3d89a5bbec8..0000000000000000000000000000000000000000
+mode 100644,100755..100644
+--- a/f.sh
++++ b/f.sh
+@@@ -1,3 -1,3 +1,7 @@@
+  a
+++<<<<<<< HEAD
+ +MAIN
+++=======
++ SIDE
+++>>>>>>> side
+  c
+diff --git a/aaa.txt b/aaa.txt
+index 4a58007052a65fbc2fc3f910f2855f45a4058e74..ec20141f0267805d3db1349c4701ed1f84f3ee61 100644
+--- a/aaa.txt
++++ b/aaa.txt
+@@ -1 +1 @@
+-alpha
++alpha changed
+`;
+
 // `diff.submodule = log`: the changed gitlink becomes a prose block. A parser
 // that skips what it does not know reports one changed file instead of two.
 const SUBMODULE_LOG = `Submodule asub 0edfd69..70e731b:
@@ -407,6 +432,7 @@ describe('diff command builders', () => {
     '--submodule=short',
     '--ignore-submodules=none',
     '--inter-hunk-context=0',
+    '--full-index',
     '-U3',
     '--find-renames',
     '--find-copies',
@@ -416,7 +442,7 @@ describe('diff command builders', () => {
     // Each of these has a config that changes the output format:
     // color.diff, diff.external, a diff=<driver> attribute, diff.relative,
     // diff.noprefix / diff.mnemonicPrefix, diff.submodule,
-    // diff.ignoreSubmodules, diff.interHunkContext, diff.context.
+    // diff.ignoreSubmodules, diff.interHunkContext, core.abbrev, diff.context.
     for (const flag of shared) {
       expect(buildWorktreeDiffCommand().args).toContain(flag);
       expect(buildStagedDiffCommand().args).toContain(flag);
@@ -490,6 +516,17 @@ describe('diff command builders', () => {
     );
   });
 });
+
+/** Asserts that git output the parser cannot fully understand is refused. */
+function expectParseFailure(text: string): void {
+  try {
+    parseDiff(text);
+    expect.unreachable('parseDiff must reject this input');
+  } catch (error) {
+    expect(error).toBeInstanceOf(GitError);
+    expect((error as GitError).kind).toBe('parse-failed');
+  }
+}
 
 describe('parseDiff — empty input', () => {
   it('returns no files for an empty diff', () => {
@@ -788,7 +825,7 @@ describe('parseDiff — git show', () => {
     // The builder passes `--format=`, so a header means the caller built the
     // command by hand. Skipping unknown leading lines is how a
     // `Submodule …:` block disappears, so nothing is skipped.
-    expect(() => parseDiff(SHOW_WITH_COMMIT_HEADER)).toThrow(GitError);
+    expectParseFailure(SHOW_WITH_COMMIT_HEADER);
   });
 });
 
@@ -833,6 +870,18 @@ describe('parseDiff — conflicted repositories', () => {
     expect(files[2]!.hunks).toHaveLength(1);
   });
 
+  it('survives a combined "mode a,b..c" header, keeping the next file', () => {
+    const files = parseDiff(CONFLICT_MODE_COMBINED);
+    expect(files.map((file) => file.newPath)).toEqual(['f.sh', 'aaa.txt']);
+    expect(files[0]!.headerLines).toContain('mode 100644,100755..100644');
+    expect(files[0]!.hunks).toEqual([]);
+    // The whole point: the unrelated file is still there and still parsed.
+    expect(files[1]!.hunks[0]!.lines).toEqual([
+      { kind: 'deleted', text: 'alpha', oldLine: 1 },
+      { kind: 'added', text: 'alpha changed', newLine: 1 },
+    ]);
+  });
+
   it('still reads a combined entry that stands alone', () => {
     const files = parseDiff(COMBINED_MERGE);
     expect(files).toHaveLength(1);
@@ -844,13 +893,13 @@ describe('parseDiff — conflicted repositories', () => {
 describe('parseDiff — submodules', () => {
   it('rejects the prose block diff.submodule=log produces', () => {
     // Skipping it would report one changed file where git found two.
-    expect(() => parseDiff(SUBMODULE_LOG)).toThrow(GitError);
+    expectParseFailure(SUBMODULE_LOG);
   });
 
   it('rejects diff.submodule=diff, whose paths do not own their content', () => {
     // `asub/inner.txt` reads as a superproject path but the blobs are the
     // submodule's; applying that hunk in the superproject stages foreign bytes.
-    expect(() => parseDiff(SUBMODULE_DIFF)).toThrow(GitError);
+    expectParseFailure(SUBMODULE_DIFF);
   });
 
   it('reads the gitlink hunk --submodule=short produces', () => {
@@ -943,16 +992,6 @@ describe('parseDiff — round-tripping', () => {
 });
 
 describe('parseDiff — malformed input', () => {
-  function expectParseFailure(text: string): void {
-    try {
-      parseDiff(text);
-      expect.unreachable('parseDiff must reject this input');
-    } catch (error) {
-      expect(error).toBeInstanceOf(GitError);
-      expect((error as GitError).kind).toBe('parse-failed');
-    }
-  }
-
   it('rejects a hunk that ends before its declared line count', () => {
     expectParseFailure(`diff --git a/a.txt b/a.txt
 index 1111111..2222222 100644
