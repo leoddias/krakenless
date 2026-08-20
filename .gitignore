@@ -29,3 +29,6 @@ tmp/
 
 # Tauri generated
 src-tauri/gen/
+
+# Agent worktrees
+.claude/worktrees/
