@@ -27,6 +27,9 @@
 
 ## Released
 
+- **v0.1.1-alpha** (2026-08-20): the redesign, cut from the `v0.1.1-alpha` tag.
+  Same unsigned Windows `.exe`/`.msi` and macOS `aarch64.dmg` as before. The
+  landing page carries the new screenshot and points its download links here.
 - **v0.1.0-alpha** (2026-08-20): Windows `.exe`/`.msi` and macOS `aarch64.dmg`,
   built by `.github/workflows/release.yml` from the `v0.1.0-alpha` tag, marked
   prerelease. Unsigned — no certificate. Cut at the user's explicit request,
