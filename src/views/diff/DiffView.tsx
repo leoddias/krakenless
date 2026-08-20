@@ -7,9 +7,10 @@
  * that reading can stage or discard something they never actually saw.
  */
 
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import type { DiffLine, FileDiff, Hunk } from '../../git/types';
 import { useAppState, useStore } from '../../state/hooks';
+import { FileEditor } from './FileEditor';
 import styles from './DiffView.module.css';
 import {
   CHANGE_KIND_LABELS,
@@ -24,7 +25,11 @@ import {
 export function DiffView(): ReactNode {
   const diff = useAppState((state) => state.diff);
   const selectedPath = useAppState((state) => state.selection.path);
+  // Only the working tree is editable: a commit's version of a file is history,
+  // and there is nothing on disk to write it back to.
+  const editable = useAppState((state) => state.selection.commitOid === null);
   const store = useStore();
+  const [editing, setEditing] = useState<string | null>(null);
 
   const selectPath = (path: string | null): void => {
     store.dispatch({ type: 'selection/path', path });
@@ -55,7 +60,13 @@ export function DiffView(): ReactNode {
             selectedPath={selectedPath}
             onSelect={selectPath}
           />
-          <FileDiffs files={diff.value} selectedPath={selectedPath} />
+          <FileDiffs
+            files={diff.value}
+            selectedPath={selectedPath}
+            editable={editable}
+            editing={editing}
+            onEdit={setEditing}
+          />
         </div>
       )}
     </section>
@@ -155,9 +166,15 @@ function FileCounts({ file }: { file: FileDiff }): ReactNode {
 function FileDiffs({
   files,
   selectedPath,
+  editable,
+  editing,
+  onEdit,
 }: {
   files: FileDiff[];
   selectedPath: string | null;
+  editable: boolean;
+  editing: string | null;
+  onEdit: (path: string | null) => void;
 }): ReactNode {
   const shown =
     selectedPath === null ? files : files.filter((f) => f.newPath === selectedPath);
@@ -175,21 +192,53 @@ function FileDiffs({
   return (
     <div className={styles.content}>
       {shown.map((file) => (
-        <FileDiffBlock key={file.newPath} file={file} />
+        <FileDiffBlock
+          key={file.newPath}
+          file={file}
+          editable={editable}
+          editing={editing === file.newPath}
+          onEdit={onEdit}
+        />
       ))}
     </div>
   );
 }
 
-function FileDiffBlock({ file }: { file: FileDiff }): ReactNode {
+function FileDiffBlock({
+  file,
+  editable,
+  editing,
+  onEdit,
+}: {
+  file: FileDiff;
+  editable: boolean;
+  editing: boolean;
+  onEdit: (path: string | null) => void;
+}): ReactNode {
   const note = emptyBodyReason(file);
+  // A deleted file has nothing on disk to open; the rest are edited at their
+  // current path, which for a rename is the new one.
+  const canEdit = editable && file.kind !== 'deleted';
+
   return (
     <article className={styles.file} aria-label={displayPath(file)}>
       <header className={styles.fileHeader}>
         <span className={styles.filePath}>{displayPath(file)}</span>
         <span className={styles.fileKind}>{CHANGE_KIND_LABELS[file.kind]}</span>
+        {canEdit && !editing && (
+          <button
+            type="button"
+            className={styles.editButton}
+            onClick={() => onEdit(file.newPath)}
+          >
+            Edit
+          </button>
+        )}
       </header>
-      {note === null ? (
+
+      {editing ? (
+        <FileEditor key={file.newPath} path={file.newPath} onClose={() => onEdit(null)} />
+      ) : note === null ? (
         file.hunks.map((hunk, index) => <HunkBlock key={index} hunk={hunk} />)
       ) : (
         <p className={styles.fileNote}>{note}</p>

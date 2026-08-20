@@ -236,3 +236,36 @@ back from; a hand-edited config is pulled back inside them on read.
 in the tests builds from `defaultConfig()` rather than listing fields. A failed
 save costs the size, not the session — it is swallowed, and the layout on screen
 stands.
+
+## ADR-0022 — Krakenless may edit working-tree files, under a stamped write
+**Date:** 2026-08-20 · **Status:** accepted
+**Decision:** A file in the working tree can be edited in the app and written
+back. The write path is a new Rust module, `src-tauri/src/worktree.rs`, and it
+is the only code in the product that puts bytes on a user's disk outside git.
+Its guards are the module: the path resolves inside the repository root *after*
+symlinks are followed, nothing under `.git` is editable, a symbolic link is
+refused rather than followed (the atomic replace would turn it into a regular
+file), files over 2 MiB and files that do not decode as UTF-8 are refused, and
+every write names the fingerprint of the bytes it expects to replace — a file
+that changed on disk since it was opened is refused, not overwritten. The
+replacement is written to a temporary file in the same directory and renamed
+over the original. TypeScript owns what the bytes *mean*: `src/fs/text.ts`
+measures the file's line endings, byte-order mark and trailing newline and
+restores them on save, and refuses files with mixed endings, because a text box
+reports every line the same way and saving would rewrite all of them.
+**Why:** The user asked for it. It is a real reversal: `PLAN.md` puts a conflict
+editor out of v0.1 and the product's answer to "I want to change this file" has
+been "open your editor" ever since. The reversal is theirs to make, and the
+feature earns its place — the common case is a one-line fix seen in a diff, and
+bouncing to another program to make it is the kind of friction this client
+exists to remove. What is *not* negotiable is the safety bar: writing a file is
+the only operation here that git cannot undo, so the module ships with sixteen
+Rust tests covering every refusal, including one proving that a stale save
+leaves the newer file untouched.
+**Consequences:** The privacy and scope claims in `PLAN.md` need rereading: this
+app now writes files. The fingerprint is content-based (FNV-1a over the bytes),
+not an mtime, because filesystem clocks are coarse enough that two edits inside
+one tick share a timestamp. A successful save re-reads the diff, so a file whose
+edit made it identical to HEAD disappears from the list and takes its editor
+with it — correct, but abrupt. Anything richer than a text box (syntax
+highlighting, an editor component) is a dependency and needs its own ADR.

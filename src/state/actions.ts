@@ -40,6 +40,7 @@ import {
   type DeleteBranchOutcome,
 } from '../git/refs';
 import { getStatus } from '../git/status';
+import { FileError, openWorktreeFile, saveWorktreeFile, type OpenFile } from '../fs/file';
 import type { FileDiff, Hunk } from '../git/types';
 import type { Store } from './store';
 
@@ -499,4 +500,47 @@ export async function abortMergeInProgress(
   const root = currentRoot(store);
   if (root === null) return false;
   return operate(store, () => abortMerge(root, userConfirmed(confirmationReason)));
+}
+
+/**
+ * Opens a working-tree file in the in-app editor.
+ *
+ * Errors are thrown rather than turned into a notice: the editor has to say
+ * different things for "this file is binary" and "this file is gone", and the
+ * shell's notice bar is one line for the whole window.
+ */
+export async function openFileForEdit(store: Store, path: string): Promise<OpenFile> {
+  const root = currentRoot(store);
+  if (root === null) {
+    throw new FileError('not-found', 'No repository is open.');
+  }
+  return openWorktreeFile(root, path);
+}
+
+/**
+ * Writes an edited file back to the working tree.
+ *
+ * `busy` is held for the write and the refresh that follows, for the same
+ * reason staging does: a second save queued against a stamp that is already
+ * stale would be refused, and the controls should not invite it. The panels are
+ * re-read whether or not the write succeeded — on a refusal the file on disk is
+ * exactly what the user needs to see.
+ */
+export async function saveEditedFile(
+  store: Store,
+  file: OpenFile,
+  contents: string,
+): Promise<OpenFile> {
+  const root = currentRoot(store);
+  if (root === null) {
+    throw new FileError('write-failed', 'No repository is open.');
+  }
+
+  store.dispatch({ type: 'busy', busy: true });
+  try {
+    return await saveWorktreeFile(root, file, contents);
+  } finally {
+    await Promise.all([refreshStatus(store), refreshDiff(store)]);
+    store.dispatch({ type: 'busy', busy: false });
+  }
 }

@@ -324,3 +324,55 @@ describe('DiffView file selection', () => {
     ).toBeInTheDocument();
   });
 });
+
+describe('DiffView editing', () => {
+  function withDiff(files: FileDiff[], commitOid: string | null = null) {
+    return renderView((store) => {
+      store.dispatch({ type: 'selection/commit', oid: commitOid });
+      store.dispatch({ type: 'diff/loaded', files });
+    });
+  }
+
+  it('offers to edit a file in the working tree', () => {
+    withDiff([fileDiff({ hunks: [sampleHunk] })]);
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+  });
+
+  it('does not offer to edit a commit, which has nothing on disk to write', () => {
+    withDiff([fileDiff({ hunks: [sampleHunk] })], 'abc1234');
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+  });
+
+  it('does not offer to edit a file that was deleted', () => {
+    withDiff([fileDiff({ kind: 'deleted', hunks: [sampleHunk] })]);
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+  });
+
+  it('edits a renamed file at the path it now has', () => {
+    withDiff([
+      fileDiff({
+        kind: 'renamed',
+        oldPath: 'src/old.ts',
+        newPath: 'src/new.ts',
+        hunks: [sampleHunk],
+      }),
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+    // The editor names the file it opened; a rename must not send it looking
+    // for the path that no longer exists.
+    expect(screen.getByText(/Opening src\/new\.ts/)).toBeInTheDocument();
+  });
+
+  it('replaces the diff with the editor, and puts it back on close', async () => {
+    withDiff([fileDiff({ hunks: [sampleHunk] })]);
+    expect(lineRows().length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(lineRows()).toHaveLength(0);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Close' }));
+    expect(lineRows().length).toBeGreaterThan(0);
+  });
+});

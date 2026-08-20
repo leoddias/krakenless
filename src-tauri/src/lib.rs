@@ -2,6 +2,7 @@ mod config;
 mod external;
 mod git_runner;
 mod watcher;
+mod worktree;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -26,7 +27,9 @@ pub fn run() {
             watcher::watch_repo,
             watcher::unwatch_repo,
             external::open_external,
-            external::reveal_folder
+            external::reveal_folder,
+            worktree::worktree_read,
+            worktree::worktree_write
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

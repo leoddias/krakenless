@@ -245,6 +245,132 @@
   font-style: italic;
 }
 
+/* --- editing a working-tree file ------------------------------------------- */
+
+.editButton {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 0.1rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.6875rem;
+  cursor: pointer;
+}
+
+.editButton:hover {
+  border-color: var(--accent-line);
+  color: var(--fg-strong);
+}
+
+.editButton:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.5rem 0.75rem 0.6rem;
+}
+
+.editorText {
+  width: 100%;
+  /* Tall enough to work in, capped so the panel keeps its own scroll rather
+     than growing without limit. */
+  min-height: 14rem;
+  max-height: 60vh;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.6;
+  tab-size: 4;
+  /* Never wrap: a wrapped line looks like two lines, and this is the one place
+     in the app where what you see becomes what is on disk. */
+  white-space: pre;
+  overflow: auto;
+  resize: vertical;
+}
+
+.editorText:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.editorActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.editorButton {
+  padding: 0.25rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.editorButton:hover:not(:disabled) {
+  border-color: var(--accent-line);
+}
+
+.editorButton:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.editorButton:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.editorPrimary:not(:disabled) {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+}
+
+.editorPrimary:not(:disabled):hover {
+  background: color-mix(in srgb, var(--accent) 85%, white);
+}
+
+.editorNote {
+  margin: 0;
+  color: var(--faint);
+  font-size: 0.6875rem;
+  line-height: 1.5;
+}
+
+.editorWarning {
+  color: var(--warning);
+  font-size: 0.6875rem;
+  line-height: 1.5;
+}
+
+.editorFailure {
+  margin: 0;
+  padding: 0.4rem 0.5rem;
+  border-left: 3px solid var(--danger);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--danger);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
 .srOnly {
   position: absolute;
   width: 1px;
