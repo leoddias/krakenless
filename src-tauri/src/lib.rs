@@ -1,3 +1,4 @@
+mod config;
 mod git_runner;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -13,7 +14,13 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![git_runner::git_run])
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![
+            git_runner::git_run,
+            config::config_read,
+            config::config_write,
+            config::config_dir_path
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
