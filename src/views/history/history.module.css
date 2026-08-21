@@ -314,3 +314,34 @@
   white-space: nowrap;
   border: 0;
 }
+
+/* --- stash ----------------------------------------------------------------- */
+
+/* Dashed, where every other node is a solid circle: the broken outline is what
+   says "set aside" before any of the text has been read. */
+.graphStash {
+  fill: var(--bg);
+  stroke: var(--ref-tag-fg);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 2;
+}
+
+.graphStashGlyph {
+  stroke: var(--ref-tag-fg);
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The `stash@{n}` chip. It borrows the tag palette rather than inventing a
+   colour: both name something that is not a branch. */
+.refStash {
+  border-color: var(--ref-tag-fg);
+  background: var(--ref-tag-bg);
+  color: var(--ref-tag-fg);
+  border-style: dashed;
+}
+
+.stashSubject {
+  color: var(--ref-tag-fg);
+}

@@ -8,6 +8,41 @@ const LANE_WIDTH = 18;
 const NODE_RADIUS = 3.5;
 /** Radius of the author badge drawn in place of the node. */
 const AVATAR_RADIUS = 8;
+/** Half-width of the stash marker; matched to the badge so lanes line up. */
+const STASH_HALF = 7;
+
+/**
+ * The stash marker: a dashed box around a lidded-box glyph.
+ *
+ * Dashed on purpose — every other node on the graph is a solid circle, and the
+ * broken outline is what says "set aside, not part of the branch" at a glance,
+ * before any of the text has been read.
+ */
+function StashNode({ x, y }: { x: number; y: number }): ReactNode {
+  return (
+    <g>
+      <rect
+        className={styles.graphStash}
+        x={x - STASH_HALF}
+        y={y - STASH_HALF}
+        width={STASH_HALF * 2}
+        height={STASH_HALF * 2}
+        rx={1.5}
+      />
+      {/* The lid, then the body: enough of a box to read at 14 pixels. */}
+      <path
+        className={styles.graphStashGlyph}
+        d={`M ${x - 4} ${y - 2.5} L ${x + 4} ${y - 2.5}`}
+        fill="none"
+      />
+      <path
+        className={styles.graphStashGlyph}
+        d={`M ${x - 3} ${y - 2.5} L ${x - 3} ${y + 3} L ${x + 3} ${y + 3} L ${x + 3} ${y - 2.5}`}
+        fill="none"
+      />
+    </g>
+  );
+}
 
 /**
  * Most rows a repository with many branches would otherwise reserve.
@@ -64,10 +99,18 @@ export function GraphCell({
   rowHeight,
   author,
   avatarUrl,
+  stash = false,
 }: {
   row: GraphRow;
   laneCount: number;
   rowHeight: number;
+  /**
+   * Draws the node as a stash marker instead of a person. A stash is not
+   * something anybody authored — it is work set aside — and showing the
+   * author's face on it makes it look like a commit that is part of the
+   * branch, which is exactly what it is not.
+   */
+  stash?: boolean;
   /**
    * Who wrote the commit. When given, the node is drawn as that author's
    * badge — initials on a colour derived from their identity, computed here
@@ -109,7 +152,9 @@ export function GraphCell({
           fill="none"
         />
       ))}
-      {author === undefined ? (
+      {stash ? (
+        <StashNode x={nodeX} y={middle} />
+      ) : author === undefined ? (
         <circle
           className={row.isMerge ? styles.graphNodeMerge : styles.graphNode}
           cx={nodeX}

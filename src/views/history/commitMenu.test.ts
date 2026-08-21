@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildCommitMenu,
+  buildStashMenu,
   commitLabel,
   rebaseQuestion,
   resetQuestion,
@@ -236,5 +237,55 @@ describe('the questions', () => {
     expect(question).toContain('main');
     expect(question).toMatch(/new id/);
     expect(question).toMatch(/pulled/);
+  });
+});
+
+describe('buildStashMenu', () => {
+  const entry = {
+    ref: 'stash@{0}',
+    oid: OID,
+    index: 0,
+    message: 'On main: WIP on main',
+    date: '2026-08-20T10:00:00+00:00',
+  };
+  const healthy = { busy: false, hasConflicts: false };
+
+  it('offers the three things you can do to a stash', () => {
+    const ids = buildStashMenu(entry, healthy)
+      .flat()
+      .map((menuItem) => menuItem.id);
+    expect(ids).toEqual(['stash-apply', 'stash-pop', 'stash-drop', 'copy-sha']);
+  });
+
+  it('carries the entry, so the git layer can check the ref has not shifted', () => {
+    const apply = buildStashMenu(entry, healthy)[0]?.[0];
+    expect(apply?.action).toEqual({ kind: 'stash', entry, op: 'apply' });
+  });
+
+  it('offers nothing from the commit menu — none of it means anything here', () => {
+    const ids = buildStashMenu(entry, healthy)
+      .flat()
+      .map((menuItem) => menuItem.id);
+    for (const absent of ['checkout', 'cherry-pick', 'rebase', 'reset', 'branch']) {
+      expect(ids).not.toContain(absent);
+    }
+  });
+
+  it('disables the three while another git command is running', () => {
+    const items = buildStashMenu(entry, { ...healthy, busy: true }).flat();
+    for (const menuItem of items) {
+      if (menuItem.id === 'copy-sha') continue;
+      expect(menuItem.disabled).toMatch(/already running/);
+    }
+  });
+
+  it('disables the three while conflicts are unresolved', () => {
+    const items = buildStashMenu(entry, { ...healthy, hasConflicts: true }).flat();
+    expect(items[0]?.disabled).toMatch(/conflicts/);
+  });
+
+  it('leaves copying available — it runs no command', () => {
+    const items = buildStashMenu(entry, { ...healthy, busy: true }).flat();
+    expect(items[items.length - 1]?.disabled).toBeNull();
   });
 });

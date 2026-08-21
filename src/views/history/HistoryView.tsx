@@ -19,7 +19,7 @@ import {
   type ReactNode,
   type UIEvent,
 } from 'react';
-import type { Commit, CommitRef, RefKind } from '../../git/types';
+import type { Commit, CommitRef, RefKind, StashEntry } from '../../git/types';
 import { selectCommit } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
 import type { Loadable } from '../../state/store';
@@ -29,6 +29,7 @@ import { useAuthorPictures } from './avatarCache';
 import { avatarIdentity } from './remoteAvatar';
 import { buildGraph, type GraphRow } from './graph';
 import { CommitActions, type CommitMenuTarget } from './CommitActions';
+import { applyStashes, stashRowLabel } from './stashRows';
 import styles from './history.module.css';
 
 /** Height of one row in pixels; must match `.row` in the stylesheet. */
@@ -93,9 +94,13 @@ function Body({ commits }: { commits: Loadable<Commit[]> }): ReactNode {
   }
 }
 
-function CommitList({ commits }: { commits: Commit[] }): ReactNode {
+function CommitList({ commits: loaded }: { commits: Commit[] }): ReactNode {
   const store = useStore();
   const selectedOid = useAppState((state) => state.selection.commitOid);
+  // `git log --all` walks `refs/stash` too, so a stash arrives as three rows of
+  // git bookkeeping. The stash list is what identifies them; until it has been
+  // read the history is drawn as git reported it (see `stashRows.ts`).
+  const stashList = useAppState((state) => state.stashes);
   // Off unless the user turned it on; see ADR-0021. Read once for the list
   // rather than per row, so a re-render cannot leave half the graph fetching.
   const remoteAvatars = useAppState((state) => state.config.remoteAvatars);
@@ -106,6 +111,11 @@ function CommitList({ commits }: { commits: Commit[] }): ReactNode {
   const focusSelected = useRef(false);
   /** The commit whose context menu is open, and where it was opened. */
   const [menuTarget, setMenuTarget] = useState<CommitMenuTarget | null>(null);
+
+  const { commits, stashes } = useMemo(
+    () => applyStashes(loaded, stashList),
+    [loaded, stashList],
+  );
 
   // Row 0 is the working tree; commit `i` lives at row `i + 1`.
   const total = commits.length + 1;
@@ -171,7 +181,13 @@ function CommitList({ commits }: { commits: Commit[] }): ReactNode {
     const index = indexOfOid(commits, commit.oid);
     if (index === -1) return;
     select(index, false);
-    setMenuTarget({ commit, x: event.clientX, y: event.clientY });
+    const entry = stashes.get(commit.oid);
+    setMenuTarget({
+      commit,
+      x: event.clientX,
+      y: event.clientY,
+      ...(entry === undefined ? {} : { stash: entry }),
+    });
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
@@ -246,6 +262,7 @@ function CommitList({ commits }: { commits: Commit[] }): ReactNode {
         graphRow={graph.rows[index - 1]}
         laneCount={graph.laneCount}
         avatarUrl={identity === null ? null : (pictures.get(identity) ?? null)}
+        stash={stashes.get(commit.oid)}
         onContextMenu={(event) => openMenu(commit, event)}
         {...shared}
       />,
@@ -315,6 +332,7 @@ function CommitRow({
   graphRow,
   laneCount,
   avatarUrl,
+  stash,
   index,
   selected,
   tabbable,
@@ -331,8 +349,18 @@ function CommitRow({
      * row shows in both cases (ADR-0021).
      */
     avatarUrl: string | null;
+    /** Set when this row is a stash rather than a commit on a branch. */
+    stash: StashEntry | undefined;
   }): ReactNode {
-  const subject = commit.subject === '' ? '(no subject)' : commit.subject;
+  // A stash says what was set aside, not what git named the bookkeeping commit
+  // ("On main: …"), and it is not attributed to anyone: it is not on a branch
+  // and nobody authored it in the sense the column means.
+  const subject =
+    stash !== undefined
+      ? stashRowLabel(stash)
+      : commit.subject === ''
+        ? '(no subject)'
+        : commit.subject;
   const relative = formatRelativeDate(commit.authorDate, new Date());
   return (
     <RowButton
@@ -341,9 +369,18 @@ function CommitRow({
       tabbable={tabbable}
       onSelect={onSelect}
       onContextMenu={onContextMenu}
-      label={rowLabel(commit, subject, relative)}
+      label={rowLabel(commit, subject, relative, stash)}
     >
       <span className={styles.columnRefs}>
+        {stash !== undefined && (
+          <span
+            className={`${styles.ref} ${styles.refStash}`}
+            data-ref-kind="stash"
+            title={`stash ${stash.ref}`}
+          >
+            {stash.ref}
+          </span>
+        )}
         {commit.refs.map((ref) => (
           <RefChip key={`${ref.kind}:${ref.name}`} commitRef={ref} />
         ))}
@@ -356,11 +393,22 @@ function CommitRow({
             rowHeight={ROW_HEIGHT}
             author={{ name: commit.authorName, email: commit.authorEmail }}
             avatarUrl={avatarUrl}
+            stash={stash !== undefined}
           />
         )}
       </span>
-      <span className={styles.columnSubject}>{subject}</span>
-      <span className={styles.columnAuthor}>{commit.authorName}</span>
+      <span
+        className={
+          stash === undefined
+            ? styles.columnSubject
+            : `${styles.columnSubject} ${styles.stashSubject}`
+        }
+      >
+        {subject}
+      </span>
+      <span className={styles.columnAuthor}>
+        {stash === undefined ? commit.authorName : ''}
+      </span>
       <span className={styles.columnOid}>{commit.shortOid}</span>
       <time
         className={styles.columnDate}
@@ -377,11 +425,19 @@ function CommitRow({
  * Rows are visually dense and abbreviated, so they carry an explicit label:
  * without one the accessible name is the run-together text of every column.
  */
-function rowLabel(commit: Commit, subject: string, relative: string): string {
+function rowLabel(
+  commit: Commit,
+  subject: string,
+  relative: string,
+  stash?: StashEntry,
+): string {
   const refs =
     commit.refs.length === 0
       ? ''
       : `, ${commit.refs.map((ref) => `${REF_LABEL[ref.kind]} ${ref.name}`).join(', ')}`;
+  // The word "stash" leads, because it is the thing a listener most needs to
+  // know before the actions on this row make sense.
+  if (stash !== undefined) return `stash ${stash.ref}, ${subject}, ${relative}`;
   return `${commit.shortOid} ${subject}, ${commit.authorName}, ${relative}${refs}`;
 }
 

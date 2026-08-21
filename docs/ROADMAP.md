@@ -67,12 +67,20 @@ after 2 more weeks → proceed to v0.2. Else: keep as personal tool, stop invest
       rebase the current branch onto it, reset it there (soft/mixed/hard),
       copy the sha, copy a link to it on the remote. Built ahead of the gate at
       the user's request; rebase and reset confirm first and re-check HEAD.
+- [x] Stashes are recognisable in the history: a dashed stash node instead of
+      an author badge, a `stash@{n}` chip, the stash message instead of git's
+      "On main: …", the index/untracked bookkeeping commits hidden, and a
+      right-click menu of Apply / Pop / Delete Stash.
 - BYOK AI commit messages (Anthropic/OpenAI/Ollama; optional; `.env.example`)
 - Conflict resolution UI (ours/theirs per file → editor later)
 - Real product name (trademark-safe), wedge decision, donations push
 - Mac/Linux builds if a real user wants them
 
 ## Backlog (ideas parking lot — not scheduled)
+
+**A stash cannot be renamed from the history.** GitKraken's stash menu offers
+"Edit stash message", which means rewriting the stash commit and moving the ref.
+"Share as Cloud Patch" is deliberately never — it needs an account and a server.
 
 **Commit menu items deferred from the first pass.** *Interactive rebase* and
 everything built on it — edit a commit message, drop a commit, move one up or

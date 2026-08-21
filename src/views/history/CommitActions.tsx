@@ -17,14 +17,16 @@
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import type { Commit } from '../../git/types';
+import type { Commit, StashEntry } from '../../git/types';
 import {
   checkoutCommit,
   cherryPickCommit,
   createBranchAt,
   createTagAt,
   rebaseBranchOnto,
+  removeStash,
   resetBranchTo,
+  restoreStash,
   revertCommitOnHead,
 } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
@@ -34,7 +36,14 @@ import { copyText } from '../shell/clipboard';
 import { BRANCH_NOUN, TAG_NOUN, refNameError, type RefNoun } from '../shell/refName';
 import { trapTab } from '../shell/trapTab';
 import {
+  applyStashQuestion,
+  dropRecoveryCommand,
+  dropStashQuestion,
+  popStashQuestion,
+} from '../refs/labels';
+import {
   buildCommitMenu,
+  buildStashMenu,
   commitLabel,
   rebaseQuestion,
   resetQuestion,
@@ -46,6 +55,13 @@ import styles from './CommitActions.module.css';
 /** Where the menu was opened, and on what. */
 export interface CommitMenuTarget {
   commit: Commit;
+  /**
+   * Set when the row is a stash rather than a commit. It comes from the stash
+   * list, not from the commit, and it carries the oid the row was drawn from —
+   * which is what lets the git layer refuse a `stash@{n}` that has shifted
+   * since (any stash push renumbers them, including this app's own discard).
+   */
+  stash?: StashEntry;
   /** Viewport coordinates of the right-click. */
   x: number;
   y: number;
@@ -175,16 +191,79 @@ export function CommitActions({
             resetBranchTo(store, action.branch, commit.oid, action.mode, reason),
         });
         return;
+      case 'stash':
+        setDialog(stashDialog(action.entry, action.op));
+        return;
     }
   };
 
-  const sections: MenuSection[] = buildCommitMenu({
-    commit,
-    branch,
-    busy,
-    hasConflicts: status.state === 'ready' && status.value.hasConflicts,
-    remotes,
-  }).map((section) => section.map(toMenuItem));
+  /**
+   * The question a stash action asks, and what it runs.
+   *
+   * The question strings are the refs panel's own — the same words, so the two
+   * places that can pop a stash cannot drift into describing it differently,
+   * and so the confirmation reason the git layer records is the same either
+   * way.
+   */
+  function stashDialog(entry: StashEntry, op: 'apply' | 'pop' | 'drop'): ConfirmDialog {
+    if (op === 'drop') {
+      const question = dropStashQuestion(entry);
+      return {
+        kind: 'confirm',
+        title: 'Delete this stash?',
+        question,
+        confirmLabel: 'Delete Stash',
+        danger: true,
+        run: async () => {
+          const dropped = await removeStash(store, entry, question);
+          // `stash drop` only deletes the ref; the commit survives until git
+          // collects it, and the oid is the only way to name it afterwards.
+          // Saying so is the whole reason this is allowed to be one click.
+          const recovery = dropRecoveryCommand(entry.oid);
+          if (dropped && recovery !== null) {
+            store.dispatch({
+              type: 'notice',
+              notice: {
+                tone: 'info',
+                message: `Dropped ${entry.ref}.`,
+                undoHint: recovery,
+              },
+            });
+          }
+          return dropped;
+        },
+      };
+    }
+
+    const pop = op === 'pop';
+    const question = pop ? popStashQuestion(entry) : applyStashQuestion(entry);
+    return {
+      kind: 'confirm',
+      title: pop ? 'Pop this stash?' : 'Apply this stash?',
+      question,
+      confirmLabel: pop ? 'Pop Stash' : 'Apply Stash',
+      // Applying writes over the working tree, but only where the stash
+      // touched it, and git refuses outright rather than clobbering an edit.
+      danger: false,
+      run: (reason) => restoreStash(store, entry, { pop }, reason),
+    };
+  }
+
+  const stash = target.stash;
+  const sections: MenuSection[] = (
+    stash === undefined
+      ? buildCommitMenu({
+          commit,
+          branch,
+          busy,
+          hasConflicts: status.state === 'ready' && status.value.hasConflicts,
+          remotes,
+        })
+      : buildStashMenu(stash, {
+          busy,
+          hasConflicts: status.state === 'ready' && status.value.hasConflicts,
+        })
+  ).map((section) => section.map(toMenuItem));
 
   function toMenuItem(item: CommitMenuItem): MenuSection[number] {
     const action = item.action;
@@ -204,7 +283,11 @@ export function CommitActions({
           sections={sections}
           x={target.x}
           y={target.y}
-          label={`Actions for commit ${commit.shortOid}`}
+          label={
+            stash === undefined
+              ? `Actions for commit ${commit.shortOid}`
+              : `Actions for stash ${stash.ref}`
+          }
           onClose={() => {
             setMenuOpen(false);
             // A menu closed without choosing anything is the end of the

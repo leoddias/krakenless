@@ -204,3 +204,39 @@ describe('GraphCell over a real graph', () => {
     expect(pathsOfRow(4)).toEqual(['M 9 0 L 9 22']);
   });
 });
+
+describe('GraphCell for a stash', () => {
+  function renderStash(): SVGSVGElement {
+    const { container } = render(
+      <GraphCell
+        row={row()}
+        laneCount={1}
+        rowHeight={30}
+        author={{ name: 'Ada Lovelace', email: 'ada@example.com' }}
+        stash
+      />,
+    );
+    const svg = container.querySelector('svg');
+    if (svg === null) throw new Error('no svg rendered');
+    return svg;
+  }
+
+  it('draws a box rather than a circle', () => {
+    const svg = renderStash();
+    expect(svg.querySelector('rect')).not.toBeNull();
+    expect(svg.querySelector('circle')).toBeNull();
+  });
+
+  it('does not show the author — a stash is not attributed to anyone', () => {
+    expect(renderStash().querySelector('text')).toBeNull();
+  });
+
+  it('marks the box dashed, which is what says "set aside"', () => {
+    const rect = renderStash().querySelector('rect');
+    expect(rect?.getAttribute('class')).toMatch(/graphStash/);
+  });
+
+  it('still draws the lane the row sits in', () => {
+    expect(renderStash().querySelectorAll('path').length).toBeGreaterThan(0);
+  });
+});

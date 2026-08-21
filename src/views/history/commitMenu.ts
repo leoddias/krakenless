@@ -14,7 +14,7 @@
 
 import type { ResetMode } from '../../git/commits';
 import { commitWebUrl } from '../../git/remoteWeb';
-import type { Commit, Remote } from '../../git/types';
+import type { Commit, Remote, StashEntry } from '../../git/types';
 import type { Loadable } from '../../state/store';
 
 /** What a menu item does when it is chosen. */
@@ -26,7 +26,9 @@ export type CommitAction =
   | { kind: 'revert' }
   | { kind: 'rebase'; branch: string }
   | { kind: 'reset'; branch: string; mode: ResetMode }
-  | { kind: 'copy'; text: string; what: string };
+  | { kind: 'copy'; text: string; what: string }
+  /** Only ever produced by {@link buildStashMenu}. */
+  | { kind: 'stash'; entry: StashEntry; op: 'apply' | 'pop' | 'drop' };
 
 export interface CommitMenuItem {
   id: string;
@@ -271,4 +273,61 @@ export function resetQuestion(branch: string, mode: ResetMode, commit: Commit): 
 
 export function rebaseQuestion(branch: string, commit: Commit): string {
   return `Replay ${branch} onto ${commitLabel(commit)}. Every commit on ${branch} that is not already there is rewritten with a new id, so anyone who has pulled this branch will have to reconcile it.`;
+}
+
+// --- the stash menu ---------------------------------------------------------
+
+/**
+ * What a stash row offers.
+ *
+ * A different menu, not the commit one with items removed: almost nothing on
+ * the commit menu means anything here. Cherry-picking a stash replays a merge
+ * of your own index onto itself; resetting a branch *to* a stash puts the
+ * bookkeeping commit on the branch. Offering those greyed out would suggest
+ * they are things you might one day do to a stash. They are not.
+ *
+ * `Edit stash message` and `Share as Cloud Patch` from GitKraken's menu are
+ * deliberately absent: the first needs the stash ref rewritten, and the second
+ * needs an account and a server.
+ */
+export function buildStashMenu(
+  entry: StashEntry,
+  context: { busy: boolean; hasConflicts: boolean },
+): CommitMenuSection[] {
+  const shared = context.busy
+    ? BUSY
+    : context.hasConflicts
+      ? 'A merge is in progress with unresolved conflicts. Resolve them before touching a stash.'
+      : null;
+
+  return [
+    [
+      {
+        id: 'stash-apply',
+        label: 'Apply Stash',
+        disabled: shared,
+        action: { kind: 'stash', entry, op: 'apply' },
+      },
+      {
+        id: 'stash-pop',
+        label: 'Pop Stash',
+        disabled: shared,
+        action: { kind: 'stash', entry, op: 'pop' },
+      },
+      {
+        id: 'stash-drop',
+        label: 'Delete Stash',
+        disabled: shared,
+        action: { kind: 'stash', entry, op: 'drop' },
+      },
+    ],
+    [
+      {
+        id: 'copy-sha',
+        label: 'Copy stash commit sha',
+        disabled: null,
+        action: { kind: 'copy', text: entry.oid, what: 'The stash commit sha' },
+      },
+    ],
+  ];
 }
