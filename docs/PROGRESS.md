@@ -38,35 +38,32 @@
 ## Released
 
 - **v0.1.2-alpha** (2026-08-21): the first build that actually contains the
-  user interface — see ADR-0024 and the session log below. Sits as a **draft**
-  until someone publishes it; the landing page already points its four download
-  links at this tag, so they 404 until then. Verified after the fact by
-  downloading the published `x64_portable.exe` and finding
-  `/assets/index-*.js` inside it.
+  user interface — see ADR-0024 and the session log below. Published as a
+  prerelease; the landing page's four download links point here and all four
+  answer 200. Verified after the fact by downloading the published
+  `x64_portable.exe` and finding `/assets/index-*.js` inside it.
 - ~~**v0.1.1-alpha**~~ and ~~**v0.1.0-alpha**~~ (2026-08-20): **both shipped
-  binaries with no UI in them** and are to be deleted from GitHub. Their tags
-  stay: the source at those tags is fine, it was the build that was broken.
+  binaries with no UI in them**, and both were deleted from GitHub on
+  2026-08-21. Their tags stay: the source at those tags is fine, it was the
+  build that was broken.
 
 ## Next up (in order)
 
-1. **Delete the two broken releases and publish the v0.1.2-alpha draft.** Both
-   are GitHub-side actions nobody has done yet, and until they are, the landing
-   page's download links point at a draft and 404.
-2. **Right-click a commit in the running app** — the context menu (ADR-less,
+1. **Right-click a commit in the running app** — the context menu (ADR-less,
    ROADMAP § v0.2) has 1295 frontend tests behind it but has never been used by
    hand. Worth checking the menu and its submenu near the bottom edge of the
    list, where the clamping code runs.
-3. **Try the new editor on a real file** — it is the only code that writes to
+2. **Try the new editor on a real file** — it is the only code that writes to
    your disk, and it has not been used by hand yet. Consider a
    `safety-reviewer` pass over `src-tauri/src/worktree.rs` first.
-4. **Look at the panels not yet seen running**: the diff, the working tree and
+3. **Look at the panels not yet seen running**: the diff, the working tree and
    its commit box, settings, welcome — plus dragging each edge, and the toolbar
    at narrow widths.
-5. **The dogfood gate** (`docs/ROADMAP.md` § M5): use Krakenless as the only
+4. **The dogfood gate** (`docs/ROADMAP.md` § M5): use Krakenless as the only
    Git client for two weeks. Everything else in v0.1 is done, so this is the
    next real step and it produces the list that shapes v0.2.
-6. Fix whatever the gate surfaces, in the order it hurts.
-7. Then the validation checkpoint in `PLAN.md`: builds to 3–5 friends, and the
+5. Fix whatever the gate surfaces, in the order it hurts.
+6. Then the validation checkpoint in `PLAN.md`: builds to 3–5 friends, and the
    decision to invest in v0.2 or stop.
 
 ## Blockers / open questions
