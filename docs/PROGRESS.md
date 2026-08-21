@@ -20,9 +20,16 @@
   repos, history with the commit graph and ref decorations, working-tree panel
   (stage/unstage/discard/commit), diff viewer, remote bar, branches + stashes,
   conflict banner, settings, keyboard shortcuts, fs-watch refresh.
-- **Test status:** `npm test` 1106 passing (48 files), `cargo test` 64 passing;
-  oxlint and prettier clean. `cargo fmt` is *not* clean and never has been — see
-  `docs/ROADMAP.md` § Backlog.
+- **Test status:** `npm test` 1295 passing (57 files), `cargo test` 66 passing;
+  oxlint, prettier and clippy clean. `cargo fmt` is *not* clean and never has
+  been — see `docs/ROADMAP.md` § Backlog.
+- **`npm run build` must run before any cargo command** (ADR-0024): the frontend
+  is compiled *into* the binary, and the codegen panics without `dist/`.
+- **Right-clicking a commit opens a context menu** (ROADMAP § v0.2): checkout,
+  branch/tag/annotated tag here, cherry-pick, revert, rebase the current branch
+  onto it, reset it there (soft/mixed/hard), copy the sha, copy a remote link.
+  Rebase and reset confirm first, and the git layer re-reads HEAD before running
+  so a branch that moved between question and answer is refused.
 - The discard path — the only code that takes work off disk — has integration
   tests that **execute the recovery command the UI displays**. Keep that
   property for any future change to `stage.ts` or `recovery.ts`.
@@ -30,28 +37,36 @@
 
 ## Released
 
-- **v0.1.1-alpha** (2026-08-20): the redesign, cut from the `v0.1.1-alpha` tag.
-  Same unsigned Windows `.exe`/`.msi` and macOS `aarch64.dmg` as before. The
-  landing page carries the new screenshot and points its download links here.
-- **v0.1.0-alpha** (2026-08-20): Windows `.exe`/`.msi` and macOS `aarch64.dmg`,
-  built by `.github/workflows/release.yml` from the `v0.1.0-alpha` tag, marked
-  prerelease. Unsigned — no certificate. Cut at the user's explicit request,
-  ahead of both the dogfood gate in `PLAN.md` and the rename in ADR-0010; both
-  were raised first and the call was theirs.
+- **v0.1.2-alpha** (2026-08-21): the first build that actually contains the
+  user interface — see ADR-0024 and the session log below. Sits as a **draft**
+  until someone publishes it; the landing page already points its four download
+  links at this tag, so they 404 until then. Verified after the fact by
+  downloading the published `x64_portable.exe` and finding
+  `/assets/index-*.js` inside it.
+- ~~**v0.1.1-alpha**~~ and ~~**v0.1.0-alpha**~~ (2026-08-20): **both shipped
+  binaries with no UI in them** and are to be deleted from GitHub. Their tags
+  stay: the source at those tags is fine, it was the build that was broken.
 
 ## Next up (in order)
 
-1. **Try the new editor on a real file** — it is the only code that writes to
+1. **Delete the two broken releases and publish the v0.1.2-alpha draft.** Both
+   are GitHub-side actions nobody has done yet, and until they are, the landing
+   page's download links point at a draft and 404.
+2. **Right-click a commit in the running app** — the context menu (ADR-less,
+   ROADMAP § v0.2) has 1295 frontend tests behind it but has never been used by
+   hand. Worth checking the menu and its submenu near the bottom edge of the
+   list, where the clamping code runs.
+3. **Try the new editor on a real file** — it is the only code that writes to
    your disk, and it has not been used by hand yet. Consider a
    `safety-reviewer` pass over `src-tauri/src/worktree.rs` first.
-2. **Look at the panels not yet seen running**: the diff, the working tree and
+4. **Look at the panels not yet seen running**: the diff, the working tree and
    its commit box, settings, welcome — plus dragging each edge, and the toolbar
    at narrow widths.
-3. **The dogfood gate** (`docs/ROADMAP.md` § M5): use Krakenless as the only
+5. **The dogfood gate** (`docs/ROADMAP.md` § M5): use Krakenless as the only
    Git client for two weeks. Everything else in v0.1 is done, so this is the
    next real step and it produces the list that shapes v0.2.
-4. Fix whatever the gate surfaces, in the order it hurts.
-5. Then the validation checkpoint in `PLAN.md`: builds to 3–5 friends, and the
+6. Fix whatever the gate surfaces, in the order it hurts.
+7. Then the validation checkpoint in `PLAN.md`: builds to 3–5 friends, and the
    decision to invest in v0.2 or stop.
 
 ## Blockers / open questions
@@ -67,6 +82,38 @@
   until `buildPushCommand` emits a `<local>:<upstream>` refspec.
 
 ## Session log
+
+### 2026-08-21 — a commit context menu, and the releases that had no UI in them
+
+- **Right-click a commit in the history.** New `src/git/commands/history.ts`
+  (tag, cherry-pick, revert, rebase, reset, plus a `symbolic-ref` HEAD read) and
+  `src/git/commits.ts`. Two rules shaped the git layer. **All three reset modes
+  need a confirmation**, not just `--hard`: `isDestructive` only recognises the
+  hard one from the arguments, but soft and mixed still take a branch off
+  commits. And **rebase and reset re-read HEAD before running** — the menu item
+  says "Reset *main* to this commit" and a dialog sits between the question and
+  the command, so HEAD can move; if it did, nothing runs. Same guard the stash
+  list uses for a shifted `stash@{n}`. `revert` carries `--no-edit` and an
+  annotated tag demands a message, because the runner scrubs `GIT_EDITOR` but
+  not `core.editor`, and a spawned editor would hang until the timeout.
+  `commitWebUrl` strips `user:token@` from a remote before building a link.
+  Deferred to ROADMAP § Backlog: interactive rebase and everything on top of it,
+  worktree, patch, AI recompose; Cloud Patch is refused outright.
+- **v0.1.0-alpha and v0.1.1-alpha shipped with no user interface** (ADR-0024).
+  The user ran the portable download and got "localhost refused to connect".
+  `tauri-macros` decides at compile time with
+  `dev: cfg!(not(feature = "custom-protocol"))`, and without it
+  `generate_context!` embeds `devUrl` instead of the files. `tauri build` passes
+  that feature itself — so a local build was always correct and the defect was
+  only observable by running a *published* artefact. Proven by inspection: the
+  shipped exe holds no `/assets/index-*` keys and a plain `cargo build --release`
+  reproduces it byte-for-byte in behaviour. **Why CI lost the feature was never
+  reproduced** — `cargo test` before the build does not cause it locally, and the
+  CI log shows `tauri-macros` recompiling; `rust-cache` sharing `target/` is the
+  standing suspect. The fix sidesteps the question by declaring the feature in
+  the manifest, and `release.yml` now greps the built binary for the asset
+  filename `vite` just emitted. That check was tested against both binaries: it
+  passes the new one and fails the one that shipped.
 
 ### 2026-08-20 (fourth pass) — an editor, real avatars, a fixed graph
 
