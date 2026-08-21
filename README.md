@@ -84,9 +84,11 @@ npm run build        # type-check + build the frontend
 npm run tauri build  # build the Windows desktop binary (needs Rust)
 ```
 
-Rust side (same checks CI runs):
+Rust side (same checks CI runs). Run `npm run build` first — the frontend is
+compiled *into* the binary, so every cargo command needs `dist/` to exist:
 
 ```sh
+npm run build
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
@@ -105,6 +107,13 @@ git output ships with unit tests in the same change — see
   install Visual Studio Build Tools with *Desktop development with C++*.
 - **Port 1420 in use** — a previous `tauri dev` is still running; the dev
   server uses a strict port and will refuse to start.
+- **``The `frontendDist` configuration is set to `../dist` but this path doesn't
+  exist``** — run `npm run build` once. The `custom-protocol` feature is on by
+  default (ADR-0024) so that a release binary always carries the interface
+  inside it, and that embedding happens while Rust compiles.
+- **A built app shows "connection refused" for localhost** — it was compiled
+  without `custom-protocol`, so it points at the dev server instead of its own
+  files. `npm run tauri build` is the supported way to build; see ADR-0024.
 
 ## Documentation
 

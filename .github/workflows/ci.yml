@@ -72,6 +72,11 @@ jobs:
         timeout-minutes: 15
         run: npm test
 
+      # Before *any* cargo command: `custom-protocol` is a default feature, so
+      # `generate_context!` embeds `dist/` at compile time and panics when it is
+      # not there.
+      - run: npm run build
+
       - name: Clippy
         timeout-minutes: 20
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings

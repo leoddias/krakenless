@@ -43,6 +43,12 @@ jobs:
 
       - run: npm ci
 
+      # Before *any* cargo command: `custom-protocol` is a default feature, so
+      # `generate_context!` embeds `dist/` at compile time and panics when it is
+      # not there. `tauri build` would run this itself, but `cargo test` below
+      # comes first and needs it just as much.
+      - run: npm run build
+
       # A release must not be cut from code that does not pass its own gate.
       - name: Git identity for integration tests
         run: |
@@ -76,6 +82,34 @@ jobs:
           version=$(node -p "require('./package.json').version")
           cp src-tauri/target/release/krakenless.exe "dist-release/Krakenless_${version}_x64_portable.exe"
           ls -la dist-release
+
+      # The failure this catches shipped twice before it was noticed: a binary
+      # compiled without `tauri/custom-protocol` opens the dev server URL
+      # instead of the embedded UI, so it looks perfect on a developer machine
+      # with `npm run dev` running and shows "connection refused" everywhere
+      # else. Nothing about the build fails — the app simply has no interface in
+      # it. So the artefact is asked directly whether it contains the frontend
+      # that was just compiled.
+      - name: Verify the frontend is embedded in the binary
+        shell: bash
+        run: |
+          asset=$(ls dist/assets/index-*.js | head -1 | xargs -n1 basename)
+          echo "Looking for /assets/$asset inside the built binaries"
+          found=0
+          for binary in src-tauri/target/release/krakenless src-tauri/target/release/krakenless.exe; do
+            [ -f "$binary" ] || continue
+            if grep -qF "/assets/$asset" "$binary"; then
+              echo "  ok: $binary"
+              found=1
+            else
+              echo "  FAIL: $binary does not contain the frontend — it would open $(node -p "require('./src-tauri/tauri.conf.json').build.devUrl") at runtime"
+              exit 1
+            fi
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "No binary was found to check"
+            exit 1
+          fi
 
       - uses: actions/upload-artifact@v4
         with:

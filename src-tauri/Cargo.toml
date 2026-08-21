@@ -14,6 +14,25 @@ rust-version = "1.77.2"
 name = "krakenless_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# Embeds the frontend into the binary. Without it `generate_context!` embeds
+# `devUrl` instead (tauri-macros: `dev: cfg!(not(feature = "custom-protocol"))`),
+# and the built app opens http://localhost:1420 — a blank "connection refused"
+# page on any machine that is not running `npm run dev`. That is what shipped in
+# v0.1.0-alpha and v0.1.1-alpha.
+#
+# `tauri build` passes `--features tauri/custom-protocol` itself, but nothing
+# else does: a plain `cargo build --release` produces a binary with no UI inside
+# it, and the release cannot depend on which wrapper invoked cargo. Declaring it
+# as a default makes every release build correct on its own; `tauri dev` turns it
+# off again with `--no-default-features`. DO NOT REMOVE.
+#
+# Consequence: `frontendDist` (`../dist`) must exist before *any* cargo command
+# runs, including `cargo test` and `cargo clippy` — the codegen panics without
+# it. Both workflows run `npm run build` first for that reason.
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }
 

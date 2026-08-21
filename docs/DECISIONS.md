@@ -346,3 +346,36 @@ direction: one tab for one path, rather than two tabs writing to one index.
 Nothing persists the open tabs yet — a restart comes back to the repository
 list. N repositories mean N watchers and N sets of git processes on refresh;
 there is no cap, and a user who opens twenty will feel it.
+
+## ADR-0024 — The production feature is declared in the manifest, and the release proves the UI is in the binary
+
+**Decision:** `src-tauri/Cargo.toml` declares
+`default = ["custom-protocol"]` / `custom-protocol = ["tauri/custom-protocol"]`,
+so any `cargo build --release` embeds the frontend rather than relying on the
+Tauri CLI to pass the flag. Both workflows run `npm run build` before their
+first cargo command, because the codegen now needs `dist/` to exist. And
+`release.yml` gains a step that greps the built binary for the asset filename
+`vite` just emitted, failing the release if it is absent.
+**Why:** v0.1.0-alpha and v0.1.1-alpha both shipped binaries with **no user
+interface inside them**. `tauri-macros` decides at compile time with
+`dev: cfg!(not(feature = "custom-protocol"))`; without that feature
+`generate_context!` embeds `devUrl` instead of the files, and the app opens
+`http://localhost:1420`. On a developer machine with `npm run dev` running that
+is invisible — the app looks perfect. Everywhere else it is a "connection
+refused" page, which is what the user saw when they ran the portable download.
+`tauri build` does pass `--features tauri/custom-protocol` (verified with
+`--verbose`), so the local build was always correct and the defect could only
+ever be observed by running a *published* artefact. Proven by inspection: the
+shipped exe contains no `/assets/index-*` keys, and a plain `cargo build
+--release` reproduces it exactly.
+**Consequences:** Why CI lost the feature when a local `tauri build` does not
+was **not** reproduced — `cargo test` before the build does not cause it here,
+and the CI log shows `tauri-macros` recompiling for the release. `rust-cache`
+sharing `target/` across runs is the leading suspect. The fix does not depend on
+knowing: declaring the feature removes the CLI from the trust path entirely. The
+cost is that `cargo test`, `cargo clippy` and `cargo check` now fail with "the
+`frontendDist` configuration is set to `../dist` but this path doesn't exist"
+until the frontend is built once — a confusing first-run error for a
+contributor, which is why the manifest comment says so. Every published
+v0.1.x-alpha artefact before this change is broken and should be replaced, not
+just superseded.
