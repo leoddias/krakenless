@@ -71,6 +71,8 @@ after 2 more weeks → proceed to v0.2. Else: keep as personal tool, stop invest
       an author badge, a `stash@{n}` chip, the stash message instead of git's
       "On main: …", the index/untracked bookkeeping commits hidden, and a
       right-click menu of Apply / Pop / Delete Stash.
+- [x] Clicking a file in the working-tree panel narrows the diff panel to it,
+      switching back from a selected commit first, and marks the row.
 - BYOK AI commit messages (Anthropic/OpenAI/Ollama; optional; `.env.example`)
 - Conflict resolution UI (ours/theirs per file → editor later)
 - Real product name (trademark-safe), wedge decision, donations push
@@ -124,6 +126,12 @@ writes its cache entry after the setting is switched off. Harmless but untidy.
 rustfmt; the repository has never been rustfmt-clean and the check is not in the
 CI gate. Worth one commit to settle it in either direction — adopt it and add it
 to the gate, or write down that it is deliberately not used.
+
+**An untracked file has no diff to show.** `git diff` has no earlier version to
+compare against, so selecting one from the working-tree panel lands on a notice
+explaining that rather than on its contents. Showing the file as an all-added
+diff would need a separate read (`git diff --no-index /dev/null <path>`), with
+its own size and binary guards.
 
 **No entry point to the editor from the working-tree panel (ADR-0022).** Editing
 starts from the diff panel's file header. The changes list, which is where a

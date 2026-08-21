@@ -189,14 +189,48 @@
   color: var(--danger);
 }
 
+/* A button, not a label: pressing it is how the diff below is narrowed to one
+   file. Styled flat so the row still reads as a list, not a toolbar. */
 .path {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
   font-family: var(--font-mono);
   font-size: 0.75rem;
+}
+
+.path:hover {
+  color: var(--fg-strong);
+  text-decoration: underline;
+}
+
+.path:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* The row whose diff is on screen. A rail on the leading edge as well as a
+   fill, so it survives a colour-blind reading — the same vocabulary the commit
+   list uses for its selection. */
+.rowSelected {
+  background: var(--selected);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.rowSelected:hover {
+  background: var(--selected-hover);
+}
+
+.rowSelected .path {
+  color: var(--fg-strong);
 }
 
 .stateLabel {

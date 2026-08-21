@@ -21,6 +21,7 @@ import {
   commitStaged,
   discard,
   refreshStatus,
+  selectCommit,
   stage,
   unstage,
 } from '../../state/actions';
@@ -76,6 +77,7 @@ interface CommitDraft {
 export function ChangesView(): ReactNode {
   const status = useAppState((state) => state.status);
   const busy = useAppState(isBusy);
+  const selectedPath = useAppState((state) => state.selection.path);
   const store = useStore();
 
   const [pending, setPending] = useState<Pending | null>(null);
@@ -90,6 +92,20 @@ export function ChangesView(): ReactNode {
 
   const groups = status.state === 'ready' ? groupEntries(status.value.entries) : null;
   const stagedPaths = new Set(groups === null ? [] : pathsOfAll(groups.staged));
+
+  /**
+   * Narrows the diff panel to one file from this list.
+   *
+   * The history may have a commit selected, in which case the diff below is
+   * that commit's and a working-tree path means nothing in it. So the working
+   * tree is selected first — `selectCommit` dispatches that synchronously
+   * before it awaits anything, and it clears the path, which is why the path is
+   * set after rather than before.
+   */
+  const showInDiff = (path: string): void => {
+    if (store.getState().selection.commitOid !== null) void selectCommit(store, null);
+    store.dispatch({ type: 'selection/path', path });
+  };
 
   const askDiscard = (paths: string[]): void => {
     setFailure(null);
@@ -258,6 +274,8 @@ export function ChangesView(): ReactNode {
           onStage={(paths) => void runStaging('Staging', () => stage(store, paths))}
           onUnstage={(paths) => void runStaging('Unstaging', () => unstage(store, paths))}
           onAskDiscard={askDiscard}
+          selectedPath={selectedPath}
+          onShowDiff={showInDiff}
         />
       )}
     </section>
@@ -283,6 +301,8 @@ function ChangeLists({
   onStage,
   onUnstage,
   onAskDiscard,
+  selectedPath,
+  onShowDiff,
 }: {
   groups: ReturnType<typeof groupEntries>;
   repoStatus: RepoStatus;
@@ -292,6 +312,8 @@ function ChangeLists({
   onStage: (paths: string[]) => void;
   onUnstage: (paths: string[]) => void;
   onAskDiscard: (paths: string[]) => void;
+  selectedPath: string | null;
+  onShowDiff: (path: string) => void;
 }): ReactNode {
   const { staged, unstaged, conflicted } = groups;
   const nothingToShow =
@@ -318,6 +340,8 @@ function ChangeLists({
         rowActions={(entry) => [
           { label: 'Unstage', run: () => onUnstage(pathsOf(entry)) },
         ]}
+        selectedPath={selectedPath}
+        onShowDiff={onShowDiff}
       />
 
       <FileSection
@@ -337,6 +361,8 @@ function ChangeLists({
           { label: 'Stage', run: () => onStage(pathsOf(entry)) },
           { label: 'Discard', danger: true, run: () => onAskDiscard(pathsOf(entry)) },
         ]}
+        selectedPath={selectedPath}
+        onShowDiff={onShowDiff}
       />
 
       <CommitBox
@@ -489,6 +515,8 @@ function FileSection({
   busy,
   onBulk,
   rowActions,
+  selectedPath,
+  onShowDiff,
 }: {
   title: string;
   entries: StatusEntry[];
@@ -499,6 +527,9 @@ function FileSection({
   busy: boolean;
   onBulk: (paths: string[]) => void;
   rowActions: (entry: StatusEntry) => RowAction[];
+  /** Path the diff panel is currently narrowed to, so the row can show it. */
+  selectedPath: string | null;
+  onShowDiff: (path: string) => void;
 }): ReactNode {
   const paths = pathsOfAll(entries);
   const label = `${title} (${entries.length})`;
@@ -534,11 +565,29 @@ function FileSection({
       ) : (
         <ul className={styles.list}>
           {entries.map((entry) => (
-            <li key={entry.path} className={styles.row}>
+            <li
+              key={entry.path}
+              className={
+                entry.path === selectedPath
+                  ? `${styles.row} ${styles.rowSelected}`
+                  : styles.row
+              }
+            >
               <span className={styles.state} title={STATE_LABELS[entry[side]]}>
                 {STATE_LETTERS[entry[side]]}
               </span>
-              <span className={styles.path}>{displayPath(entry)}</span>
+              {/* The path is the way into the diff, not decoration: clicking a
+                  file here is how a user asks "what changed in this one?", and
+                  before this it was a label you could not press. */}
+              <button
+                type="button"
+                className={styles.path}
+                aria-current={entry.path === selectedPath ? 'true' : undefined}
+                title={`Show the diff for ${entry.path}`}
+                onClick={() => onShowDiff(entry.path)}
+              >
+                {displayPath(entry)}
+              </button>
               <span className={styles.stateLabel}>{STATE_LABELS[entry[side]]}</span>
               <span className={styles.rowActions}>
                 {rowActions(entry).map((action) => (

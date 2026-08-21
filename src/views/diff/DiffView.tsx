@@ -28,6 +28,17 @@ export function DiffView(): ReactNode {
   // Only the working tree is editable: a commit's version of a file is history,
   // and there is nothing on disk to write it back to.
   const editable = useAppState((state) => state.selection.commitOid === null);
+  // `git diff` reports nothing for an untracked file — there is no earlier
+  // version — so a path selected from the working-tree panel can legitimately
+  // be missing from this diff. The status is the only thing that can tell that
+  // case apart from a stale selection.
+  const untrackedPath = useAppState((state) => {
+    const path = state.selection.path;
+    if (path === null || state.status.state !== 'ready') return false;
+    return state.status.value.entries.some(
+      (entry) => entry.path === path && entry.worktree === 'untracked',
+    );
+  });
   const store = useStore();
   const [editing, setEditing] = useState<string | null>(null);
 
@@ -66,6 +77,7 @@ export function DiffView(): ReactNode {
             editable={editable}
             editing={editing}
             onEdit={setEditing}
+            untracked={untrackedPath}
           />
         </div>
       )}
@@ -169,12 +181,15 @@ function FileDiffs({
   editable,
   editing,
   onEdit,
+  untracked,
 }: {
   files: FileDiff[];
   selectedPath: string | null;
   editable: boolean;
   editing: string | null;
   onEdit: (path: string | null) => void;
+  /** True when the selected path is a file git does not track yet. */
+  untracked: boolean;
 }): ReactNode {
   const shown =
     selectedPath === null ? files : files.filter((f) => f.newPath === selectedPath);
@@ -182,8 +197,15 @@ function FileDiffs({
   if (shown.length === 0) {
     return (
       <div className={styles.content}>
-        <Notice title="File not in this diff">
-          {`"${selectedPath ?? ''}" is not part of the current selection. Pick a file from the list.`}
+        <Notice title={untracked ? 'Nothing to diff yet' : 'File not in this diff'}>
+          {untracked
+            ? // Reachable from the working-tree panel, where untracked files are
+              // listed next to modified ones and look equally clickable. Git has
+              // no previous version to compare against, so `git diff` says
+              // nothing about them — which is a different problem from "wrong
+              // selection", and needs a different next step.
+              `"${selectedPath ?? ''}" is not tracked by git yet, so there is no earlier version to compare it against. Stage it to see its contents as a diff.`
+            : `"${selectedPath ?? ''}" is not part of the current selection. Pick a file from the list.`}
         </Notice>
       </div>
     );
