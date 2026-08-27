@@ -168,6 +168,36 @@ describe('remoteAvatars', () => {
   });
 });
 
+describe('autoFetchMinutes', () => {
+  it('defaults to five minutes', () => {
+    expect(defaultConfig().autoFetchMinutes).toBe(5);
+    expect(parseConfig('{}').autoFetchMinutes).toBe(5);
+  });
+
+  it('keeps a value the user chose', () => {
+    expect(parseConfig('{"autoFetchMinutes":15}').autoFetchMinutes).toBe(15);
+  });
+
+  it('treats zero and anything below it as off', () => {
+    expect(parseConfig('{"autoFetchMinutes":0}').autoFetchMinutes).toBe(0);
+    expect(parseConfig('{"autoFetchMinutes":-10}').autoFetchMinutes).toBe(0);
+  });
+
+  it('refuses an interval that would hammer the remote', () => {
+    // A hand-edited fraction of a minute is a request loop against somebody's
+    // server, so it is lifted to the floor rather than honoured.
+    expect(parseConfig('{"autoFetchMinutes":0.05}').autoFetchMinutes).toBe(1);
+    expect(parseConfig('{"autoFetchMinutes":1.4}').autoFetchMinutes).toBe(1);
+    expect(parseConfig('{"autoFetchMinutes":99999}').autoFetchMinutes).toBe(1440);
+  });
+
+  it('falls back to the default for anything that is not a number', () => {
+    expect(parseConfig('{"autoFetchMinutes":"5"}').autoFetchMinutes).toBe(5);
+    expect(parseConfig('{"autoFetchMinutes":null}').autoFetchMinutes).toBe(5);
+    expect(parseConfig('{"autoFetchMinutes":[]}').autoFetchMinutes).toBe(5);
+  });
+});
+
 describe('layout', () => {
   it('has sizes that fit a 1280px window out of the box', () => {
     const { sidebarWidth, detailWidth, historyRatio } = defaultConfig().layout;

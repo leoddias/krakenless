@@ -143,6 +143,43 @@ describe('SettingsView', () => {
     expect(store.getState().config.remoteAvatars).toBe(true);
   });
 
+  it('offers the background fetch schedule, five minutes by default', () => {
+    renderSettings();
+    const field = screen.getByLabelText(/Fetch in the background/);
+    expect(field).toHaveValue('5');
+    expect(screen.getByRole('option', { name: 'Off' })).toBeInTheDocument();
+  });
+
+  it('saves a new fetch schedule', async () => {
+    const { store } = renderSettings();
+    fireEvent.change(screen.getByLabelText(/Fetch in the background/), {
+      target: { value: '15' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
+    expect(saveConfig.mock.calls[0]?.[0]).toMatchObject({ autoFetchMinutes: 15 });
+    expect(store.getState().config.autoFetchMinutes).toBe(15);
+  });
+
+  it('can turn the background fetch off entirely', async () => {
+    const { store } = renderSettings();
+    fireEvent.change(screen.getByLabelText(/Fetch in the background/), {
+      target: { value: '0' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
+    expect(store.getState().config.autoFetchMinutes).toBe(0);
+  });
+
+  it('says what the background fetch does and does not touch', () => {
+    renderSettings();
+    const field = screen.getByLabelText(/Fetch in the background/).closest('label');
+    expect(field).toHaveTextContent('git fetch --prune');
+    expect(field).toHaveTextContent('nothing is ever merged into them');
+  });
+
   it('changes what About claims once pictures are on', () => {
     renderSettings();
     expect(screen.getByLabelText('About')).not.toHaveTextContent('Gravatar');

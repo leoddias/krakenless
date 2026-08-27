@@ -36,8 +36,33 @@ export interface AppConfig {
    * a request leaves the machine.
    */
   remoteAvatars: boolean;
+  /**
+   * Minutes between background fetches; `0` turns them off.
+   *
+   * A fetch is the only way to learn that other people have pushed — git
+   * cannot know about a branch it has never been told about — so without this
+   * the branch list is only ever as fresh as the last manual fetch. It talks
+   * to the git remotes and nothing else (ADR-0025), which is the one network
+   * destination this app has always had.
+   */
+  autoFetchMinutes: number;
   layout: LayoutConfig;
 }
+
+/**
+ * What Settings offers, in minutes. Hand-edited values outside this list are
+ * kept as long as they are sane (see {@link AUTO_FETCH_BOUNDS}) — the list is
+ * the menu, not the schema.
+ */
+export const AUTO_FETCH_CHOICES = [0, 1, 5, 15, 30] as const;
+
+/**
+ * Floor and ceiling for a hand-edited interval. The floor is a minute because
+ * anything under it turns a background convenience into a request loop against
+ * someone's server; the ceiling is a day, past which the setting is off in all
+ * but name. `0` is exempt: it means off, and is the one value below the floor.
+ */
+export const AUTO_FETCH_BOUNDS = { min: 1, max: 1440 } as const;
 
 /** Sizes of the resizable panels, in the units the shell lays them out with. */
 export interface LayoutConfig {
@@ -73,6 +98,7 @@ export function defaultConfig(): AppConfig {
     mergetool: '',
     theme: 'dark',
     remoteAvatars: false,
+    autoFetchMinutes: 5,
     layout: { sidebarWidth: 264, detailWidth: 340, historyRatio: 0.62 },
   };
 }
@@ -119,6 +145,21 @@ export function clampLayout(layout: LayoutConfig): LayoutConfig {
       LAYOUT_BOUNDS.historyRatio,
     ),
   };
+}
+
+/**
+ * Reads the fetch interval, rejecting anything that would make the app hammer
+ * a remote. Whole minutes only: a fractional interval is a hand edit that
+ * nothing in the UI can produce and that nobody wants the consequences of.
+ */
+export function asAutoFetchMinutes(value: unknown): number {
+  const fallback = 5;
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  if (value <= 0) return 0;
+  return Math.min(
+    Math.max(Math.round(value), AUTO_FETCH_BOUNDS.min),
+    AUTO_FETCH_BOUNDS.max,
+  );
 }
 
 function asLayout(value: unknown): LayoutConfig {
@@ -211,6 +252,7 @@ export function parseConfig(text: string | null): AppConfig {
         ? theme
         : defaults.theme,
     remoteAvatars: readRemoteAvatars(raw),
+    autoFetchMinutes: asAutoFetchMinutes(raw['autoFetchMinutes']),
     layout: asLayout(raw['layout']),
   };
 }

@@ -20,6 +20,7 @@ import { useAppState, useStore } from './state/hooks';
 import { createStore, isBusy, type AppState, type Store } from './state/store';
 import { publishConfig, registerStore } from './state/stores';
 import { StoreProvider } from './state/StoreProvider';
+import { startAutoFetch } from './state/autoFetch';
 import { watchRepository, type WatchHandle } from './state/watch';
 import { ChangesView } from './views/changes';
 import { ConflictBanner } from './views/conflicts';
@@ -101,6 +102,28 @@ function useRepositoryWatch(root: string | null): void {
       void handle?.stop();
     };
   }, [store, root]);
+}
+
+/**
+ * Fetches the open repository in the background, as often as the settings say.
+ *
+ * Separate from the filesystem watch on purpose: the watch answers "what
+ * changed on this machine", and no amount of watching can report a branch that
+ * somebody else pushed. Re-runs when the interval changes, so turning the
+ * setting off in Settings stops the schedule then and there rather than at the
+ * next repository.
+ */
+function useAutoFetch(root: string | null): void {
+  const store = useStore();
+  const minutes = useAppState((state) => state.config.autoFetchMinutes);
+
+  useEffect(() => {
+    if (root === null) return;
+    const handle = startAutoFetch(store, root, minutes);
+    return () => {
+      void handle.stop();
+    };
+  }, [store, root, minutes]);
 }
 
 /** What the toolbar says the checkout is, in the words the status supports. */
@@ -397,6 +420,7 @@ function RepoPane({
   const pane = useRef<HTMLDivElement | null>(null);
 
   useRepositoryWatch(root);
+  useAutoFetch(root);
 
   useEffect(() => {
     // Only the pane on screen answers the keyboard. Every open tab is mounted,

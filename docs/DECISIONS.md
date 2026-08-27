@@ -379,3 +379,43 @@ until the frontend is built once — a confusing first-run error for a
 contributor, which is why the manifest comment says so. Every published
 v0.1.x-alpha artefact before this change is broken and should be replaced, not
 just superseded.
+## ADR-0025 — Krakenless fetches in the background, on by default, silently
+
+**Decision:** The app runs `git fetch --no-tags --prune --all` against the open
+repository every five minutes by default, configurable in Settings to Off, 1, 5,
+15 or 30 minutes (`autoFetchMinutes` in `config.json`; `0` means off and starts
+no timer at all). The fetch is silent: it never raises the busy flag, never
+disables a control, and never reports a failure as a notice. It is skipped while
+a user-started operation is in flight, skipped when the repository has no
+remote, and never overlaps itself — the interval is a gap *between* fetches, so
+a slow remote is never caught up on with a burst. Afterwards only what a fetch
+can move is re-read: branches, commits, status and the remote list. The manual
+Fetch button is unchanged and still reports errors.
+**Why:** Nothing local can reveal that a colleague pushed a branch — git has
+never been told it exists. The filesystem watcher answers "what changed on this
+machine" and no amount of watching answers the other question, so before this
+the branch list was only ever as fresh as the last manual fetch, and users were
+clicking Fetch as a refresh button. On by default because a Git client that
+shows a stale branch list by default is wrong in the way that costs people work,
+and because a fetch to the user's own git remote is the one network destination
+this app has always had (see ADR-0021 for the line: Gravatar and GitHub are
+*not* that, and stay opt-in). Silent because the failure modes are a closed
+laptop lid, a VPN that is not up and an SSH agent nobody has unlocked yet —
+normal states that must not produce a notice every five minutes forever.
+**Consequences:** A repository open in the app now generates periodic network
+traffic and periodic authentication against the remote; a user on a metered
+connection or with a credential prompt on every fetch has to turn it off, and
+Settings says how. `--prune` deletes remote-tracking refs for branches removed
+upstream, which is the point of it, and can never delete a local branch. A
+background fetch and a user operation can still interleave on a slow remote —
+the guard skips the tick only when the app is *already* busy, so an operation
+started a millisecond later runs alongside a fetch. That is what git's own index
+and ref locks exist for, and a fetch touches neither the index nor any local
+ref. The fetch interval is honoured per open repository, so N tabs mean N
+schedules and N processes; ADR-0023's "no cap" warning applies here too. One
+interaction is deliberate and worth knowing: the post-fetch `refreshStatus`
+marks the status stale for a few hundred milliseconds, and a discard confirmed
+inside that window is refused with "could not check" rather than run, because
+`ChangesView` treats stale as not knowing. Refusing to take work off disk
+against an answer known to be out of date is the safe direction, and the user
+simply confirms again.

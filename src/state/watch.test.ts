@@ -7,10 +7,20 @@ const listen = vi.hoisted(() => vi.fn());
 const refreshStatus = vi.hoisted(() => vi.fn());
 const refreshCommits = vi.hoisted(() => vi.fn());
 const refreshDiff = vi.hoisted(() => vi.fn());
+const refreshBranches = vi.hoisted(() => vi.fn());
+const refreshRemotes = vi.hoisted(() => vi.fn());
+const refreshStashes = vi.hoisted(() => vi.fn());
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
 vi.mock('@tauri-apps/api/event', () => ({ listen }));
-vi.mock('./actions', () => ({ refreshStatus, refreshCommits, refreshDiff }));
+vi.mock('./actions', () => ({
+  refreshStatus,
+  refreshCommits,
+  refreshDiff,
+  refreshBranches,
+  refreshRemotes,
+  refreshStashes,
+}));
 
 /** Fires the repo-changed event as Tauri delivers it: payload = watch token. */
 let emit: (token?: number) => void;
@@ -34,6 +44,9 @@ describe('watchRepository', () => {
     refreshStatus.mockResolvedValue(undefined);
     refreshCommits.mockResolvedValue(undefined);
     refreshDiff.mockResolvedValue(undefined);
+    refreshBranches.mockResolvedValue(undefined);
+    refreshRemotes.mockResolvedValue(undefined);
+    refreshStashes.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -55,6 +68,12 @@ describe('watchRepository', () => {
     expect(refreshStatus).toHaveBeenCalledTimes(1);
     expect(refreshCommits).toHaveBeenCalledTimes(1);
     expect(refreshDiff).toHaveBeenCalledTimes(1);
+    // A branch, a commit or a stash made from a terminal moves refs without
+    // touching a tracked file: the ref-reading panels have to reload too, or
+    // they keep showing a repository that has already moved on.
+    expect(refreshBranches).toHaveBeenCalledTimes(1);
+    expect(refreshRemotes).toHaveBeenCalledTimes(1);
+    expect(refreshStashes).toHaveBeenCalledTimes(1);
   });
 
   it('collapses a burst of events into one refresh', async () => {

@@ -1,6 +1,13 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { refreshCommits, refreshDiff, refreshStatus } from './actions';
+import {
+  refreshBranches,
+  refreshCommits,
+  refreshDiff,
+  refreshRemotes,
+  refreshStashes,
+  refreshStatus,
+} from './actions';
 import type { Store } from './store';
 
 /** Event the Rust watcher emits after coalescing a burst of filesystem events. */
@@ -32,10 +39,18 @@ export async function watchRepository(store: Store, root: string): Promise<Watch
   const refresh = (): void => {
     running = running.then(async () => {
       if (stopped) return;
+      // Every panel, not just the working tree. A branch created, a commit
+      // made or a stash pushed from a terminal changes `.git/refs` without
+      // touching a single tracked file, and re-reading only status, commits
+      // and diff left the branch and stash lists showing a repository that had
+      // already moved on — stale until something else happened to reload them.
       await Promise.all([
         refreshStatus(store),
         refreshCommits(store),
         refreshDiff(store),
+        refreshBranches(store),
+        refreshRemotes(store),
+        refreshStashes(store),
       ]);
     });
   };

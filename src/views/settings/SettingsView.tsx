@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { revealFolder } from '../../config/launch';
 import { saveConfig, configFolder } from '../../config/store';
-import type { AppConfig } from '../../config/schema';
+import { AUTO_FETCH_CHOICES, type AppConfig } from '../../config/schema';
 import { useAppState, useStore } from '../../state/hooks';
 import styles from './SettingsView.module.css';
 
@@ -114,6 +114,30 @@ export function SettingsView({ onClose }: { onClose: () => void }): ReactNode {
           author is never asked about twice. Everybody without a picture keeps the
           initials badge, which is drawn from their identity and never leaves this
           machine.
+        </span>
+      </label>
+
+      <label className={styles.field}>
+        <span className={styles.label}>Fetch in the background</span>
+        <select
+          className={styles.input}
+          value={String(draft.autoFetchMinutes)}
+          onChange={(event) => update('autoFetchMinutes', Number(event.target.value))}
+        >
+          {AUTO_FETCH_CHOICES.map((minutes) => (
+            <option key={minutes} value={minutes}>
+              {minutes === 0 ? 'Off' : `Every ${String(minutes)} minutes`}
+            </option>
+          ))}
+        </select>
+        <span className={styles.hint}>
+          Runs <code>git fetch --prune</code> against your remotes on this schedule, so
+          branches and commits pushed by other people show up without you asking. It only
+          moves remote-tracking refs — your branches, your working tree and your commits
+          are never touched, and nothing is ever merged into them. It is quiet by design:
+          nothing blinks while it runs, and a fetch that fails because you are offline or
+          your key is not unlocked says nothing. Use the Fetch button when you want to be
+          told why one failed.
         </span>
       </label>
 
