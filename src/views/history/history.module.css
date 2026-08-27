@@ -181,11 +181,23 @@
   outline-offset: -2px;
 }
 
-/* Selection is a filled row plus a rail on the leading edge, so it survives a
-   colour-blind reading and a screenshot at low contrast. */
+/* The row HEAD is on. Declared before the selection so that when both land on
+   the same row — the common case, since checking out selects — the filled
+   selection wins on source order at equal specificity. */
+.rowHead {
+  background: var(--head-row);
+}
+
+/* Selection is a filled row, edged top and bottom and railed on the leading
+   edge, so it survives a colour-blind reading and a screenshot at low
+   contrast. The edges are what make it read as one band across every column
+   rather than a change of shade behind the text. */
 .rowSelected {
   background: var(--selected);
-  box-shadow: inset 3px 0 0 var(--accent);
+  box-shadow:
+    inset 3px 0 0 var(--accent),
+    inset 0 1px 0 var(--accent-line),
+    inset 0 -1px 0 var(--accent-line);
 }
 
 .rowSelected:hover {
@@ -197,6 +209,23 @@
 .rowSelected .columnDate,
 .rowSelected .columnOid {
   color: var(--fg-strong);
+}
+
+.rowSelected .columnSubject {
+  font-weight: 600;
+}
+
+/* The graph rings its nodes in the panel background and fills the hollow ones
+   with it, so a lane line does not appear to run through a face or through a
+   merge. On a filled row the background *is* the selection, so both follow it
+   — the coloured rings (merge, stash) are left alone, they are the meaning. */
+.rowSelected .graphAvatar {
+  stroke: var(--selected);
+}
+
+.rowSelected .graphNodeMerge,
+.rowSelected .graphStash {
+  fill: var(--selected);
 }
 
 .wip {
@@ -250,6 +279,35 @@
   border-color: var(--ref-tag-fg);
   background: var(--ref-tag-bg);
   color: var(--ref-tag-fg);
+}
+
+/* The chip for the ref the working tree is actually on — the branch HEAD
+   points at, or HEAD itself when detached. Brightened and ✓-marked, because
+   "where am I" is the first question the column is asked. */
+.refCurrent {
+  /* The ✓ must not eat the name. In a crowded column every chip shrinks to
+     its floor, and a floor of 4ch spent on the mark alone would leave a chip
+     that says only "✓…" — so the mark is laid out beside the name, which
+     ellipsises on its own, and the floor is raised to pay for it. */
+  display: inline-flex;
+  align-items: center;
+  min-width: 11ch;
+  max-width: 16ch;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--fg-strong);
+  font-weight: 600;
+}
+
+.refCheck {
+  flex: none;
+  margin-right: 0.1875rem;
+  font-weight: 700;
+}
+
+.refName {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* --- graph ----------------------------------------------------------------- */

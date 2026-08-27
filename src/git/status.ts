@@ -22,3 +22,25 @@ export async function getStatus(
   const output = await runGit(repo, buildStatusCommand(options));
   return parseStatus(output.stdout);
 }
+
+/**
+ * True while the index or the working tree holds changes to *tracked* files.
+ *
+ * This is the condition git itself calls a dirty work tree: it refuses to
+ * rebase, cherry-pick or revert over one ("cannot rebase: You have unstaged
+ * changes"). Untracked and ignored files are deliberately not counted — git
+ * replays commits happily over those, and a gate that blocked on a stray build
+ * artifact would refuse an operation git would have run.
+ */
+export function hasTrackedChanges(status: RepoStatus): boolean {
+  return status.entries.some(
+    (entry) =>
+      entry.conflicted ||
+      (entry.index !== 'unmodified' &&
+        entry.index !== 'untracked' &&
+        entry.index !== 'ignored') ||
+      (entry.worktree !== 'unmodified' &&
+        entry.worktree !== 'untracked' &&
+        entry.worktree !== 'ignored'),
+  );
+}

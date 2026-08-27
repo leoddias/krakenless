@@ -39,6 +39,7 @@ function context(overrides: Partial<CommitMenuContext> = {}): CommitMenuContext 
     branch: 'main',
     busy: false,
     hasConflicts: false,
+    hasLocalChanges: false,
     remotes: { state: 'ready', value: [remote('origin', 'git@github.com:o/r.git')] },
     ...overrides,
   };
@@ -116,6 +117,26 @@ describe('what the menu refuses to offer', () => {
     expect(item({ branch: null }, 'rebase').disabled).toMatch(/detached/);
     expect(item({ branch: null }, 'reset').disabled).toMatch(/detached/);
     expect(item({ branch: null }, 'reset-hard').disabled).toMatch(/detached/);
+  });
+
+  it('refuses rebase over a dirty working tree, because git does', () => {
+    const disabled = item({ hasLocalChanges: true }, 'rebase').disabled;
+    expect(disabled).toMatch(/uncommitted changes/);
+    expect(disabled).toMatch(/stash/);
+  });
+
+  it('still offers the operations git runs over a dirty working tree', () => {
+    const dirty = { hasLocalChanges: true };
+    expect(item(dirty, 'cherry-pick').disabled).toBeNull();
+    expect(item(dirty, 'revert').disabled).toBeNull();
+    expect(item(dirty, 'branch').disabled).toBeNull();
+    expect(item(dirty, 'reset-hard').disabled).toBeNull();
+  });
+
+  it('reports the detached HEAD before the dirty tree — the branch is the harder block', () => {
+    expect(item({ branch: null, hasLocalChanges: true }, 'rebase').disabled).toMatch(
+      /detached/,
+    );
   });
 
   it('carries no action for rebase or reset when there is no branch to name', () => {

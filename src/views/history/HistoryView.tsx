@@ -30,6 +30,12 @@ import { avatarIdentity } from './remoteAvatar';
 import { buildGraph, type GraphRow } from './graph';
 import { CommitActions, type CommitMenuTarget } from './CommitActions';
 import { applyStashes, stashRowLabel } from './stashRows';
+import {
+  checkedOutBranch,
+  isCurrentChip,
+  isHeadRow,
+  isRedundantHeadChip,
+} from './headRef';
 import styles from './history.module.css';
 
 /** Height of one row in pixels; must match `.row` in the stylesheet. */
@@ -362,10 +368,16 @@ function CommitRow({
         ? '(no subject)'
         : commit.subject;
   const relative = formatRelativeDate(commit.authorDate, new Date());
+  // Where the checkout stands. Unlike the selection, which follows the mouse,
+  // this is a fact about the repository, so the row keeps the mark even while
+  // the user reads some other commit.
+  const current = checkedOutBranch(commit.refs);
+  const atHead = isHeadRow(commit.refs);
   return (
     <RowButton
       index={index}
       selected={selected}
+      head={atHead}
       tabbable={tabbable}
       onSelect={onSelect}
       onContextMenu={onContextMenu}
@@ -381,9 +393,15 @@ function CommitRow({
             {stash.ref}
           </span>
         )}
-        {commit.refs.map((ref) => (
-          <RefChip key={`${ref.kind}:${ref.name}`} commitRef={ref} />
-        ))}
+        {commit.refs.map((ref) =>
+          isRedundantHeadChip(ref, current) ? null : (
+            <RefChip
+              key={`${ref.kind}:${ref.name}`}
+              commitRef={ref}
+              current={isCurrentChip(ref, current)}
+            />
+          ),
+        )}
       </span>
       <span className={styles.columnGraph}>
         {graphRow !== undefined && (
@@ -431,10 +449,14 @@ function rowLabel(
   relative: string,
   stash?: StashEntry,
 ): string {
-  const refs =
-    commit.refs.length === 0
-      ? ''
-      : `, ${commit.refs.map((ref) => `${REF_LABEL[ref.kind]} ${ref.name}`).join(', ')}`;
+  const current = checkedOutBranch(commit.refs);
+  const named = commit.refs
+    .filter((ref) => !isRedundantHeadChip(ref, current))
+    .map(
+      (ref) =>
+        `${isCurrentChip(ref, current) ? 'checked out ' : ''}${REF_LABEL[ref.kind]} ${ref.name}`,
+    );
+  const refs = named.length === 0 ? '' : `, ${named.join(', ')}`;
   // The word "stash" leads, because it is the thing a listener most needs to
   // know before the actions on this row make sense.
   if (stash !== undefined) return `stash ${stash.ref}, ${subject}, ${relative}`;
@@ -444,19 +466,27 @@ function rowLabel(
 function RowButton({
   index,
   selected,
+  head = false,
   tabbable,
   onSelect,
   onContextMenu,
   label,
   children,
-}: RowProps & Partial<MenuRowProps> & { label: string; children: ReactNode }): ReactNode {
+}: RowProps &
+  Partial<MenuRowProps> & {
+    /** The row HEAD is on; tinted even when the selection is elsewhere. */
+    head?: boolean;
+    label: string;
+    children: ReactNode;
+  }): ReactNode {
   return (
     <button
       type="button"
       aria-label={label}
-      className={selected ? `${styles.row} ${styles.rowSelected}` : styles.row}
+      className={rowClass(selected, head)}
       style={{ top: index * ROW_HEIGHT, height: ROW_HEIGHT }}
       data-index={index}
+      data-head={head ? 'true' : undefined}
       aria-current={selected ? 'true' : undefined}
       tabIndex={tabbable ? 0 : -1}
       onClick={() => onSelect(index, false)}
@@ -465,6 +495,13 @@ function RowButton({
       {children}
     </button>
   );
+}
+
+function rowClass(selected: boolean, head: boolean): string {
+  const classes = [styles.row];
+  if (head) classes.push(styles.rowHead);
+  if (selected) classes.push(styles.rowSelected);
+  return classes.join(' ');
 }
 
 const REF_CHIP_CLASS: Record<RefKind, string | undefined> = {
@@ -481,14 +518,34 @@ const REF_LABEL: Record<RefKind, string> = {
   tag: 'tag',
 };
 
-function RefChip({ commitRef }: { commitRef: CommitRef }): ReactNode {
+function RefChip({
+  commitRef,
+  current = false,
+}: {
+  commitRef: CommitRef;
+  /** The ref the working tree is on: it gets the ✓ and the brighter chip. */
+  current?: boolean;
+}): ReactNode {
+  const kind = REF_CHIP_CLASS[commitRef.kind];
   return (
     <span
-      className={`${styles.ref} ${REF_CHIP_CLASS[commitRef.kind]}`}
+      className={
+        current ? `${styles.ref} ${kind} ${styles.refCurrent}` : `${styles.ref} ${kind}`
+      }
       data-ref-kind={commitRef.kind}
-      title={`${REF_LABEL[commitRef.kind]} ${commitRef.name}`}
+      data-current={current ? 'true' : undefined}
+      title={`${current ? 'checked out ' : ''}${REF_LABEL[commitRef.kind]} ${commitRef.name}`}
     >
-      {commitRef.name}
+      {current ? (
+        <>
+          <span className={styles.refCheck} aria-hidden="true">
+            ✓
+          </span>
+          <span className={styles.refName}>{commitRef.name}</span>
+        </>
+      ) : (
+        commitRef.name
+      )}
     </span>
   );
 }

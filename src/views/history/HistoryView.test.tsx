@@ -151,14 +151,94 @@ describe('HistoryView rows', () => {
 
     const row = screen.getByRole('button', { name: /Commit 1/ });
     const chips = [...row.querySelectorAll('[data-ref-kind]')];
+    // The HEAD chip is folded into the branch it points at: one ✓ chip, not
+    // two chips for the same fact.
     expect(
       chips.map((chip) => [chip.getAttribute('data-ref-kind'), chip.textContent]),
     ).toEqual([
-      ['head', 'HEAD'],
-      ['branch', 'main'],
+      ['branch', '✓main'],
       ['remote-branch', 'origin/main'],
       ['tag', 'v0.1.0'],
     ]);
+  });
+
+  it('marks the checked-out branch, and only that one', () => {
+    renderWithCommits([
+      makeCommit(1, {
+        refs: [
+          { kind: 'head', name: 'HEAD' },
+          { kind: 'branch', name: 'main' },
+          { kind: 'branch', name: 'release' },
+        ],
+      }),
+    ]);
+
+    const row = screen.getByRole('button', { name: /Commit 1/ });
+    const current = [...row.querySelectorAll('[data-current="true"]')];
+    expect(current.map((chip) => chip.textContent)).toEqual(['✓main']);
+    expect(row).toHaveAttribute('data-head', 'true');
+  });
+
+  it('keeps the HEAD chip, marked, when the checkout is detached', () => {
+    renderWithCommits([
+      makeCommit(1, {
+        refs: [
+          { kind: 'head', name: 'HEAD' },
+          { kind: 'tag', name: 'v0.1.0' },
+        ],
+      }),
+    ]);
+
+    const row = screen.getByRole('button', { name: /Commit 1/ });
+    const chips = [...row.querySelectorAll('[data-ref-kind]')];
+    expect(
+      chips.map((chip) => [chip.getAttribute('data-ref-kind'), chip.textContent]),
+    ).toEqual([
+      ['head', '✓HEAD'],
+      ['tag', 'v0.1.0'],
+    ]);
+  });
+
+  it('marks the HEAD row whether or not it is the selected one', () => {
+    renderWithCommits([
+      makeCommit(1),
+      makeCommit(2, {
+        refs: [
+          { kind: 'head', name: 'HEAD' },
+          { kind: 'branch', name: 'main' },
+        ],
+      }),
+    ]);
+
+    // Selection starts on the working tree, so nothing else is highlighted.
+    const head = screen.getByRole('button', { name: /Commit 2/ });
+    expect(head).toHaveAttribute('data-head', 'true');
+    expect(head).not.toHaveAttribute('aria-current');
+    expect(screen.getByRole('button', { name: /Commit 1/ })).not.toHaveAttribute(
+      'data-head',
+    );
+
+    fireEvent.click(head);
+    expect(screen.getByRole('button', { name: /Commit 2/ })).toHaveAttribute(
+      'data-head',
+      'true',
+    );
+  });
+
+  it('names the checked-out branch in the row label, once', () => {
+    renderWithCommits([
+      makeCommit(1, {
+        refs: [
+          { kind: 'head', name: 'HEAD' },
+          { kind: 'branch', name: 'main' },
+        ],
+      }),
+    ]);
+
+    const row = screen.getByRole('button', { name: /Commit 1/ });
+    const label = row.getAttribute('aria-label') ?? '';
+    expect(label).toContain('checked out branch main');
+    expect(label).not.toContain('HEAD');
   });
 
   it('renders no chip markup at all for a commit without refs', () => {

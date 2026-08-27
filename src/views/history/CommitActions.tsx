@@ -17,6 +17,7 @@
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { hasTrackedChanges } from '../../git/status';
 import type { Commit, StashEntry } from '../../git/types';
 import {
   checkoutCommit,
@@ -257,6 +258,7 @@ export function CommitActions({
           branch,
           busy,
           hasConflicts: status.state === 'ready' && status.value.hasConflicts,
+          hasLocalChanges: status.state === 'ready' && hasTrackedChanges(status.value),
           remotes,
         })
       : buildStashMenu(stash, {

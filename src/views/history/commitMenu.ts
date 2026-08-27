@@ -54,6 +54,13 @@ export interface CommitMenuContext {
   branch: string | null | undefined;
   busy: boolean;
   hasConflicts: boolean;
+  /**
+   * Tracked files changed in the index or the working tree — what git calls a
+   * dirty work tree. Only the operations git refuses over one consult it; see
+   * {@link hasTrackedChanges}. `false` while the status is unread, which costs
+   * nothing: every such item is already disabled for an unknown branch.
+   */
+  hasLocalChanges: boolean;
   remotes: Loadable<Remote[]>;
 }
 
@@ -84,6 +91,19 @@ function branchBlock(context: CommitMenuContext, verb: string): string | null {
     return `HEAD is detached: you are not on a branch, so there is nothing to ${verb}.`;
   }
   return null;
+}
+
+/**
+ * Why an operation that replays commits over the working tree cannot run.
+ *
+ * git refuses these outright with "cannot rebase: You have unstaged changes",
+ * and the app used to relay that as an error notice *after* the user had
+ * confirmed a rewrite of their branch. Answering before the question is asked
+ * is the same refusal, minus the false start.
+ */
+function dirtyBlock(context: CommitMenuContext, verb: string): string | null {
+  if (!context.hasLocalChanges) return null;
+  return `The working tree has uncommitted changes, and git will not ${verb} over them. Commit or stash them first.`;
 }
 
 /**
@@ -138,7 +158,7 @@ const RESET_MODES: { mode: ResetMode; label: string }[] = [
 /** The whole menu for one commit, grouped into the sections it is drawn in. */
 export function buildCommitMenu(context: CommitMenuContext): CommitMenuSection[] {
   const shared = blocked(context);
-  const rebaseBlock = branchBlock(context, 'rebase');
+  const rebaseBlock = branchBlock(context, 'rebase') ?? dirtyBlock(context, 'rebase');
   const resetBlock = branchBlock(context, 'reset');
   const branch = typeof context.branch === 'string' ? context.branch : null;
   const link = linkTarget(context);

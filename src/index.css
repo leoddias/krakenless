@@ -29,8 +29,12 @@
   --accent-soft: #123c44;
   --accent-line: #1d7d8a;
   --accent-fg: #062227;
-  --selected: #14424a;
-  --selected-hover: #185059;
+  --selected: #1a5f6d;
+  --selected-hover: #1f6f7e;
+  /* The row HEAD sits on: a standing fact about the repository, so it is a
+     tint rather than the selection's filled band — the two must be tellable
+     apart when they land on the same row. */
+  --head-row: #1b2b31;
 
   /* --- semantics ---------------------------------------------------------- */
   --added: #4ec994;
