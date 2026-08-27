@@ -231,6 +231,50 @@ describe('panel states', () => {
   });
 });
 
+describe('collapsing the sections', () => {
+  function header(name: string): HTMLElement {
+    return screen.getByRole('button', { name: new RegExp(`^${name}(,|$)`) });
+  }
+
+  it('starts with every section open', () => {
+    renderLoaded();
+    for (const name of ['Branches', 'Local', 'Remote', 'Stashes']) {
+      expect(header(name)).toHaveAttribute('aria-expanded', 'true');
+    }
+    expect(screen.getByRole('button', { name: /feature\/x/ })).toBeVisible();
+    expect(screen.getByText('WIP on main: parser')).toBeVisible();
+  });
+
+  it('hides a section\u2019s contents when its header is clicked, and brings them back', async () => {
+    renderLoaded();
+    await click(header('Branches'));
+
+    expect(header('Branches')).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('button', { name: /feature\/x/ })).not.toBeInTheDocument();
+    // The stash list is a separate section and is left alone.
+    expect(screen.getByText('WIP on main: parser')).toBeVisible();
+
+    await click(header('Branches'));
+    expect(header('Branches')).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: /feature\/x/ })).toBeVisible();
+  });
+
+  it('keeps the count on a collapsed header, so the section still says how much it holds', async () => {
+    renderLoaded();
+    await click(header('Stashes'));
+    expect(header('Stashes')).toHaveAccessibleName('Stashes, 2');
+    expect(screen.queryByText('WIP on main: parser')).not.toBeVisible();
+  });
+
+  it('collapses the local list without touching the remote one', async () => {
+    renderLoaded();
+    await click(header('Local'));
+
+    expect(screen.queryByRole('button', { name: /feature\/x/ })).not.toBeInTheDocument();
+    expect(within(region('Remote branches')).getByText('origin/main')).toBeVisible();
+  });
+});
+
 describe('branch list', () => {
   it('separates local from remote branches', () => {
     renderLoaded();
@@ -356,7 +400,12 @@ describe('branch list', () => {
       store.dispatch({ type: 'stashes/loaded', stashes: STASHES });
       store.dispatch({ type: 'busy', busy: true });
     });
-    for (const button of screen.getAllByRole('button')) {
+    // Opening and closing a section is not a git command, so those headers
+    // stay live while one runs.
+    const actions = screen
+      .getAllByRole('button')
+      .filter((button) => !button.hasAttribute('aria-expanded'));
+    for (const button of actions) {
       expect(button).toBeDisabled();
     }
     expect(screen.getByLabelText('New branch')).toBeDisabled();

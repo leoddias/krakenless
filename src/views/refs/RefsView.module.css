@@ -105,15 +105,51 @@
   border-bottom: 1px solid var(--border-subtle);
 }
 
+/* Both headers are buttons that open and close their section, so they shed the
+   browser's button chrome and keep the row look they had as plain headers. */
+.heading {
+  margin: 0;
+  font: inherit;
+  font-weight: inherit;
+}
+
 .sectionHeader {
   display: flex;
   align-items: center;
   gap: 0.4rem;
+  width: 100%;
   height: 26px;
   padding: 0 0.6rem;
   color: var(--muted);
   background: var(--surface);
+  border: 0;
   border-bottom: 1px solid var(--border-subtle);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sectionHeader:hover .sectionTitle,
+.subsectionHeader:hover .subsectionTitle,
+.sectionHeader:hover,
+.subsectionHeader:hover {
+  color: var(--fg);
+}
+
+.sectionHeader:focus-visible,
+.subsectionHeader:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Fixed box, so the row does not shift by a pixel as the chevron turns. */
+.chevron {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
 }
 
 .sectionTitle {
@@ -144,8 +180,14 @@
   display: flex;
   align-items: center;
   gap: 0.4rem;
+  width: 100%;
   padding: 0.3rem 0.6rem 0.15rem;
   color: var(--faint);
+  background: none;
+  border: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .subsectionTitle {

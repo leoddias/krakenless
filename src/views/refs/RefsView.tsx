@@ -28,7 +28,13 @@ import {
 } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
 import { isBusy } from '../../state/store';
-import { BranchIcon, RepoIcon, StashIcon } from '../shell/icons';
+import {
+  BranchIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  RepoIcon,
+  StashIcon,
+} from '../shell/icons';
 import { trapTab } from '../shell/trapTab';
 import styles from './RefsView.module.css';
 import {
@@ -474,6 +480,67 @@ const ACTION_NOUN: Record<StashActionKind, string> = {
   drop: 'Dropping stash',
 };
 
+// --- collapsible headers -----------------------------------------------------
+
+/**
+ * The header of a section, doubling as the control that opens and closes it.
+ *
+ * The count stays on the header while the section is shut, so a collapsed
+ * section still says how much is hidden inside it. The heading element wraps
+ * the button rather than the other way round: a button may only contain
+ * phrasing content, and the outline a screen reader builds from this panel has
+ * to survive the sections becoming collapsible.
+ */
+function CollapsibleHeader({
+  level,
+  title,
+  icon,
+  count,
+  open,
+  bodyId,
+  onToggle,
+}: {
+  level: 'section' | 'subsection';
+  title: string;
+  icon?: ReactNode;
+  count: number | null;
+  open: boolean;
+  bodyId: string;
+  onToggle: () => void;
+}): ReactNode {
+  const Heading = level === 'section' ? 'h2' : 'h3';
+  const isSection = level === 'section';
+
+  return (
+    <Heading className={styles.heading}>
+      <button
+        type="button"
+        className={isSection ? styles.sectionHeader : styles.subsectionHeader}
+        // The count is a badge on screen; spelled into the name it would read
+        // as "Branches3", so the name carries it as its own phrase instead.
+        aria-label={count === null ? title : `${title}, ${String(count)}`}
+        aria-expanded={open}
+        aria-controls={bodyId}
+        title={open ? `Collapse ${title}` : `Expand ${title}`}
+        onClick={onToggle}
+      >
+        <span className={styles.chevron} aria-hidden="true">
+          {open ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
+        </span>
+        {icon}
+        <span className={isSection ? styles.sectionTitle : styles.subsectionTitle}>
+          {title}
+        </span>
+        {count !== null && (
+          <span className={styles.count} aria-hidden="true">
+            {count}
+          </span>
+        )}
+      </button>
+    </Heading>
+  );
+}
+
 // --- branches ---------------------------------------------------------------
 
 function BranchesSection({
@@ -490,42 +557,50 @@ function BranchesSection({
   onAskDelete: (name: string) => void;
 }): ReactNode {
   const branches = useAppState((state) => state.branches);
+  const [open, setOpen] = useState(true);
+  const bodyId = useId();
 
   return (
     <section className={styles.section} aria-label="Branches">
-      <header className={styles.sectionHeader}>
-        <BranchIcon size={13} />
-        <h2 className={styles.sectionTitle}>Branches</h2>
-        {branches.state === 'ready' && (
-          <span className={styles.count}>{branches.value.length}</span>
+      <CollapsibleHeader
+        level="section"
+        title="Branches"
+        icon={<BranchIcon size={13} />}
+        count={branches.state === 'ready' ? branches.value.length : null}
+        open={open}
+        bodyId={bodyId}
+        onToggle={() => setOpen((was) => !was)}
+      />
+
+      <div id={bodyId} hidden={!open}>
+        <CreateBranchForm busy={busy} selectedOid={selectedOid} onCreate={onCreate} />
+
+        {branches.state === 'idle' && (
+          <Notice title="No repository open">
+            Open a repository to see its branches.
+          </Notice>
         )}
-      </header>
-
-      <CreateBranchForm busy={busy} selectedOid={selectedOid} onCreate={onCreate} />
-
-      {branches.state === 'idle' && (
-        <Notice title="No repository open">Open a repository to see its branches.</Notice>
-      )}
-      {branches.state === 'loading' && (
-        <Notice title="Loading branches…" live>
-          Reading refs from git.
-        </Notice>
-      )}
-      {branches.state === 'error' && (
-        <Notice title="Could not read the branches" tone="error">
-          {branches.message}
-          {branches.kind !== undefined ? ` (${branches.kind})` : ''}
-        </Notice>
-      )}
-      {branches.state === 'ready' && (
-        <BranchLists
-          branches={branches.value}
-          busy={busy}
-          onSwitch={onSwitch}
-          onCreate={onCreate}
-          onAskDelete={onAskDelete}
-        />
-      )}
+        {branches.state === 'loading' && (
+          <Notice title="Loading branches…" live>
+            Reading refs from git.
+          </Notice>
+        )}
+        {branches.state === 'error' && (
+          <Notice title="Could not read the branches" tone="error">
+            {branches.message}
+            {branches.kind !== undefined ? ` (${branches.kind})` : ''}
+          </Notice>
+        )}
+        {branches.state === 'ready' && (
+          <BranchLists
+            branches={branches.value}
+            busy={busy}
+            onSwitch={onSwitch}
+            onCreate={onCreate}
+            onAskDelete={onAskDelete}
+          />
+        )}
+      </div>
     </section>
   );
 }
@@ -544,61 +619,77 @@ function BranchLists({
   onAskDelete: (name: string) => void;
 }): ReactNode {
   const { local, remote } = groupBranches(branches);
+  const [localOpen, setLocalOpen] = useState(true);
+  const [remoteOpen, setRemoteOpen] = useState(true);
+  const localId = useId();
+  const remoteId = useId();
 
   return (
     <>
       <section className={styles.subsection} aria-label="Local branches">
-        <div className={styles.subsectionHeader}>
-          <h3 className={styles.subsectionTitle}>Local</h3>
-          <span className={styles.count}>{local.length}</span>
+        <CollapsibleHeader
+          level="subsection"
+          title="Local"
+          count={local.length}
+          open={localOpen}
+          bodyId={localId}
+          onToggle={() => setLocalOpen((was) => !was)}
+        />
+        <div id={localId} hidden={!localOpen}>
+          {local.length === 0 ? (
+            <p className={styles.empty}>No local branches yet.</p>
+          ) : (
+            <ul className={styles.list}>
+              {local.map((branch) => (
+                <li key={branch.name} className={styles.row}>
+                  <BranchButton branch={branch} busy={busy} onSwitch={onSwitch} />
+                  <Divergence branch={branch} />
+                  <button
+                    type="button"
+                    className={`${styles.button} ${styles.danger}`}
+                    disabled={busy || branch.current}
+                    title={
+                      branch.current
+                        ? 'The checked-out branch cannot be deleted. Switch away first.'
+                        : `Delete ${branch.name}`
+                    }
+                    onClick={() => onAskDelete(branch.name)}
+                  >
+                    Delete
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
-        {local.length === 0 ? (
-          <p className={styles.empty}>No local branches yet.</p>
-        ) : (
-          <ul className={styles.list}>
-            {local.map((branch) => (
-              <li key={branch.name} className={styles.row}>
-                <BranchButton branch={branch} busy={busy} onSwitch={onSwitch} />
-                <Divergence branch={branch} />
-                <button
-                  type="button"
-                  className={`${styles.button} ${styles.danger}`}
-                  disabled={busy || branch.current}
-                  title={
-                    branch.current
-                      ? 'The checked-out branch cannot be deleted. Switch away first.'
-                      : `Delete ${branch.name}`
-                  }
-                  onClick={() => onAskDelete(branch.name)}
-                >
-                  Delete
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
       </section>
 
       <section className={styles.subsection} aria-label="Remote branches">
-        <div className={styles.subsectionHeader}>
-          <RepoIcon size={12} />
-          <h3 className={styles.subsectionTitle}>Remote</h3>
-          <span className={styles.count}>{remote.length}</span>
+        <CollapsibleHeader
+          level="subsection"
+          title="Remote"
+          icon={<RepoIcon size={12} />}
+          count={remote.length}
+          open={remoteOpen}
+          bodyId={remoteId}
+          onToggle={() => setRemoteOpen((was) => !was)}
+        />
+        <div id={remoteId} hidden={!remoteOpen}>
+          {remote.length === 0 ? (
+            <p className={styles.empty}>No remote-tracking branches.</p>
+          ) : (
+            <ul className={styles.list}>
+              {remote.map((branch) => (
+                <RemoteRow
+                  key={branch.name}
+                  branch={branch}
+                  busy={busy}
+                  onCreate={onCreate}
+                />
+              ))}
+            </ul>
+          )}
         </div>
-        {remote.length === 0 ? (
-          <p className={styles.empty}>No remote-tracking branches.</p>
-        ) : (
-          <ul className={styles.list}>
-            {remote.map((branch) => (
-              <RemoteRow
-                key={branch.name}
-                branch={branch}
-                busy={busy}
-                onCreate={onCreate}
-              />
-            ))}
-          </ul>
-        )}
       </section>
     </>
   );
@@ -929,81 +1020,89 @@ function StashesSection({
 }): ReactNode {
   const stashes = useAppState((state) => state.stashes);
   const now = new Date();
+  const [open, setOpen] = useState(true);
+  const bodyId = useId();
 
   return (
     <section className={styles.section} aria-label="Stashes">
-      <header className={styles.sectionHeader}>
-        <StashIcon size={13} />
-        <h2 className={styles.sectionTitle}>Stashes</h2>
-        {stashes.state === 'ready' && (
-          <span className={styles.count}>{stashes.value.length}</span>
-        )}
-      </header>
+      <CollapsibleHeader
+        level="section"
+        title="Stashes"
+        icon={<StashIcon size={13} />}
+        count={stashes.state === 'ready' ? stashes.value.length : null}
+        open={open}
+        bodyId={bodyId}
+        onToggle={() => setOpen((was) => !was)}
+      />
 
-      {stashes.state === 'idle' && (
-        <Notice title="No repository open">Open a repository to see its stashes.</Notice>
-      )}
-      {stashes.state === 'loading' && (
-        <Notice title="Loading stashes…" live>
-          Reading the stash list from git.
-        </Notice>
-      )}
-      {stashes.state === 'error' && (
-        <Notice title="Could not read the stashes" tone="error">
-          {stashes.message}
-          {stashes.kind !== undefined ? ` (${stashes.kind})` : ''}
-        </Notice>
-      )}
-      {stashes.state === 'ready' &&
-        (stashes.value.length === 0 ? (
-          <p className={styles.empty}>No stashes.</p>
-        ) : (
-          <ul className={styles.list}>
-            {stashes.value.map((entry) => (
-              <li key={entry.ref} className={styles.stashRow}>
-                <div className={styles.stashText}>
-                  <span className={styles.stashMessage}>{stashLabel(entry)}</span>
-                  <span className={styles.stashMeta}>
-                    <span className={styles.stashRef}>{entry.ref}</span>
-                    {entry.branch !== undefined && <span>on {entry.branch}</span>}
-                    <time dateTime={entry.date} title={entry.date}>
-                      {formatRelativeDate(entry.date, now)}
-                    </time>
-                  </span>
-                </div>
-                <div className={styles.rowActions}>
-                  <button
-                    type="button"
-                    className={styles.button}
-                    disabled={busy}
-                    title={`Apply ${entry.ref} and keep it in the list`}
-                    onClick={() => onAsk(entry, 'apply')}
-                  >
-                    Apply
-                  </button>
-                  <button
-                    type="button"
-                    className={styles.button}
-                    disabled={busy}
-                    title={`Apply ${entry.ref} and remove it from the list`}
-                    onClick={() => onAsk(entry, 'pop')}
-                  >
-                    Pop
-                  </button>
-                  <button
-                    type="button"
-                    className={`${styles.button} ${styles.danger}`}
-                    disabled={busy}
-                    title={`Remove ${entry.ref} without applying it`}
-                    onClick={() => onAsk(entry, 'drop')}
-                  >
-                    Drop
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        ))}
+      <div id={bodyId} hidden={!open}>
+        {stashes.state === 'idle' && (
+          <Notice title="No repository open">
+            Open a repository to see its stashes.
+          </Notice>
+        )}
+        {stashes.state === 'loading' && (
+          <Notice title="Loading stashes…" live>
+            Reading the stash list from git.
+          </Notice>
+        )}
+        {stashes.state === 'error' && (
+          <Notice title="Could not read the stashes" tone="error">
+            {stashes.message}
+            {stashes.kind !== undefined ? ` (${stashes.kind})` : ''}
+          </Notice>
+        )}
+        {stashes.state === 'ready' &&
+          (stashes.value.length === 0 ? (
+            <p className={styles.empty}>No stashes.</p>
+          ) : (
+            <ul className={styles.list}>
+              {stashes.value.map((entry) => (
+                <li key={entry.ref} className={styles.stashRow}>
+                  <div className={styles.stashText}>
+                    <span className={styles.stashMessage}>{stashLabel(entry)}</span>
+                    <span className={styles.stashMeta}>
+                      <span className={styles.stashRef}>{entry.ref}</span>
+                      {entry.branch !== undefined && <span>on {entry.branch}</span>}
+                      <time dateTime={entry.date} title={entry.date}>
+                        {formatRelativeDate(entry.date, now)}
+                      </time>
+                    </span>
+                  </div>
+                  <div className={styles.rowActions}>
+                    <button
+                      type="button"
+                      className={styles.button}
+                      disabled={busy}
+                      title={`Apply ${entry.ref} and keep it in the list`}
+                      onClick={() => onAsk(entry, 'apply')}
+                    >
+                      Apply
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.button}
+                      disabled={busy}
+                      title={`Apply ${entry.ref} and remove it from the list`}
+                      onClick={() => onAsk(entry, 'pop')}
+                    >
+                      Pop
+                    </button>
+                    <button
+                      type="button"
+                      className={`${styles.button} ${styles.danger}`}
+                      disabled={busy}
+                      title={`Remove ${entry.ref} without applying it`}
+                      onClick={() => onAsk(entry, 'drop')}
+                    >
+                      Drop
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ))}
+      </div>
     </section>
   );
 }
