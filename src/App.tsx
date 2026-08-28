@@ -15,9 +15,10 @@ import {
   type LayoutConfig,
 } from './config/schema';
 import { loadConfig, saveConfig } from './config/store';
-import { closeRepo, refreshAllPanels } from './state/actions';
+import { closeRepo, openRepo, refreshAllPanels } from './state/actions';
 import { useAppState, useStore } from './state/hooks';
 import { createStore, isBusy, type AppState, type Store } from './state/store';
+import { subscribeOpenRequests } from './state/openRequests';
 import { publishConfig, registerStore } from './state/stores';
 import { StoreProvider } from './state/StoreProvider';
 import { startAutoFetch } from './state/autoFetch';
@@ -30,6 +31,7 @@ import { RefsView } from './views/refs';
 import { resolveShortcut } from './views/shell/shortcuts';
 import { RemoteBar } from './views/remote';
 import { NoticeBar } from './views/shell';
+import { CheckoutPicker } from './views/shell/CheckoutPicker';
 import {
   ChevronRightIcon,
   CloseIcon,
@@ -126,22 +128,6 @@ function useAutoFetch(root: string | null): void {
   }, [store, root, minutes]);
 }
 
-/** What the toolbar says the checkout is, in the words the status supports. */
-function branchText(status: AppState['status']): { text: string; muted: boolean } {
-  switch (status.state) {
-    case 'ready':
-      return status.value.detached
-        ? { text: 'detached HEAD', muted: true }
-        : { text: status.value.branch ?? '—', muted: false };
-    case 'loading':
-      return { text: 'reading status…', muted: true };
-    case 'error':
-      return { text: 'status unavailable', muted: true };
-    case 'idle':
-      return { text: '—', muted: true };
-  }
-}
-
 /**
  * The title bar: the way home, and one tab per open repository.
  *
@@ -216,7 +202,6 @@ function Toolbar({
 }): ReactNode {
   const store = useStore();
   const status = useAppState((state) => state.status);
-  const branch = branchText(status);
 
   return (
     <header className="toolbar">
@@ -232,14 +217,13 @@ function Toolbar({
         </span>
         <div className="toolbar__field">
           <span className="toolbar__caption">branch</span>
-          <span
-            className={
-              branch.muted ? 'toolbar__value toolbar__value--muted' : 'toolbar__value'
-            }
-            title={status.state === 'error' ? status.message : undefined}
-          >
-            {branch.text}
-          </span>
+          {/*
+            A picker rather than a label: the branch is the thing people change
+            most often, and it was the one fact in this bar that could only be
+            read. It lists the worktrees too — see `CheckoutPicker` for why the
+            two belong in one list.
+          */}
+          <CheckoutPicker />
         </div>
         {status.state === 'ready' && status.value.hasConflicts && (
           <span className="toolbar__conflicts">conflicts</span>
@@ -661,6 +645,12 @@ export default function App(): ReactNode {
     );
     setHome(makeTabStore(adopted.getState().config));
   }
+
+  // A worktree row, or the branch picker, asking for another checkout. It opens
+  // on the home store for one reason: that is the store the tab list is derived
+  // from, so a path already open lands on its existing tab instead of a second
+  // one pointed at the same directory.
+  useEffect(() => subscribeOpenRequests((path) => void openRepo(home, path)), [home]);
 
   const closeTab = useCallback((id: string) => {
     setWorkspace((current) => {

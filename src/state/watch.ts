@@ -7,6 +7,7 @@ import {
   refreshRemotes,
   refreshStashes,
   refreshStatus,
+  refreshWorktrees,
 } from './actions';
 import type { Store } from './store';
 
@@ -51,6 +52,10 @@ export async function watchRepository(store: Store, root: string): Promise<Watch
         refreshBranches(store),
         refreshRemotes(store),
         refreshStashes(store),
+        // Another checkout's uncommitted work is not under this watch at all,
+        // but its commits are: the `.git` is shared, so a commit made over
+        // there wakes us, and that is the moment its WIP row is wrong.
+        refreshWorktrees(store),
       ]);
     });
   };

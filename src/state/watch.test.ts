@@ -10,6 +10,7 @@ const refreshDiff = vi.hoisted(() => vi.fn());
 const refreshBranches = vi.hoisted(() => vi.fn());
 const refreshRemotes = vi.hoisted(() => vi.fn());
 const refreshStashes = vi.hoisted(() => vi.fn());
+const refreshWorktrees = vi.hoisted(() => vi.fn());
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
 vi.mock('@tauri-apps/api/event', () => ({ listen }));
@@ -20,6 +21,7 @@ vi.mock('./actions', () => ({
   refreshBranches,
   refreshRemotes,
   refreshStashes,
+  refreshWorktrees,
 }));
 
 /** Fires the repo-changed event as Tauri delivers it: payload = watch token. */
@@ -47,6 +49,7 @@ describe('watchRepository', () => {
     refreshBranches.mockResolvedValue(undefined);
     refreshRemotes.mockResolvedValue(undefined);
     refreshStashes.mockResolvedValue(undefined);
+    refreshWorktrees.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -74,6 +77,7 @@ describe('watchRepository', () => {
     expect(refreshBranches).toHaveBeenCalledTimes(1);
     expect(refreshRemotes).toHaveBeenCalledTimes(1);
     expect(refreshStashes).toHaveBeenCalledTimes(1);
+    expect(refreshWorktrees).toHaveBeenCalledTimes(1);
   });
 
   it('collapses a burst of events into one refresh', async () => {

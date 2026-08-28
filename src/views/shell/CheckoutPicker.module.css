@@ -1,0 +1,44 @@
+/* The toolbar's branch button: the toolbar's own type, with a chevron and a
+   hit area, rather than a control that announces itself as one. */
+.button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  max-width: 22ch;
+  padding: 0.1rem 0.3rem;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: none;
+  color: var(--fg-strong);
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+.button:hover {
+  border-color: var(--border);
+  background: var(--surface-raised);
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.button[aria-expanded='true'] {
+  border-color: var(--border);
+  background: var(--surface-raised);
+}
+
+/* The name is what gets truncated; the chevron must stay visible, or the
+   control stops looking like one exactly when the name is long. */
+.value {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Not a branch name: reading, unavailable, or a detached HEAD. */
+.muted {
+  color: var(--muted);
+}

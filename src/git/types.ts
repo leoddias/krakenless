@@ -193,6 +193,31 @@ export interface Branch {
   remote: boolean;
 }
 
+/**
+ * One worktree attached to the repository.
+ *
+ * A worktree is a second checkout sharing one `.git`: its own files, its own
+ * index, its own HEAD, the same commits and the same branches. Two of them can
+ * never have the same branch checked out, which is what makes "who has this
+ * branch open" a question the UI can answer.
+ */
+export interface Worktree {
+  /** Absolute path of the checkout, exactly as git printed it. */
+  path: string;
+  /** Commit it has checked out; `null` for a worktree with no commits yet. */
+  head: string | null;
+  /** Branch it is on, without `refs/heads/`; `null` when detached or bare. */
+  branch: string | null;
+  detached: boolean;
+  bare: boolean;
+  /** Lock reason — `''` when locked without one, `null` when not locked. */
+  locked: string | null;
+  /** Why git considers it removable, or `null`. A missing directory is one. */
+  prunable: string | null;
+  /** True for the repository's own worktree, which git lists first. */
+  main: boolean;
+}
+
 export interface Remote {
   name: string;
   fetchUrl: string;

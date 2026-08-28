@@ -17,6 +17,7 @@ import type {
   RepoStatus,
   StashEntry,
 } from '../git/types';
+import type { WorktreeSummary } from '../git/worktrees';
 
 /** Every panel is in exactly one of these states — no silent blank screens. */
 export type Loadable<T> =
@@ -92,6 +93,13 @@ export interface AppState {
    */
   remotes: Loadable<Remote[]>;
   stashes: Loadable<StashEntry[]>;
+  /**
+   * The repository's other checkouts, with what is uncommitted in each.
+   *
+   * Read with one `git status` per worktree rather than inferred: nothing the
+   * filesystem watcher hears about *this* checkout says a word about theirs.
+   */
+  worktrees: Loadable<WorktreeSummary[]>;
   /** Last thing a write operation did, shown until the user moves on. */
   notice: Notice | null;
   selection: Selection;
@@ -115,6 +123,7 @@ export function initialState(): AppState {
     branches: idle(),
     remotes: idle(),
     stashes: idle(),
+    worktrees: idle(),
     notice: null,
     selection: { commitOid: null, path: null },
     busyDepth: 0,
@@ -145,6 +154,9 @@ export type Action =
   | { type: 'stashes/loading' }
   | { type: 'stashes/loaded'; stashes: StashEntry[] }
   | { type: 'stashes/failed'; message: string; kind?: string }
+  | { type: 'worktrees/loading' }
+  | { type: 'worktrees/loaded'; worktrees: WorktreeSummary[] }
+  | { type: 'worktrees/failed'; message: string; kind?: string }
   | { type: 'notice'; notice: NoticeInput | null }
   | { type: 'selection/commit'; oid: string | null }
   | { type: 'selection/path'; path: string | null }
@@ -237,6 +249,16 @@ export function reduce(state: AppState, action: Action): AppState {
       return {
         ...state,
         stashes: { state: 'error', message: action.message, ...kindOf(action.kind) },
+      };
+
+    case 'worktrees/loading':
+      return { ...state, worktrees: reloading(state.worktrees) };
+    case 'worktrees/loaded':
+      return { ...state, worktrees: { state: 'ready', value: action.worktrees } };
+    case 'worktrees/failed':
+      return {
+        ...state,
+        worktrees: { state: 'error', message: action.message, ...kindOf(action.kind) },
       };
 
     case 'notice':

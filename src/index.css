@@ -35,6 +35,10 @@
      tint rather than the selection's filled band — the two must be tellable
      apart when they land on the same row. */
   --head-row: #1b2b31;
+  /* Another checkout's uncommitted work. Violet because it is the one thing on
+     the graph that is neither a commit nor a ref of this working tree. */
+  --worktree: #b184e8;
+  --worktree-bg: #2a1f3d;
 
   /* --- semantics ---------------------------------------------------------- */
   --added: #4ec994;
