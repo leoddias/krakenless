@@ -334,14 +334,32 @@ fn drain<R: Read + Send + 'static>(
     rx
 }
 
+/// Runs git off the UI thread.
+///
+/// `async` here is load-bearing, not decoration. Tauri runs a *synchronous*
+/// command on the main thread — the one that owns the event loop and paints the
+/// window — so a plain `fn` blocks the entire app for as long as git takes. A
+/// `status` is milliseconds and nobody notices; a `push` to a slow remote is
+/// tens of seconds during which no tab can be switched, nothing repaints, and
+/// the app looks hung while it is in fact working perfectly.
+///
+/// `spawn_blocking` and not a bare `async fn`: the body genuinely blocks — it
+/// waits on a child process and drains its pipes — and putting that on the
+/// async runtime's worker threads would starve every other task once a few
+/// tabs fetch at once. The blocking pool exists for exactly this.
 #[tauri::command]
-pub fn git_run(
+pub async fn git_run(
     repo: String,
     args: Vec<String>,
     timeout_ms: Option<u64>,
     stdin: Option<String>,
 ) -> Result<GitOutput, GitRunError> {
-    run_git(&repo, &args, timeout_ms, stdin)
+    tauri::async_runtime::spawn_blocking(move || run_git(&repo, &args, timeout_ms, stdin))
+        .await
+        // The task itself panicked, or the runtime is shutting down. Neither is
+        // a git failure, and neither may be reported as an empty success: the
+        // frontend would parse "no output" as "no changes".
+        .map_err(|error| GitRunError::IoFailed(format!("git task did not finish: {error}")))?
 }
 
 #[cfg(test)]
