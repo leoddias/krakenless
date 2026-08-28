@@ -419,3 +419,116 @@ inside that window is refused with "could not check" rather than run, because
 `ChangesView` treats stale as not knowing. Refusing to take work off disk
 against an answer known to be out of date is the safe direction, and the user
 simply confirms again.
+## ADR-0026 — Merge is git's default merge, and a drag lands only on the checkout
+
+**Decision:** The commit menu offers `Merge <ref> into <branch>` — one item per
+branch on the row, or the sha when the row carries no branch — and a branch chip
+in the graph can be dragged onto the chip of the checked-out branch to start the
+same merge. Both run `git merge --no-edit <ref>`: fast-forward when git can,
+merge commit when it cannot. No `--no-ff` variant, no `--squash`. The only drop
+target is the branch that is checked out; dropping onto any other branch does
+nothing. Every merge asks first, and the sentence the user reads is the
+confirmation reason the git layer records. A conflicted merge is reported as a
+warning notice naming what to do next, never as an error.
+**Why:** "Merge that into what I am on" is the whole of what people came for,
+and it is the one merge that needs no checkout, no stash and no explanation.
+Dropping onto a branch that is *not* checked out is GitKraken's behaviour and it
+means silently checking that branch out first — a 200px gesture that moves
+somebody's working tree, which is exactly the class of thing this app asks about
+rather than does. Defaulting to git's own merge rather than `--no-ff` keeps the
+history the same shape the command line would have produced, so nobody has to
+learn that this app decides differently. Conflicts are not failures: git stopped
+where it always stops, the repository is mid-merge, and the conflict banner is
+already on screen — calling it an error would contradict the banner beside it.
+**Consequences:** Merging into a branch you are not on is a checkout away, and
+the app does not shortcut it. `--no-ff` and `--squash` are unavailable from the
+UI; if they are wanted they are a submenu on the same item, not a setting.
+Drag-and-drop is a mouse gesture and inaccessible on its own, which is why the
+identical merge lives on the context menu — the keyboard path is the menu, and
+it must stay that way. Merge is deliberately *not* blocked over a dirty working
+tree the way rebase is: git merges happily as long as no file it must write is
+one the user edited, and refusing more than git does would refuse work git would
+have accepted. The refusal git does produce is surfaced in its own words.
+## ADR-0027 — Worktrees are shown and opened, never created or removed
+
+**Decision:** The app reads `git worktree list --porcelain`, runs one
+`git status` inside each linked worktree to count what is uncommitted there,
+and surfaces the result in two places: a WIP row on the timeline hanging off the
+commit that worktree has checked out, with the counts and an "Open Worktree"
+control, and a branch/worktree picker in the toolbar. Picking a **branch**
+checks it out here; picking a **worktree** opens that directory in a tab and
+touches this checkout not at all. A branch another worktree holds is offered
+disabled, naming the worktree that holds it. Nothing here writes:
+`git worktree add` and `git worktree remove` are not built.
+**Why:** A worktree is invisible in every other panel — the filesystem watcher
+covers this checkout and nothing else — so the only evidence one exists is a
+branch that mysteriously "cannot be checked out". The counts have to be asked
+for one status at a time because that is the only way to learn them; they are
+cheap (N worktrees, N processes) and they are what make the row worth drawing.
+`add` and `remove` are excluded on purpose: `add` writes a directory outside the
+repository, which is the boundary ADR-0022 exists to guard, and `remove` deletes
+files off disk — the most destructive thing in the whole worktree surface, and
+not something to ship in the same pass as the read-only view.
+**Consequences:** The WIP row is a *synthesised* commit — oid `worktree:<path>`,
+one parent, no author, no date of its own — inserted into the list the graph
+layout runs over, which is what makes the stub connect to its commit. Nothing
+may ask git about that oid: `HistoryView` refuses to select the row for exactly
+that reason, and `isWorktreeRow` is the check. A worktree whose HEAD is not in
+the loaded page gets no row at all, because a stub pointing at a commit that is
+not on screen draws a line into nothing; it appears as soon as that commit
+loads. "Open Worktree" goes through a module-level channel
+(`state/openRequests.ts`) rather than a prop chain, because the tab list lives in
+`App` and is the one place allowed to decide whether a path needs a new tab.
+Counts are refreshed with everything else, so a repository with many worktrees
+spawns that many `git status` processes per refresh — the same uncapped shape
+ADR-0023 already warns about for tabs.
+## ADR-0028 — Git runs off the UI thread
+
+**Decision:** `git_run` is an `async` Tauri command whose body is handed to
+`tauri::async_runtime::spawn_blocking`. It is not a plain `fn`, and it is not a
+bare `async fn` either.
+**Why:** Tauri executes a *synchronous* command on the main thread — the one
+that owns the event loop and paints the window — so every git command this app
+has ever run has blocked the entire UI for its duration. A `status` is
+milliseconds and invisible; a `push` to a slow remote is tens of seconds during
+which no tab can be switched, nothing repaints, and the app looks hung while it
+is in fact working perfectly. That is what the user hit: a push in one tab froze
+the other tabs. Background fetching (ADR-0025) made it worse by design — every
+open tab would have stalled the window on its own schedule. `spawn_blocking`
+rather than a bare `async fn` because the body genuinely blocks: it waits on a
+child process and drains its pipes, and putting that on the async runtime's
+worker threads would starve every other task as soon as a few tabs run git at
+once. The blocking pool exists for exactly this shape of work.
+**Consequences:** Several git commands can now be in flight at once, which is
+what makes tabs independent — and which git's own index and ref locks are what
+protect. Nothing in the frontend changed: `invoke('git_run', …)` returns the same
+shape. A panicking task or a runtime shutting down comes back as `IoFailed`
+rather than as an empty success, because "no output" is parsed downstream as
+"no changes". The other commands (`config_*`, `avatar_*`, `worktree_*`,
+`watch_repo`, `open_external`) are still synchronous: each is a bounded local
+operation measured in milliseconds. Any future command that waits on a network,
+a subprocess, or a large file belongs on the blocking pool for the same reason
+this one does.
+
+## ADR-0029 — A tag can be pushed, and never force-pushed
+
+**Decision:** `Push tag <name> to <remote>` appears on the commit menu once per
+tag on the row, in the same group as the items that create tags, and the
+create-tag dialog offers "Push it to <remote>" as an unticked box. Both run
+`git push --progress <remote> refs/tags/<tag>:refs/tags/<tag>`. There is no
+force variant and no way to delete a remote tag from the app.
+**Why:** `git push` does not carry tags with it. A tag made in this app existed
+on one machine and nowhere else, with nothing in the UI to say so or to fix it —
+which is how a release tag ends up living on somebody's laptop. The box is
+unticked because a tag is often made to mark something locally long before
+anyone else should see it, and because publishing one cannot be undone from
+here. Fully qualified on both sides of the refspec for the reason the branch
+push already is: a tag named `+v1.0` would otherwise be read as a force refspec.
+**Consequences:** A tag the remote already has, pointing somewhere else, is
+refused by git and the refusal is shown — moving a tag other people have already
+fetched is an edit that appears in no diff, and this app will not do it
+silently. The app cannot yet tell which tags the remote already has, so the item
+is offered for every tag; pushing one that is already there and unchanged is a
+no-op git reports as "Everything up-to-date". The remote is chosen the way the
+copy-link item chooses it — first one, `origin` sorted first — so the menu never
+offers two different answers to "which remote".
