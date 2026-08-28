@@ -20,9 +20,16 @@
   repos, history with the commit graph and ref decorations, working-tree panel
   (stage/unstage/discard/commit), diff viewer, remote bar, branches + stashes,
   conflict banner, settings, keyboard shortcuts, fs-watch refresh.
-- **Test status:** `npm test` 1295 passing (57 files), `cargo test` 66 passing;
+- **Test status:** `npm test` 1489 passing (67 files), `cargo test` 66 passing;
   oxlint, prettier and clippy clean. `cargo fmt` is *not* clean and never has
   been — see `docs/ROADMAP.md` § Backlog.
+- **Git no longer runs on the UI thread** (ADR-0028). Every git command used to
+  block the window for its duration — invisible for `status`, a frozen app for a
+  `push`. `git_run` is now async over `spawn_blocking`. Any future command that
+  waits on a network, a subprocess or a large file belongs there too.
+- **Merge, worktrees, background fetch and a branch picker** landed on
+  2026-08-27 — ADR-0025 through ADR-0029. None of them has been used by hand in
+  the running app yet; see *Next up*.
 - **`npm run build` must run before any cargo command** (ADR-0024): the frontend
   is compiled *into* the binary, and the codegen panics without `dist/`.
 - **Right-clicking a commit opens a context menu** (ROADMAP § v0.2): checkout,
@@ -49,20 +56,27 @@
 
 ## Next up (in order)
 
-1. **Right-click a commit in the running app** — the context menu (ADR-less,
-   ROADMAP § v0.2) has 1295 frontend tests behind it but has never been used by
-   hand. Worth checking the menu and its submenu near the bottom edge of the
-   list, where the clamping code runs.
-2. **Try the new editor on a real file** — it is the only code that writes to
+1. **Use the 2026-08-27 batch by hand.** All of it is tested and none of it has
+   been run: a push while switching tabs (ADR-0028 — the whole point is that the
+   window stays alive), dragging a branch chip onto the checkout to merge
+   (ADR-0026), a repository with a real `git worktree` so the WIP row and the
+   toolbar picker have something to show (ADR-0027), and pushing a tag
+   (ADR-0029). The worktree row and the picker are the two that have never been
+   *seen*, only asserted.
+2. **Right-click a commit in the running app** — the context menu (ADR-less,
+   ROADMAP § v0.2) has tests behind it but has never been used by hand. Worth
+   checking the menu and its submenu near the bottom edge of the list, where the
+   clamping code runs.
+3. **Try the new editor on a real file** — it is the only code that writes to
    your disk, and it has not been used by hand yet. Consider a
    `safety-reviewer` pass over `src-tauri/src/worktree.rs` first.
-3. **Look at the panels not yet seen running**: the diff, the working tree and
+4. **Look at the panels not yet seen running**: the diff, the working tree and
    its commit box, settings, welcome — plus dragging each edge, and the toolbar
    at narrow widths.
-4. **The dogfood gate** (`docs/ROADMAP.md` § M5): use Krakenless as the only
+5. **The dogfood gate** (`docs/ROADMAP.md` § M5): use Krakenless as the only
    Git client for two weeks. Everything else in v0.1 is done, so this is the
    next real step and it produces the list that shapes v0.2.
-5. Fix whatever the gate surfaces, in the order it hurts.
+6. Fix whatever the gate surfaces, in the order it hurts.
 6. Then the validation checkpoint in `PLAN.md`: builds to 3–5 friends, and the
    decision to invest in v0.2 or stop.
 
@@ -79,6 +93,43 @@
   until `buildPushCommand` emits a `<local>:<upstream>` refspec.
 
 ## Session log
+
+### 2026-08-27 — freshness, merging, worktrees, and git off the UI thread
+
+- **The app only ever showed what it had already been told.** Two separate
+  causes, both reported as "I have to fetch by hand". The watcher's refresh
+  re-read status, commits and diff only, so a branch or commit made in a
+  terminal never reached the branch or stash lists; it now refreshes every
+  panel. And nothing fetched, so another developer's work was invisible by
+  construction — ADR-0025 adds a silent background fetch, five minutes by
+  default, configurable to Off/1/5/15/30 in Settings. Silent means no busy flag,
+  no notice on failure, skipped while an operation runs, and never overlapping
+  itself.
+- **Merge** (ADR-0026): `Merge <ref> into <branch>` on the commit menu, one item
+  per branch on the row, plus dragging a branch chip onto the checked-out chip.
+  `git merge --no-edit`, HEAD re-read first, conflicts reported as news rather
+  than as an error. Dropping onto a branch that is *not* checked out is
+  deliberately inert: that would mean checking it out first, and a 200px gesture
+  must not move somebody's working tree.
+- **Worktrees** (ADR-0027): `git worktree list --porcelain` plus one
+  `git status` per linked worktree, drawn as a WIP row hanging off the commit
+  that worktree has checked out, and offered in a new toolbar picker alongside
+  the branches. The WIP row is a *synthesised* commit (`worktree:<path>`, one
+  parent) inserted into the list the graph runs over — nothing may ask git about
+  that oid, and `HistoryView` refuses to select the row for that reason. Read
+  only: `worktree add` writes outside the repository and `remove` deletes files,
+  neither of which belongs in the same pass as the view.
+- **Git ran on the UI thread, and always had** (ADR-0028). A sync Tauri command
+  executes on the thread that paints the window, so a push froze every tab until
+  it finished. Now async over `spawn_blocking`. Background fetching would have
+  made this much worse — every tab stalling the window on its own schedule.
+- **A tag could be created and never published** (ADR-0029): `Push tag <name> to
+  <remote>` on the menu, and an unticked "Push it to <remote>" in the create-tag
+  dialog. Never `--force`; a tag other people have fetched is not moved silently.
+- Sidebar sections (Branches / Local / Remote / Stashes) collapse, with the
+  count staying on a closed header.
+- Not done: none of this has been exercised in the running app, and `cargo fmt`
+  is still not clean.
 
 ### 2026-08-21 — a commit context menu, and the releases that had no UI in them
 
