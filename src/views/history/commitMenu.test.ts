@@ -3,6 +3,8 @@ import {
   buildCommitMenu,
   buildStashMenu,
   commitLabel,
+  mergeQuestion,
+  mergeableRefs,
   rebaseQuestion,
   resetQuestion,
   type CommitMenuContext,
@@ -69,6 +71,7 @@ describe('buildCommitMenu', () => {
       'annotated-tag',
       'cherry-pick',
       'revert',
+      'merge',
       'rebase',
       'reset',
       'reset-soft',
@@ -81,7 +84,7 @@ describe('buildCommitMenu', () => {
 
   it('groups the items the way they are drawn', () => {
     expect(buildCommitMenu(context()).map((section) => section.length)).toEqual([
-      1, 3, 4, 2,
+      1, 3, 5, 2,
     ]);
   });
 
@@ -92,6 +95,157 @@ describe('buildCommitMenu', () => {
     expect(item({ branch: 'release' }, 'reset').label).toBe(
       'Reset release to this commit',
     );
+  });
+});
+
+describe('the push-tag items', () => {
+  const tagged = (...names: string[]) => ({
+    commit: commit({
+      refs: names.map((name) => ({ kind: 'tag' as const, name })),
+    }),
+  });
+
+  it('is absent on a row with no tag: there is nothing to push', () => {
+    const ids = flatten(buildCommitMenu(context())).map((entry) => entry.id);
+    expect(ids.some((id) => id.startsWith('push-tag'))).toBe(false);
+  });
+
+  it('offers one push per tag, naming the remote it would go to', () => {
+    const items = flatten(buildCommitMenu(context(tagged('v1.0', 'v1.1'))));
+    const labels = items
+      .filter((entry) => entry.id.startsWith('push-tag'))
+      .map((entry) => entry.label);
+    expect(labels).toEqual(['Push tag v1.0 to origin', 'Push tag v1.1 to origin']);
+  });
+
+  it('carries the tag and the remote as the action', () => {
+    expect(item(tagged('v1.0'), 'push-tag-v1.0').action).toEqual({
+      kind: 'push-tag',
+      remote: 'origin',
+      tag: 'v1.0',
+    });
+  });
+
+  it('sits next to the items that create tags', () => {
+    // The tag was just made from this same group; the way to publish it should
+    // not be somewhere else on the menu.
+    const sections = buildCommitMenu(context(tagged('v1.0')));
+    const group = sections.find((section) => section.some((entry) => entry.id === 'tag'));
+    expect(group?.map((entry) => entry.id)).toEqual([
+      'branch',
+      'tag',
+      'annotated-tag',
+      'push-tag-v1.0',
+    ]);
+  });
+
+  it('says there is nowhere to push when the repository has no remote', () => {
+    const found = item(
+      { ...tagged('v1.0'), remotes: { state: 'ready', value: [] } },
+      'push-tag-v1.0',
+    );
+    expect(found.disabled).toMatch(/Nowhere to push to/);
+    expect(found.action).toBeUndefined();
+  });
+
+  it('is disabled with everything else while a command runs', () => {
+    expect(
+      item({ ...tagged('v1.0'), busy: true }, 'push-tag-v1.0').disabled,
+    ).not.toBeNull();
+  });
+});
+
+describe('the merge items', () => {
+  const withRefs = (...names: string[]) => ({
+    commit: commit({
+      refs: names.map((name) => ({
+        kind: name.startsWith('origin/')
+          ? ('remote-branch' as const)
+          : ('branch' as const),
+        name,
+      })),
+    }),
+  });
+
+  it('offers one item per branch on the row, into the checked-out branch', () => {
+    const items = flatten(
+      buildCommitMenu(context(withRefs('feature/x', 'origin/feature/x'))),
+    );
+    const labels = items
+      .filter((entry) => entry.id.startsWith('merge'))
+      .map((e) => e.label);
+    // Two refs, two merges: `feature/x` and `origin/feature/x` are different
+    // merges the moment those refs disagree, which is when somebody looks here.
+    expect(labels).toEqual([
+      'Merge feature/x into main',
+      'Merge origin/feature/x into main',
+    ]);
+  });
+
+  it('carries the ref name, not the sha, as what gets merged', () => {
+    const found = item(withRefs('feature/x'), 'merge-branch-feature/x');
+    expect(found.action).toEqual({
+      kind: 'merge',
+      branch: 'main',
+      ref: 'feature/x',
+      label: 'feature/x',
+    });
+  });
+
+  it('never offers to merge the checked-out branch into itself', () => {
+    const items = flatten(buildCommitMenu(context(withRefs('main', 'feature/x'))));
+    const labels = items
+      .filter((entry) => entry.id.startsWith('merge'))
+      .map((e) => e.label);
+    expect(labels).toEqual(['Merge feature/x into main']);
+  });
+
+  it('falls back to the commit itself when the row carries no branch', () => {
+    const found = item({}, 'merge');
+    expect(found.label).toBe('Merge this commit into main');
+    expect(found.action).toMatchObject({ kind: 'merge', ref: OID });
+  });
+
+  it('says there is nothing to merge on the row HEAD is already on', () => {
+    const found = item(
+      { commit: commit({ refs: [{ kind: 'head', name: 'HEAD' }] }) },
+      'merge',
+    );
+    expect(found.disabled).toBe('main is already here, so there is nothing to merge.');
+  });
+
+  it('cannot merge into a detached HEAD, and says which of the two it is', () => {
+    expect(item({ branch: null }, 'merge').disabled).toMatch(/HEAD is detached/);
+    expect(item({ branch: undefined }, 'merge').disabled).toMatch(/not been read yet/);
+  });
+
+  it('is disabled with everything else while a command runs', () => {
+    expect(item({ busy: true }, 'merge').disabled).not.toBeNull();
+    expect(item({ hasConflicts: true }, 'merge').disabled).not.toBeNull();
+  });
+
+  it('is offered over a dirty working tree, because git allows that merge', () => {
+    // Unlike rebase: git refuses a rebase over uncommitted changes outright,
+    // but merges happily as long as no file it must write is one you edited.
+    expect(item({ hasLocalChanges: true }, 'merge').disabled).toBeNull();
+  });
+});
+
+describe('mergeableRefs', () => {
+  it('keeps branches and drops tags, HEAD and the checkout', () => {
+    const refs = mergeableRefs(
+      commit({
+        refs: [
+          { kind: 'head', name: 'HEAD' },
+          { kind: 'branch', name: 'main' },
+          { kind: 'branch', name: 'feature/x' },
+          { kind: 'remote-branch', name: 'origin/feature/x' },
+          { kind: 'tag', name: 'v1.0' },
+        ],
+      }),
+      'main',
+    );
+    expect(refs.map((ref) => ref.name)).toEqual(['feature/x', 'origin/feature/x']);
   });
 });
 
@@ -258,6 +412,16 @@ describe('the questions', () => {
     expect(question).toContain('main');
     expect(question).toMatch(/new id/);
     expect(question).toMatch(/pulled/);
+  });
+});
+
+describe('mergeQuestion', () => {
+  it('says what is added, and that nothing is rewritten', () => {
+    const said = mergeQuestion('feature/x', 'main');
+    expect(said).toContain('Merge feature/x into main');
+    expect(said).toContain('no commit is rewritten');
+    // The other side of a merge is untouched, and people fear otherwise.
+    expect(said).toContain('Nothing on feature/x changes');
   });
 });
 

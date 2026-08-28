@@ -87,6 +87,8 @@ const WRITES = new Set([
   'revert',
   'rebase',
   'reset',
+  'push',
+  'merge',
   // The HEAD guard the git layer runs before a rebase or a reset.
   'symbolic-ref',
 ]);
@@ -220,6 +222,82 @@ describe('creating a branch here', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(invocations()).toEqual([]);
+  });
+});
+
+describe('publishing a tag', () => {
+  /** A row carrying a tag that exists only here. */
+  function withTag(): Store {
+    const store = renderHistory();
+    // Inside `act`, or the row still holds the untagged commit when the menu
+    // reads it and the item under test is never built.
+    act(() => {
+      store.dispatch({
+        type: 'commits/loaded',
+        commits: [{ ...commit(), refs: [{ kind: 'tag', name: 'v1.0' }] }],
+      });
+    });
+    return store;
+  }
+
+  it('pushes the tag by name, fully qualified', async () => {
+    withTag();
+    openMenu();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Push tag v1.0 to origin' }));
+    });
+
+    expect(ran('push', '--progress', 'origin', 'refs/tags/v1.0:refs/tags/v1.0')).toBe(
+      true,
+    );
+  });
+
+  it('says so afterwards, because nothing on screen would otherwise change', async () => {
+    const store = withTag();
+    openMenu();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Push tag v1.0 to origin' }));
+    });
+
+    expect(store.getState().notice?.message).toBe('Pushed tag v1.0 to origin.');
+  });
+
+  it('offers to push a tag as it is created, off by default', async () => {
+    renderHistory();
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Create tag here' }));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'v2.0' } });
+
+    const push = screen.getByRole('checkbox', { name: /Push it to origin/ });
+    // A tag is often made to mark something here long before anyone else
+    // should see it, and publishing one cannot be undone from this app.
+    expect(push).not.toBeChecked();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    });
+    expect(ran('tag', 'v2.0', OID)).toBe(true);
+    expect(invocations().some((args) => args[0] === 'push')).toBe(false);
+  });
+
+  it('creates and then pushes when that box is ticked', async () => {
+    renderHistory();
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Create tag here' }));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'v2.0' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: /Push it to origin/ }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    });
+
+    const writes = invocations().map((args) => args[0]);
+    // In that order: pushing a name git refused to create would report a
+    // second failure about the first one.
+    expect(writes.indexOf('tag')).toBeLessThan(writes.indexOf('push'));
+    expect(ran('push', '--progress', 'origin', 'refs/tags/v2.0:refs/tags/v2.0')).toBe(
+      true,
+    );
   });
 });
 

@@ -27,9 +27,11 @@ import { editorLaunch, launch, mergetoolLaunch } from '../config/launch';
 import {
   cherryPick,
   createTag,
+  mergeInto,
   rebaseOnto,
   resetTo,
   revertCommit,
+  type MergeOutcome,
   type ResetMode,
 } from '../git/commits';
 import {
@@ -45,11 +47,13 @@ import {
   listStashes,
   pull,
   push,
+  pushTag,
   switchBranch,
   switchNewBranch,
   type DeleteBranchOutcome,
 } from '../git/refs';
 import { getStatus } from '../git/status';
+import { listWorktreeSummaries } from '../git/worktrees';
 import { FileError, openWorktreeFile, saveWorktreeFile, type OpenFile } from '../fs/file';
 import type { FileDiff, Hunk } from '../git/types';
 import type { Store } from './store';
@@ -320,6 +324,25 @@ export async function refreshRemotes(store: Store): Promise<void> {
   }
 }
 
+/**
+ * Reads the repository's worktrees and how much is uncommitted in each.
+ *
+ * The current checkout is skipped: its uncommitted work is the whole rest of
+ * the window, and counting it again here would be a second answer to a question
+ * already on screen.
+ */
+export async function refreshWorktrees(store: Store): Promise<void> {
+  const root = currentRoot(store);
+  if (root === null) return;
+  store.dispatch({ type: 'worktrees/loading' });
+  try {
+    const worktrees = await listWorktreeSummaries(root, { skip: root });
+    store.dispatch({ type: 'worktrees/loaded', worktrees });
+  } catch (error) {
+    store.dispatch({ type: 'worktrees/failed', ...describe(error) });
+  }
+}
+
 export async function refreshStashes(store: Store): Promise<void> {
   const root = currentRoot(store);
   if (root === null) return;
@@ -344,6 +367,7 @@ async function refreshAll(store: Store): Promise<void> {
     refreshBranches(store),
     refreshRemotes(store),
     refreshStashes(store),
+    refreshWorktrees(store),
   ]);
 }
 
@@ -476,6 +500,30 @@ export async function createTagAt(
   return operate(store, () => createTag(root, name, oid, options));
 }
 
+/**
+ * Publishes a tag that so far exists only here.
+ *
+ * Separate from creating it, and offered separately, because the two are
+ * genuinely different decisions: a tag is often made to mark something locally
+ * long before anyone else should see it.
+ */
+export async function pushTagTo(
+  store: Store,
+  remote: string,
+  tag: string,
+): Promise<boolean> {
+  const root = currentRoot(store);
+  if (root === null) return false;
+  const pushed = await operate(store, () => pushTag(root, remote, tag));
+  if (pushed) {
+    store.dispatch({
+      type: 'notice',
+      notice: { tone: 'info', message: `Pushed tag ${tag} to ${remote}.` },
+    });
+  }
+  return pushed;
+}
+
 /** Replays `oid` on top of HEAD as a new commit. */
 export async function cherryPickCommit(store: Store, oid: string): Promise<boolean> {
   const root = currentRoot(store);
@@ -508,6 +556,47 @@ export async function rebaseBranchOnto(
   return operate(store, () =>
     rebaseOnto(root, branch, oid, userConfirmed(confirmationReason)),
   );
+}
+
+/**
+ * Merges `ref` into `branch`.
+ *
+ * `label` is what the user called the thing being merged — a branch name, or a
+ * short sha for a commit that carries no ref — and it is only ever used in the
+ * sentence that reports what happened.
+ *
+ * A conflicted merge is reported as news, not as an error: git stopped where it
+ * always stops, the repository is mid-merge, and the conflict panel that
+ * appears underneath this notice is where the job gets finished. Calling that a
+ * failure would contradict the banner sitting next to it.
+ */
+export async function mergeRefInto(
+  store: Store,
+  branch: string,
+  ref: string,
+  label: string,
+  confirmationReason: string,
+): Promise<boolean> {
+  const root = currentRoot(store);
+  if (root === null) return false;
+
+  let outcome: MergeOutcome | null = null;
+  const ran = await operate(store, async () => {
+    outcome = await mergeInto(root, branch, ref, userConfirmed(confirmationReason));
+  });
+  if (!ran) return false;
+
+  store.dispatch({
+    type: 'notice',
+    notice:
+      outcome === 'conflicted'
+        ? {
+            tone: 'warning',
+            message: `Merging ${label} into ${branch} stopped on conflicts. Resolve them, then commit the merge — or abort it from the conflict banner.`,
+          }
+        : { tone: 'info', message: `Merged ${label} into ${branch}.` },
+  });
+  return true;
 }
 
 /** Moves `branch` to `oid`. Same guard, same reason. */

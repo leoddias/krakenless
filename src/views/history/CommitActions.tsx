@@ -24,6 +24,7 @@ import {
   cherryPickCommit,
   createBranchAt,
   createTagAt,
+  pushTagTo,
   rebaseBranchOnto,
   removeStash,
   resetBranchTo,
@@ -51,6 +52,7 @@ import {
   type CommitAction,
   type CommitMenuItem,
 } from './commitMenu';
+import { mergeDialog } from './mergeDialog';
 import styles from './CommitActions.module.css';
 
 /** Where the menu was opened, and on what. */
@@ -78,11 +80,23 @@ interface NameDialog {
   needsMessage: boolean;
   /** Present for a branch, which may or may not be switched to. */
   offersCheckout: boolean;
-  run: (values: { name: string; message: string; checkout: boolean }) => Promise<unknown>;
+  /**
+   * The remote a new tag can be published to as it is created, or `null` when
+   * there is none to offer. A tag that is not pushed exists on this machine
+   * only, and the moment somebody wants it pushed is usually the moment they
+   * made it — but not always, which is why this is a choice and not a rule.
+   */
+  pushTo: string | null;
+  run: (values: {
+    name: string;
+    message: string;
+    checkout: boolean;
+    push: boolean;
+  }) => Promise<unknown>;
 }
 
 /** A question that only needs a yes. */
-interface ConfirmDialog {
+export interface ConfirmDialog {
   kind: 'confirm';
   title: string;
   /** The consequence, in the words that become the confirmation reason. */
@@ -117,6 +131,16 @@ export function CommitActions({
         ? null
         : (status.value.branch ?? undefined)
       : undefined;
+
+  // The remote a new tag would be published to — the same one the rest of this
+  // menu names, sorted with `origin` first, so the menu cannot offer two
+  // different answers to "which remote".
+  const tagRemote =
+    remotes.state === 'ready'
+      ? ([...remotes.value].sort(
+          (a, b) => Number(b.name === 'origin') - Number(a.name === 'origin'),
+        )[0]?.name ?? null)
+      : null;
 
   const notify = (tone: 'info' | 'warning', message: string): void => {
     store.dispatch({ type: 'notice', notice: { tone, message } });
@@ -154,6 +178,7 @@ export function CommitActions({
           noun: BRANCH_NOUN,
           needsMessage: false,
           offersCheckout: true,
+          pushTo: null,
           run: ({ name, checkout }) =>
             createBranchAt(store, name, commit.oid, { checkout }),
         });
@@ -165,9 +190,28 @@ export function CommitActions({
           noun: TAG_NOUN,
           needsMessage: action.annotated,
           offersCheckout: false,
-          run: ({ name, message }) =>
-            createTagAt(store, name, commit.oid, action.annotated ? { message } : {}),
+          pushTo: tagRemote,
+          run: async ({ name, message, push }) => {
+            const created = await createTagAt(
+              store,
+              name,
+              commit.oid,
+              action.annotated ? { message } : {},
+            );
+            // Only if the tag exists: pushing a name git refused to create
+            // would report a second failure about the first one.
+            if (created && push && tagRemote !== null) {
+              await pushTagTo(store, tagRemote, name);
+            }
+            return created;
+          },
         });
+        return;
+      case 'push-tag':
+        void pushTagTo(store, action.remote, action.tag);
+        return;
+      case 'merge':
+        setDialog(mergeDialog(store, action.branch, action.ref, action.label));
         return;
       case 'rebase':
         setDialog({
@@ -307,7 +351,7 @@ export function CommitActions({
   );
 }
 
-function DialogHost({
+export function DialogHost({
   dialog,
   onClose,
   busy,
@@ -429,6 +473,9 @@ function NameBody({
   const [name, setName] = useState('');
   const [message, setMessage] = useState('');
   const [checkout, setCheckout] = useState(true);
+  // Off by default: a tag is often made to mark something here long before
+  // anyone else should see it, and publishing one is not undoable from this app.
+  const [push, setPush] = useState(false);
   const [touched, setTouched] = useState(false);
   const nameRef = useRef<HTMLInputElement | null>(null);
 
@@ -446,7 +493,7 @@ function NameBody({
   const submit = (): void => {
     setTouched(true);
     if (error !== null || locked) return;
-    onRun(dialog.run({ name, message, checkout }));
+    onRun(dialog.run({ name, message, checkout, push }));
   };
 
   return (
@@ -494,6 +541,18 @@ function NameBody({
             onChange={(event) => setCheckout(event.target.checked)}
           />
           <span>Switch to the new branch</span>
+        </label>
+      )}
+
+      {dialog.pushTo !== null && (
+        <label className={styles.checkbox}>
+          <input
+            type="checkbox"
+            checked={push}
+            disabled={locked}
+            onChange={(event) => setPush(event.target.checked)}
+          />
+          <span>Push it to {dialog.pushTo}</span>
         </label>
       )}
 

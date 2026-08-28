@@ -59,6 +59,29 @@ export function buildRevertCommand(rev: string): GitCommand {
 }
 
 /**
+ * Merges `rev` into the branch that is checked out.
+ *
+ * `--no-edit` is load-bearing for the same reason it is on revert: a merge that
+ * cannot fast-forward writes a commit, and without this git opens the user's
+ * editor for its message in a process that has no terminal to host one.
+ *
+ * Not marked destructive, and that is not an oversight. A merge only ever adds
+ * to the branch — the commits that were there stay reachable, `ORIG_HEAD` names
+ * where it was, and a merge that stops on a conflict is undone by
+ * `git merge --abort`, which *is* gated. Git also refuses outright rather than
+ * overwriting a file the user has edited. The confirmation this operation gets
+ * is the UI's, not the runner's.
+ */
+export function buildMergeCommand(rev: string): GitCommand {
+  return {
+    args: ['merge', '--no-edit', assertRevision(rev)],
+    // A merge across a long-diverged branch touches every file it has to
+    // rewrite; the default sub-second budget is not for this.
+    timeoutMs: 120_000,
+  };
+}
+
+/**
  * Replays the current branch onto `onto`.
  *
  * Rewrites history — every replayed commit gets a new oid — so it is

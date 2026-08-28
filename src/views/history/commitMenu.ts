@@ -14,7 +14,7 @@
 
 import type { ResetMode } from '../../git/commits';
 import { commitWebUrl } from '../../git/remoteWeb';
-import type { Commit, Remote, StashEntry } from '../../git/types';
+import type { Commit, CommitRef, Remote, StashEntry } from '../../git/types';
 import type { Loadable } from '../../state/store';
 
 /** What a menu item does when it is chosen. */
@@ -24,6 +24,8 @@ export type CommitAction =
   | { kind: 'tag'; annotated: boolean }
   | { kind: 'cherry-pick' }
   | { kind: 'revert' }
+  | { kind: 'merge'; branch: string; ref: string; label: string }
+  | { kind: 'push-tag'; remote: string; tag: string }
   | { kind: 'rebase'; branch: string }
   | { kind: 'reset'; branch: string; mode: ResetMode }
   | { kind: 'copy'; text: string; what: string }
@@ -155,6 +157,120 @@ const RESET_MODES: { mode: ResetMode; label: string }[] = [
   { mode: 'hard', label: 'Hard — discard the changes' },
 ];
 
+/**
+ * What this row offers to merge, in the order it is offered.
+ *
+ * A row is a commit, and a commit can carry several names. Each branch on it is
+ * a separate thing to merge and gets its own item, because "merge this row" is
+ * not a sentence git can act on — `git merge feature/x` and
+ * `git merge origin/feature/x` are different merges the moment those two refs
+ * disagree, which is exactly when somebody reaches for this.
+ *
+ * The checked-out branch is left out: merging a branch into itself is the one
+ * merge that can never mean anything. A row with no branch at all is still
+ * mergeable by sha, which is what {@link buildCommitMenu} falls back to.
+ */
+export function mergeableRefs(commit: Commit, branch: string | null): CommitRef[] {
+  return commit.refs.filter(
+    (ref) =>
+      (ref.kind === 'branch' || ref.kind === 'remote-branch') && ref.name !== branch,
+  );
+}
+
+/**
+ * The sentence the user agrees to before a merge runs, and the reason string
+ * the git layer records. Shared with the drag-and-drop path in `HistoryView`,
+ * so the two ways to start a merge cannot describe it differently.
+ */
+export function mergeQuestion(label: string, branch: string): string {
+  return `Merge ${label} into ${branch}. Commits from ${label} that ${branch} does not have are added to it; if the two have both moved on, git writes a merge commit. Nothing on ${label} changes, and no commit is rewritten.`;
+}
+
+/** The merge items for a row: one per branch on it, or the commit itself. */
+function mergeItems(context: CommitMenuContext): CommitMenuItem[] {
+  const block = branchBlock(context, 'merge into');
+  const branch = typeof context.branch === 'string' ? context.branch : null;
+  const refs = mergeableRefs(context.commit, branch);
+  const target = branch ?? 'this branch';
+
+  if (refs.length === 0) {
+    // Nothing named on this row, so the sha is the only handle there is. On the
+    // row HEAD sits on there is nothing to merge either way, and saying so
+    // beats an item that would answer "Already up to date".
+    const here = isOnHeadRow(context.commit)
+      ? `${target} is already here, so there is nothing to merge.`
+      : null;
+    return [
+      {
+        id: 'merge',
+        label: `Merge this commit into ${target}`,
+        disabled: block ?? here,
+        ...(branch === null
+          ? {}
+          : {
+              action: {
+                kind: 'merge' as const,
+                branch,
+                ref: context.commit.oid,
+                label: commitLabel(context.commit),
+              },
+            }),
+      },
+    ];
+  }
+
+  return refs.map((ref) => ({
+    id: `merge-${ref.kind}-${ref.name}`,
+    label: `Merge ${ref.name} into ${target}`,
+    disabled: block,
+    ...(branch === null
+      ? {}
+      : {
+          action: {
+            kind: 'merge' as const,
+            branch,
+            ref: ref.name,
+            label: ref.name,
+          },
+        }),
+  }));
+}
+
+/** True when this row is where HEAD is, ref or not. */
+function isOnHeadRow(commit: Commit): boolean {
+  return commit.refs.some((ref) => ref.kind === 'head');
+}
+
+/**
+ * The tags on this row, each offered to the remote it would go to.
+ *
+ * `git push` does not carry tags with it, so a tag made here exists nowhere
+ * else until somebody pushes it by name — which is how a release tag ends up
+ * living on one laptop. Every tag on the row gets an item; whether the remote
+ * already has it is not something the app knows without asking, and offering
+ * the push is cheaper than pretending to know. Git refuses a tag that is
+ * already there and unchanged with "Everything up-to-date".
+ */
+function pushTagItems(context: CommitMenuContext): CommitMenuItem[] {
+  const tags = context.commit.refs.filter((ref) => ref.kind === 'tag');
+  if (tags.length === 0) return [];
+
+  const link = linkTarget(context);
+  const shared = blocked(context);
+  const reason =
+    shared ?? (link.kind === 'none' ? `Nowhere to push to. ${link.reason}` : null);
+  const remote = link.kind === 'remote' ? link.remote : null;
+
+  return tags.map((tag) => ({
+    id: `push-tag-${tag.name}`,
+    label: remote === null ? `Push tag ${tag.name}` : `Push tag ${tag.name} to ${remote}`,
+    disabled: reason,
+    ...(remote === null || reason !== null
+      ? {}
+      : { action: { kind: 'push-tag' as const, remote, tag: tag.name } }),
+  }));
+}
+
 /** The whole menu for one commit, grouped into the sections it is drawn in. */
 export function buildCommitMenu(context: CommitMenuContext): CommitMenuSection[] {
   const shared = blocked(context);
@@ -191,6 +307,7 @@ export function buildCommitMenu(context: CommitMenuContext): CommitMenuSection[]
         disabled: shared,
         action: { kind: 'tag', annotated: true },
       },
+      ...pushTagItems(context),
     ],
     [
       {
@@ -205,6 +322,7 @@ export function buildCommitMenu(context: CommitMenuContext): CommitMenuSection[]
         disabled: shared,
         action: { kind: 'revert' },
       },
+      ...mergeItems(context),
       {
         id: 'rebase',
         label: `Rebase ${branch ?? 'this branch'} onto this commit`,

@@ -14,6 +14,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type DragEvent as ReactDragEvent,
   type KeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -22,14 +23,23 @@ import {
 import type { Commit, CommitRef, RefKind, StashEntry } from '../../git/types';
 import { selectCommit } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
-import type { Loadable } from '../../state/store';
+import { isBusy, type Loadable } from '../../state/store';
 import { formatAbsoluteDate, formatRelativeDate } from './relativeTime';
 import { GraphCell } from './GraphCell';
 import { useAuthorPictures } from './avatarCache';
 import { avatarIdentity } from './remoteAvatar';
 import { buildGraph, type GraphRow } from './graph';
-import { CommitActions, type CommitMenuTarget } from './CommitActions';
+import { CommitActions, DialogHost, type CommitMenuTarget } from './CommitActions';
+import { mergeDialog } from './mergeDialog';
 import { applyStashes, stashRowLabel } from './stashRows';
+import {
+  applyWorktrees,
+  isWorktreeRow,
+  worktreeChangeSummary,
+  worktreeName,
+} from './worktreeRows';
+import type { WorktreeSummary } from '../../git/worktrees';
+import { requestOpenRepository } from '../../state/openRequests';
 import {
   checkedOutBranch,
   isCurrentChip,
@@ -117,11 +127,33 @@ function CommitList({ commits: loaded }: { commits: Commit[] }): ReactNode {
   const focusSelected = useRef(false);
   /** The commit whose context menu is open, and where it was opened. */
   const [menuTarget, setMenuTarget] = useState<CommitMenuTarget | null>(null);
-
-  const { commits, stashes } = useMemo(
-    () => applyStashes(loaded, stashList),
-    [loaded, stashList],
+  /**
+   * The branch being dragged, or `null`.
+   *
+   * The name is kept here rather than read back out of the drop event: the
+   * `dataTransfer` payload exists to make the browser start a drag at all, and
+   * a chip dragged in from another window would arrive with text this list has
+   * no business acting on.
+   */
+  const [dragged, setDragged] = useState<string | null>(null);
+  /** The merge a drop asked for, waiting on its question. */
+  const [dropMerge, setDropMerge] = useState<{ branch: string; ref: string } | null>(
+    null,
   );
+  const busy = useAppState(isBusy);
+
+  const worktreeList = useAppState((state) => state.worktrees);
+  const { commits, stashes, worktreeRows } = useMemo(() => {
+    const stashed = applyStashes(loaded, stashList);
+    // Worktrees last: they hang off commits, and the stash pass is what decides
+    // which commits are on the list at all.
+    const withWorktrees = applyWorktrees(stashed.commits, worktreeList);
+    return {
+      commits: withWorktrees.commits,
+      stashes: stashed.stashes,
+      worktreeRows: withWorktrees.worktreeRows,
+    };
+  }, [loaded, stashList, worktreeList]);
 
   // Row 0 is the working tree; commit `i` lives at row `i + 1`.
   const total = commits.length + 1;
@@ -165,6 +197,11 @@ function CommitList({ commits: loaded }: { commits: Commit[] }): ReactNode {
           if (viewportRef.current !== null) viewportRef.current.scrollTop = next;
         }
       }
+      // A worktree's WIP row stands for uncommitted work in another checkout:
+      // there is no object to show a diff of, and asking git for one would be
+      // asking about a sha that does not exist. The row keeps focus — it is
+      // still somewhere the keyboard can be — and the selection stays put.
+      if (commit !== null && commit !== undefined && isWorktreeRow(commit.oid)) return;
       void selectCommit(
         store,
         commit === null || commit === undefined ? null : commit.oid,
@@ -246,6 +283,62 @@ function CommitList({ commits: loaded }: { commits: Commit[] }): ReactNode {
   );
   const pictures = useAuthorPictures(visibleEmails, remoteAvatars, AVATAR_PIXELS);
 
+  /**
+   * Dragging a branch chip onto the checked-out one merges it in.
+   *
+   * Delegated to the list rather than wired per chip: the rows are windowed and
+   * re-created as the user scrolls, and a drag that outlived its own chip would
+   * be a listener on a node that no longer exists. Only two kinds of element
+   * take part — a branch chip that is not the checkout (`draggable`), and the
+   * checkout's own chip (`data-drop-target`) — so both ends of the gesture are
+   * a `closest()` away.
+   *
+   * Keyboard users are not left out and never depended on this: the same merge
+   * is on the commit's context menu, which is reachable with the keyboard.
+   */
+  const chipUnder = (
+    event: ReactDragEvent<HTMLElement>,
+    selector: string,
+  ): string | null => {
+    const target = event.target;
+    if (!(target instanceof Element)) return null;
+    return target.closest(selector)?.getAttribute('data-ref-name') ?? null;
+  };
+
+  const onDragStart = (event: ReactDragEvent<HTMLElement>): void => {
+    const name = chipUnder(event, '[data-ref-name][draggable="true"]');
+    if (name === null) return;
+    setDragged(name);
+    // Firefox refuses to start a drag with an empty payload, and a plain-text
+    // branch name is a reasonable thing to drop into an editor besides.
+    event.dataTransfer.setData('text/plain', name);
+    event.dataTransfer.effectAllowed = 'move';
+  };
+
+  const dropTargetFor = (event: ReactDragEvent<HTMLElement>): string | null => {
+    if (dragged === null) return null;
+    const onto = chipUnder(event, '[data-drop-target="true"]');
+    // Dropping a branch on itself is the one merge that can never mean
+    // anything, and the chip is its own nearest target while being dragged.
+    return onto === null || onto === dragged ? null : onto;
+  };
+
+  const onDragOver = (event: ReactDragEvent<HTMLElement>): void => {
+    if (dropTargetFor(event) === null) return;
+    // Without this the browser treats the chip as a place a drop cannot land.
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+  };
+
+  const onDrop = (event: ReactDragEvent<HTMLElement>): void => {
+    const onto = dropTargetFor(event);
+    if (onto === null) return;
+    event.preventDefault();
+    const ref = dragged;
+    setDragged(null);
+    if (ref !== null) setDropMerge({ branch: onto, ref });
+  };
+
   const rows: ReactNode[] = [];
   for (let index = first; index < last; index += 1) {
     const shared = {
@@ -260,6 +353,19 @@ function CommitList({ commits: loaded }: { commits: Commit[] }): ReactNode {
     }
     const commit = commits[index - 1];
     if (commit === undefined) continue;
+    const worktree = worktreeRows.get(commit.oid);
+    if (worktree !== undefined) {
+      rows.push(
+        <WorktreeRow
+          key={commit.oid}
+          worktree={worktree}
+          graphRow={graph.rows[index - 1]}
+          laneCount={graph.laneCount}
+          {...shared}
+        />,
+      );
+      continue;
+    }
     const identity = avatarIdentity(commit.authorEmail);
     rows.push(
       <CommitRow
@@ -283,6 +389,13 @@ function CommitList({ commits: loaded }: { commits: Commit[] }): ReactNode {
       aria-label="Commits"
       onScroll={onScroll}
       onKeyDown={onKeyDown}
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+      onDragEnd={() => setDragged(null)}
+      // Drives the affordance: while a branch is in the air, the chip it can
+      // be dropped on says so. One target, so one attribute is enough.
+      data-merge-drag={dragged === null ? undefined : 'true'}
     >
       <div className={styles.spacer} style={{ height: total * ROW_HEIGHT }}>
         {rows}
@@ -292,6 +405,13 @@ function CommitList({ commits: loaded }: { commits: Commit[] }): ReactNode {
       )}
       {menuTarget !== null && (
         <CommitActions target={menuTarget} onDismiss={() => setMenuTarget(null)} />
+      )}
+      {dropMerge !== null && (
+        <DialogHost
+          dialog={mergeDialog(store, dropMerge.branch, dropMerge.ref, dropMerge.ref)}
+          busy={busy}
+          onClose={() => setDropMerge(null)}
+        />
       )}
     </div>
   );
@@ -518,6 +638,108 @@ const REF_LABEL: Record<RefKind, string> = {
   tag: 'tag',
 };
 
+/**
+ * A row for another checkout's uncommitted work.
+ *
+ * It is not a commit and does not pretend to be one: no author, no sha, no
+ * date. What it says is who has this commit checked out somewhere else, how
+ * much is uncommitted over there, and the way to go and look.
+ */
+function WorktreeRow({
+  worktree,
+  graphRow,
+  laneCount,
+  index,
+  selected,
+  tabbable,
+  onSelect,
+}: {
+  worktree: WorktreeSummary;
+  graphRow: GraphRow | undefined;
+  laneCount: number;
+} & RowProps): ReactNode {
+  const changes = worktreeChangeSummary(worktree);
+  const name = worktreeName(worktree);
+  const where = worktree.branch ?? 'a detached HEAD';
+
+  return (
+    <RowButton
+      index={index}
+      selected={selected}
+      tabbable={tabbable}
+      onSelect={onSelect}
+      label={`Worktree ${name}, on ${where}${changes === null ? '' : `, ${changes}`}`}
+    >
+      <span className={styles.columnRefs}>
+        <span className={`${styles.ref} ${styles.refWorktree}`} title={worktree.path}>
+          {name}
+        </span>
+      </span>
+      <span className={styles.columnGraph}>
+        {graphRow !== undefined && (
+          <GraphCell
+            row={graphRow}
+            laneCount={laneCount}
+            rowHeight={ROW_HEIGHT}
+            author={{ name: '', email: '' }}
+            avatarUrl={null}
+            stash
+          />
+        )}
+      </span>
+      <span className={`${styles.columnSubject} ${styles.worktreeSubject}`}>
+        <span className={styles.worktreeWip}>WIP</span>
+        {changes === null ? (
+          <span className={styles.worktreeCount} title={worktree.path}>
+            could not be read
+          </span>
+        ) : (
+          <>
+            {worktree.changed !== null && worktree.changed > 0 && (
+              <span className={styles.worktreeCount}>{worktree.changed} changed</span>
+            )}
+            {worktree.untracked !== null && worktree.untracked > 0 && (
+              <span className={styles.worktreeAdded}>+{worktree.untracked} new</span>
+            )}
+            {worktree.changed === 0 && worktree.untracked === 0 && (
+              <span className={styles.worktreeCount}>clean</span>
+            )}
+          </>
+        )}
+        {worktree.locked !== null && (
+          <span
+            className={styles.worktreeCount}
+            title={
+              worktree.locked.length === 0
+                ? 'This worktree is locked.'
+                : `Locked: ${worktree.locked}`
+            }
+          >
+            locked
+          </span>
+        )}
+        <span
+          className={styles.worktreeOpen}
+          role="button"
+          tabIndex={-1}
+          title={`Open ${worktree.path} in a tab`}
+          onClick={(event) => {
+            // The row underneath is a button too; without this the click is
+            // also a row selection.
+            event.stopPropagation();
+            requestOpenRepository(worktree.path);
+          }}
+        >
+          Open Worktree
+        </span>
+      </span>
+      <span className={styles.columnAuthor} />
+      <span className={styles.columnOid} />
+      <span className={styles.columnDate} />
+    </RowButton>
+  );
+}
+
 function RefChip({
   commitRef,
   current = false,
@@ -527,14 +749,27 @@ function RefChip({
   current?: boolean;
 }): ReactNode {
   const kind = REF_CHIP_CLASS[commitRef.kind];
+  const isBranch = commitRef.kind === 'branch' || commitRef.kind === 'remote-branch';
+  // A branch you are not on can be picked up; the branch you *are* on is where
+  // it can be put down. Tags and HEAD take no part: neither end of a merge is
+  // a thing you can name with them.
+  const draggable = isBranch && !current;
+  const dropTarget = commitRef.kind === 'branch' && current;
   return (
     <span
       className={
         current ? `${styles.ref} ${kind} ${styles.refCurrent}` : `${styles.ref} ${kind}`
       }
       data-ref-kind={commitRef.kind}
+      data-ref-name={commitRef.name}
       data-current={current ? 'true' : undefined}
-      title={`${current ? 'checked out ' : ''}${REF_LABEL[commitRef.kind]} ${commitRef.name}`}
+      data-drop-target={dropTarget ? 'true' : undefined}
+      draggable={draggable ? true : undefined}
+      title={
+        draggable
+          ? `${REF_LABEL[commitRef.kind]} ${commitRef.name} — drag onto the checked-out branch to merge it in`
+          : `${current ? 'checked out ' : ''}${REF_LABEL[commitRef.kind]} ${commitRef.name}`
+      }
     >
       {current ? (
         <>

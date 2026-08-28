@@ -284,6 +284,24 @@
 /* The chip for the ref the working tree is actually on — the branch HEAD
    points at, or HEAD itself when detached. Brightened and ✓-marked, because
    "where am I" is the first question the column is asked. */
+/* --- dragging a branch onto the checkout ---------------------------------- */
+
+/* A branch you are not on can be picked up. The cursor is the only hint the
+   chip gives at rest: an outline on every draggable chip would turn a quiet
+   column into a field of boxes. */
+.ref[draggable='true'] {
+  cursor: grab;
+}
+
+/* Once a branch is in the air, the one chip it can be dropped on says so.
+   `[data-merge-drag]` is set on the list while a drag is running, so the
+   affordance appears with the gesture and vanishes with it. */
+[data-merge-drag='true'] .ref[data-drop-target='true'] {
+  border-style: dashed;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
 .refCurrent {
   /* The ✓ must not eat the name. In a crowded column every chip shrinks to
      its floor, and a floor of 4ch spent on the mark alone would leave a chip
@@ -402,4 +420,56 @@
 
 .stashSubject {
   color: var(--ref-tag-fg);
+}
+
+/* --- another checkout's uncommitted work ---------------------------------- */
+
+/* The worktree's own chip: dashed, like the stash, because neither is a commit
+   anybody can check out — both are states of a working tree. */
+.refWorktree {
+  border-style: dashed;
+  border-color: var(--worktree);
+  background: var(--worktree-bg);
+  color: var(--worktree);
+}
+
+.worktreeSubject {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--worktree);
+}
+
+/* "WIP" is the row's noun; the counts qualify it, so they are quieter. */
+.worktreeWip {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.worktreeCount {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.worktreeAdded {
+  color: var(--added);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A button drawn inside the row button. It cannot *be* a button — nesting one
+   inside another is invalid, and the row has to stay one focus stop — so it is
+   a click target with the row's own keyboard path leading elsewhere: Open
+   Worktree is also on the row's context menu. */
+.worktreeOpen {
+  padding: 0 0.4rem;
+  border: 1px solid var(--worktree);
+  border-radius: 3px;
+  color: var(--worktree);
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.worktreeOpen:hover {
+  background: var(--worktree-bg);
 }

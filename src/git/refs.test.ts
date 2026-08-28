@@ -1,8 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { deleteBranch, listStashes, pull, push } from './refs';
+import { deleteBranch, listStashes, pull, push, pushTag } from './refs';
 import { userConfirmed } from './confirm';
 import { GitError } from './errors';
-import { buildFetchCommand, buildPullCommand, buildPushCommand } from './commands/remote';
+import {
+  buildFetchCommand,
+  buildPullCommand,
+  buildPushCommand,
+  buildPushTagCommand,
+} from './commands/remote';
 
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
@@ -48,6 +53,27 @@ describe('network builders', () => {
   it('gives network commands a longer timeout than local ones', () => {
     expect(buildFetchCommand().timeoutMs).toBeGreaterThan(60_000);
     expect(buildPullCommand().timeoutMs).toBeGreaterThan(60_000);
+  });
+
+  it('pushes a tag by its fully qualified name, and never forces it', () => {
+    // `git push` carries no tags with it, so a tag lives here only until it is
+    // pushed by name. Qualified on both sides for the reason the branch push
+    // is: a tag named `+v1.0` would otherwise be read as a force refspec.
+    const command = buildPushTagCommand('origin', 'v1.0');
+    expect(command.args).toEqual([
+      'push',
+      '--progress',
+      'origin',
+      'refs/tags/v1.0:refs/tags/v1.0',
+    ]);
+    expect(command.args).not.toContain('--force');
+    expect(command.destructive).toBeFalsy();
+    expect(command.timeoutMs).toBeGreaterThan(60_000);
+  });
+
+  it('validates the tag and remote a push names', () => {
+    expect(() => buildPushTagCommand('origin', '+v1.0')).toThrow(GitError);
+    expect(() => buildPushTagCommand('--upload-pack=evil', 'v1.0')).toThrow(GitError);
   });
 
   it('validates remote and branch names', () => {
@@ -179,5 +205,33 @@ describe('listStashes', () => {
         date: '2026-08-20T01:00:00-03:00',
       },
     ]);
+  });
+});
+
+describe('pushTag', () => {
+  beforeEach(() => {
+    invoke.mockReset();
+  });
+
+  it('runs the push without needing a confirmation — it only ever adds a ref', () => {
+    invoke.mockResolvedValue(raw({}));
+    return pushTag('C:/repo', 'origin', 'v1.0').then(() => {
+      expect(invoke.mock.calls[0]?.[1].args).toEqual([
+        'push',
+        '--progress',
+        'origin',
+        'refs/tags/v1.0:refs/tags/v1.0',
+      ]);
+    });
+  });
+
+  it('lets git’s refusal through when the remote already has that tag', async () => {
+    invoke.mockResolvedValue(
+      raw({
+        code: 1,
+        stderr: '! [rejected] v1.0 -> v1.0 (already exists)\n',
+      }),
+    );
+    await expect(pushTag('C:/repo', 'origin', 'v1.0')).rejects.toThrow(GitError);
   });
 });

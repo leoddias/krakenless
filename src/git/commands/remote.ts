@@ -75,6 +75,33 @@ export function buildPushCommand(options: PushOptions): GitCommand {
   };
 }
 
+/**
+ * Publishes one tag to a remote.
+ *
+ * A tag is created locally and then exists nowhere else: `git push` does not
+ * carry tags along with commits, which is why a release tag so often lives on
+ * one laptop until somebody notices.
+ *
+ * Fully qualified on both sides, for the reason the branch push is: a tag named
+ * `+v1.0` would otherwise be read as a force refspec, and one named
+ * `refs/tags/x` would resolve somewhere nobody meant. Never `--force`: a tag
+ * that already exists on the remote is a name other people have already
+ * fetched, and moving it is the kind of edit that shows up in no diff. Git's
+ * refusal is reported instead.
+ */
+export function buildPushTagCommand(remote: string, tag: string): GitCommand {
+  const name = assertRefName(tag);
+  return {
+    args: [
+      'push',
+      '--progress',
+      assertRefName(remote),
+      `refs/tags/${name}:refs/tags/${name}`,
+    ],
+    timeoutMs: NETWORK_TIMEOUT_MS,
+  };
+}
+
 /** Aborts an in-progress merge, returning the tree to its pre-merge state. */
 export function buildMergeAbortCommand(): GitCommand {
   return { args: ['merge', '--abort'], destructive: true };

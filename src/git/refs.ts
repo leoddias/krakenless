@@ -11,6 +11,7 @@ import {
   buildMergeAbortCommand,
   buildPullCommand,
   buildPushCommand,
+  buildPushTagCommand,
   buildRemoteListCommand,
   type FetchOptions,
   type PushOptions,
@@ -101,6 +102,14 @@ export async function push(
     return runGit(repo, buildPushCommand(options), approve(confirmation));
   }
   return runGit(repo, buildPushCommand(options), SAFE);
+}
+
+/**
+ * Publishes one tag. Additive: it can create a ref on the remote and can never
+ * move or delete one, so git's own refusal is the whole safety story.
+ */
+export function pushTag(repo: string, remote: string, tag: string): Promise<unknown> {
+  return runGit(repo, buildPushTagCommand(remote, tag), SAFE);
 }
 
 export function abortMerge(repo: string, confirmation: Confirmation): Promise<unknown> {

@@ -1,10 +1,18 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defaultConfig } from '../../config/schema';
 import type { Commit } from '../../git/types';
-import { selectCommit } from '../../state/actions';
+import { mergeRefInto, selectCommit } from '../../state/actions';
 import { StoreProvider } from '../../state/hooks';
 import { createStore, type Store } from '../../state/store';
+import { subscribeOpenRequests } from '../../state/openRequests';
 import { HistoryView, ROW_HEIGHT } from './HistoryView';
 import { resetAvatarCache } from './avatarCache';
 import { sha256Hex } from './remoteAvatar';
@@ -14,9 +22,11 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke }));
 
 vi.mock('../../state/actions', () => ({
   selectCommit: vi.fn(),
+  mergeRefInto: vi.fn(),
 }));
 
 const selectCommitMock = vi.mocked(selectCommit);
+const mergeRefIntoMock = vi.mocked(mergeRefInto);
 
 const NOW = new Date('2026-08-20T12:00:00Z');
 
@@ -61,6 +71,7 @@ beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   vi.setSystemTime(NOW);
   selectCommitMock.mockReset();
+  mergeRefIntoMock.mockReset().mockResolvedValue(true);
   // The real action dispatches the selection; keep that behaviour so the view
   // can be observed reacting to it.
   selectCommitMock.mockImplementation((store, oid) => {
@@ -479,5 +490,219 @@ describe('HistoryView author pictures', () => {
     // identity must not have been hashed onto the network.
     expect(asked).not.toContain(await sha256Hex('author1999@example.com'));
     expect(asked).toContain(await sha256Hex('author0@example.com'));
+  });
+});
+
+describe('dragging a branch onto the checkout', () => {
+  /** A row whose refs are HEAD -> main, i.e. the checked-out branch. */
+  function headRow(index: number): Commit {
+    return makeCommit(index, {
+      refs: [
+        { kind: 'head', name: 'HEAD' },
+        { kind: 'branch', name: 'main' },
+      ],
+    });
+  }
+
+  function branchRow(index: number, name: string): Commit {
+    return makeCommit(index, { refs: [{ kind: 'branch', name }] });
+  }
+
+  function transfer(): {
+    setData: () => void;
+    effectAllowed: string;
+    dropEffect: string;
+  } {
+    return { setData: () => {}, effectAllowed: '', dropEffect: '' };
+  }
+
+  function dragChip(from: HTMLElement, onto: HTMLElement): void {
+    const dataTransfer = transfer();
+    fireEvent.dragStart(from, { dataTransfer });
+    fireEvent.dragOver(onto, { dataTransfer });
+    fireEvent.drop(onto, { dataTransfer });
+  }
+
+  function chips(): { source: HTMLElement; target: HTMLElement } {
+    return {
+      source: screen.getByTitle(/^branch feature\/x/),
+      target: screen.getByTitle('checked out branch main'),
+    };
+  }
+
+  it('asks before merging, naming both ends', () => {
+    renderWithCommits([headRow(1), branchRow(2, 'feature/x')]);
+    const { source, target } = chips();
+
+    dragChip(source, target);
+
+    const dialog = screen.getByRole('dialog', { name: 'Merge feature/x into main?' });
+    expect(within(dialog).getByText(/Merge feature\/x into main\./)).toBeInTheDocument();
+    expect(mergeRefIntoMock).not.toHaveBeenCalled();
+  });
+
+  it('merges what the question said, with the question as the reason', async () => {
+    renderWithCommits([headRow(1), branchRow(2, 'feature/x')]);
+    const { source, target } = chips();
+    dragChip(source, target);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
+
+    // The string the user read is the string the git layer records: the token
+    // it validates is literally what they agreed to.
+    expect(mergeRefIntoMock).toHaveBeenCalledTimes(1);
+    // The question stays up, with both buttons dead, until the merge lands: a
+    // second click in that window would run it twice against one answer.
+    expect(screen.getByRole('button', { name: 'Merge' })).toBeDisabled();
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    const call = mergeRefIntoMock.mock.calls[0];
+    expect(call?.[1]).toBe('main');
+    expect(call?.[2]).toBe('feature/x');
+    expect(call?.[3]).toBe('feature/x');
+    expect(call?.[4]).toContain('Merge feature/x into main');
+  });
+
+  it('cancels without merging anything', () => {
+    renderWithCommits([headRow(1), branchRow(2, 'feature/x')]);
+    const { source, target } = chips();
+    dragChip(source, target);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(mergeRefIntoMock).not.toHaveBeenCalled();
+  });
+
+  it('only lets go of a branch over the checked-out one', () => {
+    renderWithCommits([headRow(1), branchRow(2, 'feature/x'), branchRow(3, 'feature/y')]);
+    const dataTransfer = transfer();
+    const source = screen.getByTitle(/^branch feature\/x/);
+    const other = screen.getByTitle(/^branch feature\/y/);
+
+    fireEvent.dragStart(source, { dataTransfer });
+    fireEvent.drop(other, { dataTransfer });
+
+    // Dropping onto another branch would mean checking it out first, which is
+    // not something a 200px gesture should do to somebody's working tree.
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('ignores a drop that no drag of ours started', () => {
+    renderWithCommits([headRow(1), branchRow(2, 'feature/x')]);
+    fireEvent.drop(screen.getByTitle('checked out branch main'), {
+      dataTransfer: transfer(),
+    });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('marks branch chips draggable and the checkout as the place to drop', () => {
+    renderWithCommits([headRow(1), branchRow(2, 'feature/x')]);
+    const { source, target } = chips();
+
+    expect(source).toHaveAttribute('draggable', 'true');
+    expect(source).toHaveAttribute('title', expect.stringContaining('drag onto'));
+    expect(target).toHaveAttribute('data-drop-target', 'true');
+    // The checkout is not a thing you pick up: merging it into itself is the
+    // one merge that can never mean anything.
+    expect(target).not.toHaveAttribute('draggable');
+  });
+
+  it('does not make a tag draggable', () => {
+    renderWithCommits([
+      headRow(1),
+      makeCommit(2, { refs: [{ kind: 'tag', name: 'v1.0' }] }),
+    ]);
+    expect(screen.getByTitle('tag v1.0')).not.toHaveAttribute('draggable');
+  });
+});
+
+describe('another checkout on the timeline', () => {
+  const WIKI = 'C:/repos/app-wiki';
+
+  function worktree(overrides: Record<string, unknown> = {}) {
+    return {
+      path: WIKI,
+      head: `${2}`.padStart(40, 'a'),
+      branch: 'wiki',
+      detached: false,
+      bare: false,
+      locked: null,
+      prunable: null,
+      main: false,
+      changed: 3,
+      untracked: 2,
+      ...overrides,
+    };
+  }
+
+  function renderWithWorktree(overrides: Record<string, unknown> = {}): Store {
+    return renderHistory((store) => {
+      store.dispatch({
+        type: 'commits/loaded',
+        commits: [makeCommit(1), makeCommit(2)],
+      });
+      store.dispatch({
+        type: 'worktrees/loaded',
+        worktrees: [worktree(overrides)] as never,
+      });
+    });
+  }
+
+  it('draws a WIP row above the commit that worktree has checked out', () => {
+    renderWithWorktree();
+    // Only the rows themselves: the "Open Worktree" control inside one is a
+    // button too, and counting it would shift every index after it.
+    const rows = rowButtons()
+      .filter((row) => row.hasAttribute('data-index'))
+      .map((row) => row.getAttribute('aria-label') ?? '');
+    const wip = rows.findIndex((label) => label.startsWith('Worktree app-wiki'));
+    const commit = rows.findIndex((label) => label.includes('Commit 2'));
+
+    expect(wip).toBeGreaterThan(-1);
+    expect(wip).toBe(commit - 1);
+  });
+
+  it('says how much is uncommitted over there', () => {
+    renderWithWorktree();
+    expect(screen.getByText('3 changed')).toBeInTheDocument();
+    expect(screen.getByText('+2 new')).toBeInTheDocument();
+  });
+
+  it('says a clean worktree is clean rather than showing nothing', () => {
+    renderWithWorktree({ changed: 0, untracked: 0 });
+    expect(screen.getByText('clean')).toBeInTheDocument();
+  });
+
+  it('admits when the other checkout could not be read', () => {
+    renderWithWorktree({ changed: null, untracked: null });
+    expect(screen.getByText('could not be read')).toBeInTheDocument();
+  });
+
+  it('asks the app to open that directory, without touching this checkout', () => {
+    const opened: string[] = [];
+    renderWithWorktree();
+    const stop = subscribeOpenRequests((path) => {
+      opened.push(path);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Worktree' }));
+
+    expect(opened).toEqual([WIKI]);
+    stop();
+  });
+
+  it('never selects the WIP row: there is no commit to show a diff of', () => {
+    renderWithWorktree();
+    const wip = rowButtons().find(
+      (row) =>
+        row.hasAttribute('data-index') &&
+        (row.getAttribute('aria-label') ?? '').startsWith('Worktree app-wiki'),
+    );
+    if (wip === undefined) throw new Error('no worktree row');
+
+    fireEvent.click(wip);
+
+    // Asking git about `worktree:C:/repos/app-wiki` is asking about a sha that
+    // does not exist, so the click moves nothing.
+    expect(selectCommitMock).not.toHaveBeenCalled();
   });
 });

@@ -3,6 +3,7 @@ import {
   cherryPick,
   createTag,
   currentBranch,
+  mergeInto,
   rebaseOnto,
   resetTo,
   revertCommit,
@@ -79,6 +80,74 @@ describe('cherryPick and revertCommit', () => {
     respond({});
     await revertCommit('C:/repo', OID);
     expect(argsOf(0)).toEqual(['revert', '--no-edit', OID]);
+  });
+});
+
+describe('mergeInto', () => {
+  it('merges into the branch the question named, once HEAD is confirmed', async () => {
+    respond({ stdout: 'main\n' }, { stdout: 'Fast-forward\n' });
+    await expect(
+      mergeInto('C:/repo', 'main', 'feature/x', userConfirmed(OK.reason)),
+    ).resolves.toBe('merged');
+    expect(argsOf(0)).toEqual(['symbolic-ref', '--quiet', '--short', 'HEAD']);
+    expect(argsOf(1)).toEqual(['merge', '--no-edit', 'feature/x']);
+  });
+
+  it('refuses, and merges nothing, when HEAD moved to another branch', async () => {
+    // Git merges into whatever is checked out now. A checkout between the
+    // question and the answer would merge into a branch nobody was asked about.
+    respond({ stdout: 'release\n' });
+    await expect(
+      mergeInto('C:/repo', 'main', 'feature/x', userConfirmed(OK.reason)),
+    ).rejects.toThrow(/now on "release"/);
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses when HEAD detached since the question was asked', async () => {
+    respond({ stdout: '', code: 1 });
+    await expect(
+      mergeInto('C:/repo', 'main', 'feature/x', userConfirmed(OK.reason)),
+    ).rejects.toThrow(/no longer on a branch/);
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a conflict as an outcome, not as a failure', async () => {
+    // Git stopped where it always stops; the repository is mid-merge and the
+    // conflict panel is where the job is finished.
+    respond(
+      { stdout: 'main\n' },
+      {
+        stdout: 'CONFLICT (content): Merge conflict in src/app.ts\n',
+        stderr: 'Automatic merge failed; fix conflicts and then commit the result.\n',
+        code: 1,
+      },
+    );
+    await expect(
+      mergeInto('C:/repo', 'main', 'feature/x', userConfirmed(OK.reason)),
+    ).resolves.toBe('conflicted');
+  });
+
+  it('still fails for a refusal that is not a conflict, in git\u2019s own words', async () => {
+    respond(
+      { stdout: 'main\n' },
+      {
+        stdout: '',
+        stderr:
+          'error: Your local changes to the following files would be overwritten by merge:\n\tsrc/app.ts\n',
+        code: 1,
+      },
+    );
+    await expect(
+      mergeInto('C:/repo', 'main', 'feature/x', userConfirmed(OK.reason)),
+    ).rejects.toThrow(/local changes .* would be overwritten/);
+  });
+
+  it('cannot be reached without a confirmation the user minted', async () => {
+    await expect(
+      // @ts-expect-error — the point of the test: a bare object is not a token.
+      mergeInto('C:/repo', 'main', 'feature/x', { reason: '' }),
+    ).rejects.toThrow(GitError);
+    expect(invoke).not.toHaveBeenCalled();
   });
 });
 

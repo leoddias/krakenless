@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildCherryPickCommand,
+  buildMergeCommand,
   buildRebaseCommand,
   buildResetCommand,
   buildRevertCommand,
@@ -128,5 +129,31 @@ describe('buildResetCommand', () => {
 
   it('rejects a revision that would read as an option', () => {
     expect(() => buildResetCommand('--hard', 'soft')).toThrow(GitError);
+  });
+});
+
+describe('buildMergeCommand', () => {
+  it('merges the revision without opening an editor', () => {
+    // Without `--no-edit` a merge commit waits on an editor this process has
+    // no terminal to host, and the command sits there until the timeout.
+    expect(buildMergeCommand('feature/x').args).toEqual([
+      'merge',
+      '--no-edit',
+      'feature/x',
+    ]);
+  });
+
+  it('does not need a confirmation, because a merge only adds', () => {
+    const command = buildMergeCommand('feature/x');
+    expect(command.destructive).toBeUndefined();
+    expect(isDestructive(command.args)).toBe(false);
+  });
+
+  it('gives a long merge room to finish', () => {
+    expect(buildMergeCommand('feature/x').timeoutMs).toBe(120_000);
+  });
+
+  it('refuses a revision that could be read as an option', () => {
+    expect(() => buildMergeCommand('--exec=rm -rf /')).toThrow();
   });
 });

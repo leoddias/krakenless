@@ -14,6 +14,7 @@
 import {
   buildCherryPickCommand,
   buildCurrentBranchCommand,
+  buildMergeCommand,
   buildRebaseCommand,
   buildResetCommand,
   buildRevertCommand,
@@ -74,6 +75,62 @@ export function cherryPick(repo: string, rev: string): Promise<unknown> {
 /** Records a new commit undoing `rev`. */
 export function revertCommit(repo: string, rev: string): Promise<unknown> {
   return runGit(repo, buildRevertCommand(rev), SAFE);
+}
+
+/**
+ * What a merge did, once it stopped.
+ *
+ * `conflicted` is not a failure: git stopped where it always stops, the
+ * repository is mid-merge, and the conflict panel is where the user finishes
+ * the job. Reporting it as an error would be a lie the user then has to
+ * reconcile with the banner appearing next to it.
+ */
+export type MergeOutcome = 'merged' | 'conflicted';
+
+/**
+ * Merges `rev` into `branch`.
+ *
+ * `branch` is the name the question named, and HEAD is re-read first: git
+ * merges into whatever is checked out *now*, so a checkout that happened
+ * between the question and the answer would merge into a branch the user was
+ * never asked about.
+ */
+export async function mergeInto(
+  repo: string,
+  branch: string,
+  rev: string,
+  confirmation: Confirmation,
+): Promise<MergeOutcome> {
+  const gate = approve(confirmation);
+  await assertOnBranch(repo, branch);
+
+  // Exit code 1 is how git reports a conflict, and also how it reports several
+  // ordinary refusals ("your local changes would be overwritten"). Allowing it
+  // is what makes the two distinguishable at all; everything that is not
+  // recognisably a conflict is re-thrown as the failure it is.
+  const output = await runGit(repo, buildMergeCommand(rev), {
+    ...gate,
+    allowExitCodes: [1],
+  });
+  if (output.code === 0) return 'merged';
+
+  const said = `${output.stdout}\n${output.stderr}`;
+  if (/^CONFLICT|Automatic merge failed|fix conflicts/im.test(said)) return 'conflicted';
+
+  throw new GitError('command-failed', mergeFailureMessage(said), {
+    args: ['merge', rev],
+    code: output.code,
+    stderr: output.stderr,
+  });
+}
+
+/** git's own first line, which says what it refused and why. */
+function mergeFailureMessage(said: string): string {
+  const line = said
+    .split('\n')
+    .map((text) => text.trim())
+    .find((text) => text.length > 0);
+  return line ?? 'The merge did not run, and git did not say why.';
 }
 
 /**
