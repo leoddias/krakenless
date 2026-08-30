@@ -53,6 +53,16 @@ import {
   type DeleteBranchOutcome,
 } from '../git/refs';
 import { getStatus } from '../git/status';
+import {
+  abortOperation,
+  continueOperation,
+  noOperation,
+  readOperation,
+  skipOperation,
+  type ContinuableKind,
+  type OperationKind,
+} from '../git/operation';
+import { hasConflictMarkers } from '../git/conflict';
 import { listWorktreeSummaries } from '../git/worktrees';
 import { FileError, openWorktreeFile, saveWorktreeFile, type OpenFile } from '../fs/file';
 import type { FileDiff, Hunk } from '../git/types';
@@ -84,6 +94,11 @@ export async function openRepo(store: Store, path: string): Promise<void> {
       refreshBranches(store),
       refreshRemotes(store),
       refreshStashes(store),
+      refreshWorktrees(store),
+      // A repository can be opened *while* stopped mid-rebase — the app was
+      // closed and reopened, or the rebase was started from a terminal. The
+      // way out has to be on screen from the first frame.
+      refreshOperation(store),
     ]);
   } catch (error) {
     store.dispatch({ type: 'repo/failed', ...describe(error) });
@@ -114,6 +129,20 @@ export async function forgetRepo(store: Store, path: string): Promise<void> {
 function currentRoot(store: Store): string | null {
   const repo = store.getState().repo;
   return repo.state === 'ready' ? repo.value.root : null;
+}
+
+/**
+ * The open repository, root *and* git directory.
+ *
+ * The rebase state lives in the git directory, and in a linked worktree that is
+ * not `<root>/.git` — it is a file pointing somewhere else entirely. Anything
+ * reading git's own bookkeeping needs the resolved path, not the root.
+ */
+function currentRepo(store: Store): { root: string; gitDir: string } | null {
+  const repo = store.getState().repo;
+  return repo.state === 'ready'
+    ? { root: repo.value.root, gitDir: repo.value.gitDir }
+    : null;
 }
 
 export async function refreshStatus(store: Store): Promise<void> {
@@ -343,6 +372,117 @@ export async function refreshWorktrees(store: Store): Promise<void> {
   }
 }
 
+/**
+ * Reads which operation the repository is stopped in the middle of.
+ *
+ * Never fails loudly: an unreadable answer becomes "nothing in progress", which
+ * hides the continue/abort controls rather than offering the wrong ones. The
+ * wrong ones are what stranded people before — `git merge --abort` during a
+ * rebase fails, and there was nothing else on offer.
+ */
+export async function refreshOperation(store: Store): Promise<void> {
+  const repo = currentRepo(store);
+  if (repo === null) return;
+  try {
+    const operation = await readOperation(repo.root, repo.gitDir);
+    store.dispatch({ type: 'operation/read', operation });
+  } catch {
+    store.dispatch({ type: 'operation/read', operation: noOperation() });
+  }
+}
+
+/**
+ * Resumes the stopped operation once its conflicts are staged.
+ *
+ * Git refuses while anything is still unmerged and says exactly that, which is
+ * a better message than one this app could invent — so the refusal is passed
+ * through rather than pre-empted.
+ */
+export async function continueStoppedOperation(
+  store: Store,
+  kind: ContinuableKind,
+  confirmationReason: string,
+): Promise<boolean> {
+  const root = currentRoot(store);
+  if (root === null) return false;
+  return operate(store, () =>
+    continueOperation(root, kind, userConfirmed(confirmationReason)),
+  );
+}
+
+/** Drops the commit the operation is stopped on and moves to the next one. */
+export async function skipStoppedCommit(
+  store: Store,
+  kind: ContinuableKind,
+  confirmationReason: string,
+): Promise<boolean> {
+  const root = currentRoot(store);
+  if (root === null) return false;
+  return operate(store, () =>
+    skipOperation(root, kind, userConfirmed(confirmationReason)),
+  );
+}
+
+/**
+ * Abandons the stopped operation, whichever one it actually is.
+ *
+ * The `kind` comes from {@link refreshOperation}, never from a guess: aborting
+ * a rebase as though it were a merge is the failure this whole path exists to
+ * make impossible.
+ */
+export async function abortStoppedOperation(
+  store: Store,
+  kind: OperationKind,
+  confirmationReason: string,
+): Promise<boolean> {
+  const root = currentRoot(store);
+  if (root === null) return false;
+  return operate(store, () =>
+    abortOperation(root, kind, userConfirmed(confirmationReason)),
+  );
+}
+
+/**
+ * Writes a resolved file and marks it resolved.
+ *
+ * Two steps, in this order and no other: the bytes reach disk first, and only a
+ * successful write is followed by `git add`. Staging first and writing second
+ * would, on a failed write, leave the index claiming a resolution that the file
+ * does not contain — a conflict committed as though somebody had settled it.
+ *
+ * The text is refused outright if it still carries conflict markers. That is
+ * not a nicety: `git add` on a marked-up file is the single most common way a
+ * conflict ends up in a commit, and the app must not be the thing that does it.
+ */
+export async function resolveConflict(
+  store: Store,
+  path: string,
+  contents: string,
+): Promise<boolean> {
+  const root = currentRoot(store);
+  if (root === null) return false;
+
+  if (hasConflictMarkers(contents)) {
+    store.dispatch({
+      type: 'notice',
+      notice: {
+        tone: 'error',
+        message: `"${path}" still contains conflict markers, so it was not staged. Resolve every block first.`,
+      },
+    });
+    return false;
+  }
+
+  return operate(store, async () => {
+    // Re-read for the stamp: the write refuses if the file changed on disk
+    // since, which is what stops the resolver from overwriting an edit that
+    // arrived from an editor while it was open.
+    const file = await openWorktreeFile(root, path);
+    await saveWorktreeFile(root, file, contents);
+    await stagePaths(root, [path]);
+  });
+}
+
 export async function refreshStashes(store: Store): Promise<void> {
   const root = currentRoot(store);
   if (root === null) return;
@@ -368,6 +508,7 @@ async function refreshAll(store: Store): Promise<void> {
     refreshRemotes(store),
     refreshStashes(store),
     refreshWorktrees(store),
+    refreshOperation(store),
   ]);
 }
 

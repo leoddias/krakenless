@@ -11,6 +11,7 @@ const refreshBranches = vi.hoisted(() => vi.fn());
 const refreshRemotes = vi.hoisted(() => vi.fn());
 const refreshStashes = vi.hoisted(() => vi.fn());
 const refreshWorktrees = vi.hoisted(() => vi.fn());
+const refreshOperation = vi.hoisted(() => vi.fn());
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
 vi.mock('@tauri-apps/api/event', () => ({ listen }));
@@ -22,6 +23,7 @@ vi.mock('./actions', () => ({
   refreshRemotes,
   refreshStashes,
   refreshWorktrees,
+  refreshOperation,
 }));
 
 /** Fires the repo-changed event as Tauri delivers it: payload = watch token. */
@@ -50,6 +52,7 @@ describe('watchRepository', () => {
     refreshRemotes.mockResolvedValue(undefined);
     refreshStashes.mockResolvedValue(undefined);
     refreshWorktrees.mockResolvedValue(undefined);
+    refreshOperation.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -78,6 +81,9 @@ describe('watchRepository', () => {
     expect(refreshRemotes).toHaveBeenCalledTimes(1);
     expect(refreshStashes).toHaveBeenCalledTimes(1);
     expect(refreshWorktrees).toHaveBeenCalledTimes(1);
+    // A rebase advancing or being finished from a terminal touches `.git` and
+    // nothing else; this refresh is the only thing that notices.
+    expect(refreshOperation).toHaveBeenCalledTimes(1);
   });
 
   it('collapses a burst of events into one refresh', async () => {

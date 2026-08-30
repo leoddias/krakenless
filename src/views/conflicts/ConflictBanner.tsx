@@ -1,32 +1,37 @@
-import { useState, type ReactNode } from 'react';
-import {
-  abortMergeInProgress,
-  openInEditor,
-  openMergetool,
-  refreshStatus,
-} from '../../state/actions';
+import { type ReactNode } from 'react';
+import { openInEditor, openMergetool, refreshStatus } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
 import { isBusy } from '../../state/store';
 import { conflictDescription, offersMergetool } from './conflicts';
 import styles from './ConflictBanner.module.css';
 
 /**
- * The honest conflict banner: what is conflicted, and the ways out.
+ * What is conflicted, and how to get at each file.
  *
- * It offers no "resolve for me" button. Krakenless has no conflict-resolution
- * UI yet, and pretending otherwise — by staging a file full of markers, say —
- * is exactly the failure this banner exists to prevent.
+ * The *ways out* — continue, skip, abort — deliberately do not live here. They
+ * belong to the operation, not to the conflicts: a rebase can stop with nothing
+ * conflicted at all, and this banner would be absent exactly when the user most
+ * needs a way forward. They live next to the commit box instead, in
+ * `OperationPanel`, which knows which operation is actually running.
+ *
+ * This banner used to own an "Abort merge" button that ran `git merge --abort`
+ * whatever was in progress. During a rebase that fails with "MERGE_HEAD
+ * missing" and strands the user. It is gone for good.
  */
 export function ConflictBanner(): ReactNode {
   const store = useStore();
   const status = useAppState((state) => state.status);
   const busy = useAppState(isBusy);
-  const [confirmingAbort, setConfirmingAbort] = useState(false);
+  const operation = useAppState((state) => state.operation);
 
   if (status.state !== 'ready' || !status.value.hasConflicts) return null;
 
   const conflicted = status.value.entries.filter((entry) => entry.conflicted);
-  const abortQuestion = `Abort the merge and return to the state before it started? Any conflict resolutions you have made will be lost.`;
+  // Named, not assumed. "Stopped during a rebase" and "stopped during a merge"
+  // are different situations with different ways out, and the user has to be
+  // told which one they are in before they can act on it.
+  const during =
+    operation.kind === null ? 'an operation' : `a ${operation.kind.replace('-', ' ')}`;
 
   return (
     <section className={styles.banner} aria-label="Conflicts" role="alert">
@@ -37,8 +42,9 @@ export function ConflictBanner(): ReactNode {
             : `${conflicted.length} files are conflicted`}
         </strong>
         <p className={styles.text}>
-          Krakenless does not resolve conflicts itself. Edit the files or use your merge
-          tool, then stage them here.
+          Stopped during {during}. Resolve each file below — in Krakenless, in your
+          editor, or with your merge tool — then stage it. The way to carry on, or to give
+          up, is under the commit box.
         </p>
       </header>
 
@@ -46,7 +52,19 @@ export function ConflictBanner(): ReactNode {
         {conflicted.map((entry) => (
           <li key={entry.path} className={styles.item}>
             <div className={styles.itemText}>
-              <code className={styles.path}>{entry.path}</code>
+              {/*
+                The path is the way in. Clicking a conflicted file is what a
+                user tries first, and until now it did nothing at all.
+              */}
+              <button
+                type="button"
+                className={styles.pathButton}
+                disabled={busy}
+                title={`Resolve ${entry.path} here`}
+                onClick={() => store.dispatch({ type: 'resolve/open', path: entry.path })}
+              >
+                <code className={styles.path}>{entry.path}</code>
+              </button>
               <span className={styles.kind}>
                 {conflictDescription(entry.conflictKind)}
               </span>
@@ -82,38 +100,6 @@ export function ConflictBanner(): ReactNode {
         >
           Re-check
         </button>
-        {confirmingAbort ? (
-          <span className={styles.confirm}>
-            <span className={styles.text}>{abortQuestion}</span>
-            <button
-              type="button"
-              className={styles.danger}
-              disabled={busy}
-              onClick={() => {
-                setConfirmingAbort(false);
-                void abortMergeInProgress(store, abortQuestion);
-              }}
-            >
-              Abort merge
-            </button>
-            <button
-              type="button"
-              className={styles.action}
-              onClick={() => setConfirmingAbort(false)}
-            >
-              Keep merging
-            </button>
-          </span>
-        ) : (
-          <button
-            type="button"
-            className={styles.danger}
-            disabled={busy}
-            onClick={() => setConfirmingAbort(true)}
-          >
-            Abort merge…
-          </button>
-        )}
       </div>
     </section>
   );

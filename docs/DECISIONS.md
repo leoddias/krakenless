@@ -532,3 +532,65 @@ is offered for every tag; pushing one that is already there and unchanged is a
 no-op git reports as "Everything up-to-date". The remote is chosen the way the
 copy-link item chooses it — first one, `origin` sorted first — so the menu never
 offers two different answers to "which remote".
+## ADR-0030 — The app knows which operation it is stopped in, and offers that one's way out
+
+**Decision:** A new `src/git/operation.ts` reads what the repository is in the
+middle of — rebase, cherry-pick, revert or merge — from git's own pseudo-refs
+(`REBASE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `MERGE_HEAD`), with the
+rebase counters read from `rebase-merge/`/`rebase-apply/` by a new Rust command
+(`rebase_state`). The rebase directory is checked **first** and is the
+authority. An `OperationPanel` sits where the commit box is and offers
+`Continue`, `Skip commit` and `Abort` named after the operation actually
+running; during a rebase it *replaces* the commit box. Continue runs with
+`-c core.editor=true`. The conflict banner no longer owns any way out.
+**Why:** Every conflict was treated as a merge. The banner said "merge" and its
+only button ran `git merge --abort`, which during a rebase fails with "There is
+no merge to abort (MERGE_HEAD missing)" — the user is stopped, detached, and
+nothing in the UI can move them forwards or backwards. That is the worst state a
+Git client can put somebody in. Rebase order matters because the merge backend
+writes a `MERGE_HEAD` *too*, so asking about merges first reproduces the bug.
+The counters come from files because the only git command that reports them
+prints prose that git translates into the user's language. `core.editor=true`
+because continuing opens an editor for the commit message and this process has
+no terminal to host one — the command would hang until the timeout, mid-rebase.
+**Consequences:** The commit box is hidden during a rebase, which is correct
+(git makes that commit itself when the rebase resumes) and will surprise anyone
+used to committing by hand mid-rebase. `Continue` is disabled while any path is
+unmerged, with the count as the reason — git refuses too, and this says so
+before the command runs rather than after. The Rust command reads only a fixed
+allowlist of filenames under a caller-supplied git directory, and reports a
+failure as "no rebase" so the refs still decide what may be offered. Interactive
+rebase — reordering, squashing, `edit` — is still not built; this makes the
+*conflict* path of a plain rebase survivable, which is what was breaking.
+
+## ADR-0031 — Conflicts are resolved in the app, block by block, from the index
+
+**Decision:** Clicking a conflicted file opens a full-window resolver: the two
+sides side by side, a checkbox per differing block on each side, and an Output
+pane showing the file that will be written. Save writes the assembled text
+through the working-tree writer and then stages it. The sides are read from
+index stages 2 and 3 (`git show :2:path`), never from the marked-up working
+copy. Text that still carries conflict markers is refused before staging. Files
+over 4000 lines a side are refused with a pointer to the merge tool.
+**Why:** The app previously refused to help at all — "resolve these in your
+editor first" — which is honest but leaves the most error-prone task in Git
+outside the tool. The index stages are exact; the working copy's markers are
+ambiguous, since a file may legitimately contain a line of seven angle
+brackets. The Output pane is produced by the same `assemble` the Save button
+writes, so what the user reads *is* the result rather than an approximation of
+it. An undecided block contributes no lines, which makes a half-finished
+resolution visibly incomplete instead of quietly defaulting to one side and
+looking finished; Save stays disabled until every block is answered. The
+marker check exists because `git add` on a marked-up file is the single most
+common way a conflict reaches a commit.
+**Consequences:** The pane labels swap round during a rebase — stage 2 is the
+branch being rebased *onto* and stage 3 is the user's own commit — and
+`sideLabels` is the one place that knows it; getting that backwards would throw
+away somebody's work with a confident-looking UI. The block model is a plain
+LCS over lines: quadratic, which is why the size guard exists, and predictable,
+which is why it was not swapped for a heuristic. Binary files and delete/modify
+conflicts are not served by this screen (there is no text to choose between);
+they still need the merge tool or an editor. The trailing newline is carried
+from the original rather than assumed. `resolveConflict` writes before staging,
+never the reverse: staging first would, on a failed write, leave the index
+claiming a resolution the file does not contain.

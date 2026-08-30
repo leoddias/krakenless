@@ -6,6 +6,7 @@ import {
   refreshDiff,
   refreshRemotes,
   refreshStashes,
+  refreshOperation,
   refreshStatus,
   refreshWorktrees,
 } from './actions';
@@ -56,6 +57,10 @@ export async function watchRepository(store: Store, root: string): Promise<Watch
         // but its commits are: the `.git` is shared, so a commit made over
         // there wakes us, and that is the moment its WIP row is wrong.
         refreshWorktrees(store),
+        // A rebase advancing, stopping or being finished from a terminal is a
+        // change to `.git` and nothing else — this is the only thing that
+        // notices it.
+        refreshOperation(store),
       ]);
     });
   };

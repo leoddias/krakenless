@@ -17,6 +17,7 @@ import type {
   RepoStatus,
   StashEntry,
 } from '../git/types';
+import { noOperation, type Operation } from '../git/operation';
 import type { WorktreeSummary } from '../git/worktrees';
 
 /** Every panel is in exactly one of these states — no silent blank screens. */
@@ -100,6 +101,22 @@ export interface AppState {
    * filesystem watcher hears about *this* checkout says a word about theirs.
    */
   worktrees: Loadable<WorktreeSummary[]>;
+  /**
+   * The merge, rebase, cherry-pick or revert the repository is stopped in the
+   * middle of. Not derived from the conflict list: a rebase can stop with no
+   * conflicts at all — an `edit` step, or a commit that became empty — and a UI
+   * that keys off conflicts shows nothing while the repository sits detached
+   * mid-rebase.
+   */
+  operation: Operation;
+  /**
+   * Path the conflict resolver is open on, or `null`.
+   *
+   * In the store rather than in a component because two places open it — the
+   * banner at the top and the conflicted rows on the right — and the screen
+   * itself is mounted at the top of the app, above both of them.
+   */
+  resolving: string | null;
   /** Last thing a write operation did, shown until the user moves on. */
   notice: Notice | null;
   selection: Selection;
@@ -124,6 +141,8 @@ export function initialState(): AppState {
     remotes: idle(),
     stashes: idle(),
     worktrees: idle(),
+    operation: noOperation(),
+    resolving: null,
     notice: null,
     selection: { commitOid: null, path: null },
     busyDepth: 0,
@@ -157,6 +176,9 @@ export type Action =
   | { type: 'worktrees/loading' }
   | { type: 'worktrees/loaded'; worktrees: WorktreeSummary[] }
   | { type: 'worktrees/failed'; message: string; kind?: string }
+  | { type: 'operation/read'; operation: Operation }
+  | { type: 'resolve/open'; path: string }
+  | { type: 'resolve/closed' }
   | { type: 'notice'; notice: NoticeInput | null }
   | { type: 'selection/commit'; oid: string | null }
   | { type: 'selection/path'; path: string | null }
@@ -260,6 +282,14 @@ export function reduce(state: AppState, action: Action): AppState {
         ...state,
         worktrees: { state: 'error', message: action.message, ...kindOf(action.kind) },
       };
+
+    case 'operation/read':
+      return { ...state, operation: action.operation };
+
+    case 'resolve/open':
+      return { ...state, resolving: action.path };
+    case 'resolve/closed':
+      return { ...state, resolving: null };
 
     case 'notice':
       return {

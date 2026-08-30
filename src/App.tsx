@@ -25,6 +25,7 @@ import { startAutoFetch } from './state/autoFetch';
 import { watchRepository, type WatchHandle } from './state/watch';
 import { ChangesView } from './views/changes';
 import { ConflictBanner } from './views/conflicts';
+import { ConflictResolver } from './views/conflicts/ConflictResolver';
 import { DiffView } from './views/diff';
 import { SettingsView } from './views/settings';
 import { RefsView } from './views/refs';
@@ -462,6 +463,11 @@ function RepoPane({
           <NoticeBar />
           <PanelGrid />
           <StatusBar root={root} />
+          {/*
+            Last, and above everything: resolving a conflict is the task while
+            it is happening, and it is opened from two different panels.
+          */}
+          <ConflictResolver />
         </>
       )}
     </div>

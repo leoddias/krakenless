@@ -1,0 +1,111 @@
+/* Where the commit box would be. An operation in progress is the most
+   important thing on this panel, so it gets the accent edge and the space. */
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.6rem 0.75rem;
+  border-top: 1px solid var(--border);
+  border-left: 3px solid var(--warning);
+  background: var(--surface);
+}
+
+.progress {
+  margin: 0;
+  color: var(--fg-strong);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+/* The commit being replayed. It is quoted text, not a heading — the user wrote
+   it, and it may be long. */
+.subject {
+  margin: 0;
+  overflow: hidden;
+  color: var(--fg);
+  font-size: 0.8125rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hint,
+.blocked {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.blocked {
+  color: var(--warning);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.primary,
+.secondary,
+.danger {
+  flex: 1 1 auto;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+.primary {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--fg-strong);
+}
+
+.danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.primary:disabled,
+.secondary:disabled,
+.danger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.primary:not(:disabled):hover,
+.secondary:not(:disabled):hover,
+.danger:not(:disabled):hover {
+  background: var(--surface-hover);
+}
+
+.primary:focus-visible,
+.secondary:focus-visible,
+.danger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The question replaces the buttons rather than appearing under them, so the
+   answer cannot land on a control that moved. */
+.question {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.5rem;
+  border: 1px solid var(--danger);
+  border-radius: 4px;
+  background: var(--surface-raised);
+}
+
+.questionText {
+  margin: 0;
+  color: var(--fg);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}

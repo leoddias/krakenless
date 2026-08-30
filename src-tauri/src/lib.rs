@@ -2,6 +2,7 @@ mod avatars;
 mod config;
 mod external;
 mod git_runner;
+mod rebase_state;
 mod watcher;
 mod worktree;
 
@@ -32,7 +33,8 @@ pub fn run() {
             external::open_external,
             external::reveal_folder,
             worktree::worktree_read,
-            worktree::worktree_write
+            worktree::worktree_write,
+            rebase_state::rebase_state
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

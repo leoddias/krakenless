@@ -28,6 +28,7 @@ import {
 import { useAppState, useStore } from '../../state/hooks';
 import { isBusy } from '../../state/store';
 import type { Loadable } from '../../state/store';
+import { OperationPanel } from './OperationPanel';
 import styles from './ChangesView.module.css';
 import {
   conflictDescription,
@@ -316,6 +317,7 @@ function ChangeLists({
   onShowDiff: (path: string) => void;
 }): ReactNode {
   const { staged, unstaged, conflicted } = groups;
+  const operation = useAppState((state) => state.operation);
   const nothingToShow =
     staged.length === 0 && unstaged.length === 0 && conflicted.length === 0;
 
@@ -329,21 +331,12 @@ function ChangeLists({
 
       {conflicted.length > 0 && <ConflictList entries={conflicted} />}
 
-      <FileSection
-        title="Staged"
-        entries={staged}
-        side="index"
-        emptyText="Nothing staged yet."
-        bulkLabel="Unstage all"
-        busy={busy}
-        onBulk={onUnstage}
-        rowActions={(entry) => [
-          { label: 'Unstage', run: () => onUnstage(pathsOf(entry)) },
-        ]}
-        selectedPath={selectedPath}
-        onShowDiff={onShowDiff}
-      />
-
+      {/*
+        Unstaged first. It is the list being worked *from* — files arrive there
+        and are picked out of it — while the staged list is what the commit box
+        directly underneath is about, so the two that belong together are
+        adjacent.
+      */}
       <FileSection
         title="Unstaged"
         entries={unstaged}
@@ -365,14 +358,41 @@ function ChangeLists({
         onShowDiff={onShowDiff}
       />
 
-      <CommitBox
-        stagedCount={staged.length}
-        hasConflicts={repoStatus.hasConflicts || conflicted.length > 0}
-        head={repoStatus.head}
+      <FileSection
+        title="Staged"
+        entries={staged}
+        side="index"
+        emptyText="Nothing staged yet."
+        bulkLabel="Unstage all"
         busy={busy}
-        draft={draft}
-        onDraft={onDraft}
+        onBulk={onUnstage}
+        rowActions={(entry) => [
+          { label: 'Unstage', run: () => onUnstage(pathsOf(entry)) },
+        ]}
+        selectedPath={selectedPath}
+        onShowDiff={onShowDiff}
       />
+
+      {/*
+        One or the other, never both. While a rebase is stopped the commit box
+        is a trap: git makes the commit itself when the rebase resumes, and a
+        commit made by hand here lands on a detached HEAD.
+      */}
+      {operation.kind === null || operation.kind === 'merge' ? (
+        <>
+          {operation.kind === 'merge' && <OperationPanel />}
+          <CommitBox
+            stagedCount={staged.length}
+            hasConflicts={repoStatus.hasConflicts || conflicted.length > 0}
+            head={repoStatus.head}
+            busy={busy}
+            draft={draft}
+            onDraft={onDraft}
+          />
+        </>
+      ) : (
+        <OperationPanel />
+      )}
     </div>
   );
 }
@@ -614,14 +634,17 @@ function FileSection({
 }
 
 function ConflictList({ entries }: { entries: StatusEntry[] }): ReactNode {
+  const store = useStore();
+  const busy = useAppState(isBusy);
+
   return (
     <section className={styles.section} aria-label="Conflicted">
       <header className={styles.sectionHeader}>
         <h2 className={styles.sectionTitle}>{`Conflicted (${entries.length})`}</h2>
       </header>
       <p className={styles.conflictNote}>
-        Resolve these files in your editor first. Krakenless will not stage or discard an
-        unmerged path: staging it as-is would record the conflict markers as the
+        Click a file to resolve it side by side. An unmerged path is never staged or
+        discarded as it stands: staging it would record the conflict markers as the
         resolution.
       </p>
       <ul className={styles.list}>
@@ -630,7 +653,19 @@ function ConflictList({ entries }: { entries: StatusEntry[] }): ReactNode {
             <span className={styles.state} title={STATE_LABELS.unmerged}>
               {STATE_LETTERS.unmerged}
             </span>
-            <span className={styles.path}>{displayPath(entry)}</span>
+            {/*
+              The row is the way in. Clicking a conflicted file is the first
+              thing anybody tries, and it used to do nothing at all.
+            */}
+            <button
+              type="button"
+              className={styles.conflictOpen}
+              disabled={busy}
+              title={`Resolve ${entry.path} side by side`}
+              onClick={() => store.dispatch({ type: 'resolve/open', path: entry.path })}
+            >
+              <span className={styles.path}>{displayPath(entry)}</span>
+            </button>
             <span className={styles.stateLabel}>
               {conflictDescription(entry.conflictKind)}
             </span>

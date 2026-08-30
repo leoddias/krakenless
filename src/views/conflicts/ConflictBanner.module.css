@@ -105,3 +105,28 @@
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+/* The path, as the control it now is. Styled as text, because it is the file
+   name — the affordance is the hover and the cursor, not a button box. */
+.pathButton {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pathButton:hover .path {
+  text-decoration: underline;
+}
+
+.pathButton:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.pathButton:disabled {
+  cursor: not-allowed;
+}

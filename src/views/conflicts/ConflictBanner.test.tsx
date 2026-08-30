@@ -8,13 +8,11 @@ import type { RepoStatus, StatusEntry } from '../../git/types';
 
 const openInEditor = vi.hoisted(() => vi.fn());
 const openMergetool = vi.hoisted(() => vi.fn());
-const abortMergeInProgress = vi.hoisted(() => vi.fn());
 const refreshStatus = vi.hoisted(() => vi.fn());
 
 vi.mock('../../state/actions', () => ({
   openInEditor,
   openMergetool,
-  abortMergeInProgress,
   refreshStatus,
 }));
 
@@ -84,7 +82,6 @@ describe('ConflictBanner', () => {
     vi.resetAllMocks();
     openInEditor.mockResolvedValue(true);
     openMergetool.mockResolvedValue(true);
-    abortMergeInProgress.mockResolvedValue(true);
     refreshStatus.mockResolvedValue(undefined);
   });
 
@@ -112,13 +109,31 @@ describe('ConflictBanner', () => {
     expect(screen.getByText('You deleted it; they changed it.')).toBeInTheDocument();
   });
 
-  it('says plainly that it does not resolve conflicts', () => {
-    // Offering a "resolve" button it cannot honour is the failure this banner
-    // exists to prevent.
-    renderBanner([conflict('a.ts', 'UU')]);
-    expect(screen.getByRole('alert')).toHaveTextContent(
-      'does not resolve conflicts itself',
+  it('names the operation that stopped, rather than assuming a merge', () => {
+    // The whole bug in one assertion: during a rebase this used to say "merge"
+    // and offer `git merge --abort`, which fails and strands the user.
+    const store = renderBanner([conflict('a.ts', 'UU')]);
+    act(() =>
+      store.dispatch({
+        type: 'operation/read',
+        operation: {
+          kind: 'rebase',
+          commit: null,
+          step: 3,
+          steps: 43,
+          branch: 'feat/x',
+        },
+      }),
     );
+    expect(screen.getByRole('alert')).toHaveTextContent('Stopped during a rebase');
+  });
+
+  it('sends the user to the controls that can actually end the operation', () => {
+    renderBanner([conflict('a.ts', 'UU')]);
+    // They live with the commit box, because a rebase can stop with nothing
+    // conflicted and this banner would then not be on screen at all.
+    expect(screen.getByRole('alert')).toHaveTextContent('under the commit box');
+    expect(screen.queryByRole('button', { name: /Abort/ })).toBeNull();
   });
 
   it('opens a file in the editor', () => {
@@ -138,35 +153,6 @@ describe('ConflictBanner', () => {
     expect(openMergetool).toHaveBeenCalledWith(store, 'a.ts');
   });
 
-  it('never aborts without a second, explicit confirmation', () => {
-    renderBanner([conflict('a.ts', 'UU')]);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Abort merge…' }));
-    expect(abortMergeInProgress).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Abort merge' }));
-    expect(abortMergeInProgress).toHaveBeenCalledTimes(1);
-  });
-
-  it('passes the text the user agreed to as the confirmation', () => {
-    const store = renderBanner([conflict('a.ts', 'UU')]);
-    fireEvent.click(screen.getByRole('button', { name: 'Abort merge…' }));
-    const question = screen.getByText(/Abort the merge and return/).textContent ?? '';
-    fireEvent.click(screen.getByRole('button', { name: 'Abort merge' }));
-
-    expect(abortMergeInProgress).toHaveBeenCalledWith(store, question);
-    expect(question).toContain('will be lost');
-  });
-
-  it('lets the user back out of aborting', () => {
-    renderBanner([conflict('a.ts', 'UU')]);
-    fireEvent.click(screen.getByRole('button', { name: 'Abort merge…' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Keep merging' }));
-
-    expect(abortMergeInProgress).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'Abort merge…' })).toBeInTheDocument();
-  });
-
   it('re-checks the status on demand', () => {
     const store = renderBanner([conflict('a.ts', 'UU')]);
     fireEvent.click(screen.getByRole('button', { name: 'Re-check' }));
@@ -180,6 +166,6 @@ describe('ConflictBanner', () => {
     act(() => store.dispatch({ type: 'busy', busy: true }));
 
     expect(screen.getByRole('button', { name: 'Open in editor' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Abort merge…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Re-check' })).toBeDisabled();
   });
 });

@@ -140,6 +140,20 @@ describe('panel states', () => {
 });
 
 describe('list split', () => {
+  it('puts unstaged above staged, with the commit box under the list it commits', () => {
+    renderWithEntries([
+      entry({ path: 'staged.ts', index: 'modified' }),
+      entry({ path: 'edited.ts', worktree: 'modified' }),
+    ]);
+
+    const headings = screen.getAllByRole('heading').map((node) => node.textContent ?? '');
+    const unstaged = headings.findIndex((text) => text.startsWith('Unstaged'));
+    const staged = headings.findIndex((text) => text.startsWith('Staged'));
+
+    expect(unstaged).toBeGreaterThan(-1);
+    expect(unstaged).toBeLessThan(staged);
+  });
+
   it('separates staged from unstaged and puts untracked files in unstaged', () => {
     renderWithEntries([
       entry({ path: 'staged.ts', index: 'modified' }),
@@ -510,13 +524,26 @@ describe('conflicted entries', () => {
   it('offers no stage or discard button for them', () => {
     renderWithEntries([conflicted]);
 
-    expect(within(section('Conflicted')).queryByRole('button')).not.toBeInTheDocument();
+    // Staging an unmerged path as it stands records the conflict markers as
+    // the resolution, so neither action is offered at all.
     expect(
       screen.queryByRole('button', { name: 'Stage merge.ts' }),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: 'Discard merge.ts' }),
     ).not.toBeInTheDocument();
+  });
+
+  it('opens the resolver when the file is clicked', () => {
+    const store = renderWithEntries([conflicted]);
+
+    fireEvent.click(
+      within(section('Conflicted')).getByRole('button', { name: /merge\.ts/ }),
+    );
+
+    // Clicking a conflicted file is the first thing anybody tries, and it used
+    // to do nothing at all.
+    expect(store.getState().resolving).toBe('merge.ts');
   });
 
   it('keeps them out of the bulk actions', () => {
@@ -538,7 +565,8 @@ describe('conflicted entries', () => {
 
     const region = section('Conflicted');
     expect(region).toHaveTextContent('Both sides changed this file.');
-    expect(region).toHaveTextContent('Resolve these files in your editor first.');
+    expect(region).toHaveTextContent('Click a file to resolve it side by side.');
+    expect(region).toHaveTextContent('never staged or discarded as it stands');
   });
 
   it('does not let a conflicted path alone enable committing', () => {

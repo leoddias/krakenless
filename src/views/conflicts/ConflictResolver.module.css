@@ -1,0 +1,239 @@
+/* A full-window screen, not a dialog box: resolving a conflict is the task,
+   and every other panel is noise while it is happening. */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  padding: 1.5rem;
+  background: rgb(0 0 0 / 55%);
+}
+
+.screen {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.path {
+  overflow: hidden;
+  color: var(--fg-strong);
+  font-size: 0.8125rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.count {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.header .count {
+  margin-left: 0;
+}
+
+.notice {
+  margin: 0;
+  padding: 1rem 0.75rem;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.bulk {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* The two sides, side by side. They scroll together with the page rather than
+   independently: a block is one decision, and its two halves must stay level. */
+.panes {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  min-height: 0;
+  background: var(--border-subtle);
+  overflow: auto;
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--bg);
+}
+
+.paneTitle {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0;
+  padding: 0.35rem 0.6rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--muted);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.paneBody {
+  padding: 0.25rem 0;
+}
+
+.context,
+.blockCode,
+.code {
+  margin: 0;
+  padding: 0.15rem 0.6rem;
+  overflow-x: auto;
+  color: var(--fg);
+  font-family: ui-monospace, 'Cascadia Mono', 'Consolas', monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+/* Agreed lines are context, not decisions, so they recede. */
+.context {
+  color: var(--muted);
+}
+
+.block {
+  margin: 0.25rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+}
+
+/* Taken blocks are the ones that will be in the file. The tint is the answer
+   to "what am I about to save", read at a glance. */
+.blockTaken {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+.blockPick {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.5rem;
+  cursor: pointer;
+}
+
+.blockLabel {
+  color: var(--muted);
+  font-size: 0.6875rem;
+}
+
+.blockCode {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 0.3rem;
+  padding-bottom: 0.3rem;
+}
+
+/* The result. Same height priority as one pane — it is the thing being built,
+   and a preview nobody can read is not a preview. */
+.output {
+  display: flex;
+  flex: 0 0 34%;
+  flex-direction: column;
+  min-height: 0;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.outputHeader {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0.35rem 0.75rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.outputTitle {
+  margin: 0;
+  color: var(--fg-strong);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.code {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: auto;
+  background: var(--bg);
+}
+
+.line {
+  white-space: pre;
+}
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.action,
+.primary,
+.close {
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+.primary {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--fg-strong);
+}
+
+.action:disabled,
+.primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.action:not(:disabled):hover,
+.primary:not(:disabled):hover,
+.close:hover {
+  background: var(--surface-hover);
+}
+
+.action:focus-visible,
+.primary:focus-visible,
+.close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
