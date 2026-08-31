@@ -23,6 +23,7 @@ import {
   refreshStatus,
   selectCommit,
   stage,
+  suggestCommitMessage,
   unstage,
 } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
@@ -693,6 +694,9 @@ function CommitBox({
 }): ReactNode {
   const store = useStore();
   const { message, amend, error } = draft;
+  const aiCommand = useAppState((state) => state.config.aiCommand).trim();
+  const [suggesting, setSuggesting] = useState(false);
+  const [aiNote, setAiNote] = useState<string | null>(null);
 
   const empty = message.trim().length === 0;
   const disabled = busy || empty || stagedCount === 0;
@@ -702,6 +706,31 @@ function CommitBox({
   // What the button will actually do, so the flag sent to git can never differ
   // from the label the user read.
   const amending = amend && canAmend;
+
+  /**
+   * Fills the box; never commits. A model's sentence about someone's code is a
+   * draft, and the person pressing Commit is the one who decides it is true.
+   */
+  const suggest = async (): Promise<void> => {
+    setSuggesting(true);
+    setAiNote(null);
+    onDraft({ ...draft, error: null });
+    try {
+      const result = await suggestCommitMessage(store);
+      onDraft({ ...draft, message: result.message, error: null });
+      if (result.kind === 'summary') {
+        // Said out loud rather than hidden: the message was written from the
+        // file list, not the code, and the user should weigh it accordingly.
+        setAiNote(
+          'The staged diff was too large to send whole, so this was written from the list of changed files.',
+        );
+      }
+    } catch (failure) {
+      onDraft({ ...draft, error: messageOf(failure) });
+    } finally {
+      setSuggesting(false);
+    }
+  };
 
   const submit = async (): Promise<void> => {
     if (store.getState().repo.state !== 'ready') {
@@ -713,7 +742,7 @@ function CommitBox({
       await commitStaged(store, { message, amend: amending });
       onDraft({ message: '', amend: false, error: null });
     } catch (failure) {
-      onDraft({ ...draft, error: messageOf(failure) });
+      onDraft({ ...draft, error: `Commit failed: ${messageOf(failure)}` });
     }
   };
 
@@ -753,14 +782,29 @@ function CommitBox({
         </p>
       )}
 
+      {aiNote !== null && (
+        <p className={styles.commitHint} role="status">
+          {aiNote}
+        </p>
+      )}
+
       {error !== null && (
         <p className={styles.commitError} role="alert">
-          {`Commit failed: ${error}`}
+          {error}
         </p>
       )}
 
       <div className={styles.commitActions}>
         <span className={styles.commitHint}>{commitHint(stagedCount, empty)}</span>
+        <button
+          type="button"
+          className={styles.button}
+          disabled={busy || suggesting || stagedCount === 0 || aiCommand.length === 0}
+          title={aiTitle(aiCommand, stagedCount, message)}
+          onClick={() => void suggest()}
+        >
+          {suggesting ? 'Writing…' : 'AI Commit'}
+        </button>
         <button
           type="button"
           className={`${styles.button} ${styles.primary}`}
@@ -772,6 +816,23 @@ function CommitBox({
       </div>
     </section>
   );
+}
+
+/**
+ * Why the AI button is off, or what it will do. The command name is in the
+ * text because it is what the user configured and what will receive their
+ * staged diff.
+ */
+function aiTitle(command: string, stagedCount: number, message: string): string {
+  if (command.length === 0) {
+    return 'Set an AI command in Settings to use this.';
+  }
+  if (stagedCount === 0) {
+    return 'Stage something first: the message is written from the staged diff.';
+  }
+  const replacing =
+    message.trim().length > 0 ? ' This replaces what you have typed.' : '';
+  return `Send the staged diff to "${command}" and write a commit message from it.${replacing}`;
 }
 
 /** Says why the button is off, instead of leaving a dead control on screen. */

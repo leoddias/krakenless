@@ -88,6 +88,41 @@ export function SettingsView({ onClose }: { onClose: () => void }): ReactNode {
       </label>
 
       <label className={styles.field}>
+        <span className={styles.label}>AI command</span>
+        <input
+          className={styles.input}
+          value={draft.aiCommand}
+          placeholder="(off)"
+          onChange={(event) => update('aiCommand', event.target.value)}
+        />
+        <span className={styles.hint}>
+          Program run by the <strong>AI Commit</strong> button, which writes a commit
+          message from your staged changes. A program name or path — not a command line;
+          the arguments are Krakenless&apos;s to decide. Defaults to <code>claude</code>.
+          Leave it empty to turn the button off.
+        </span>
+        <span className={styles.hint}>
+          Krakenless has no API key and opens no connection of its own: it runs a CLI you
+          already installed and signed in to, the same way it runs <code>git</code>. Your{' '}
+          <strong>staged diff is written to that program</strong>, so where the code goes
+          next is decided by the tool you name here.
+        </span>
+      </label>
+
+      <label className={styles.field}>
+        <span className={styles.label}>AI model</span>
+        <input
+          className={styles.input}
+          value={draft.aiModel}
+          onChange={(event) => update('aiModel', event.target.value)}
+        />
+        <span className={styles.hint}>
+          Passed to that program as <code>--model</code>. A commit subject is a small job,
+          so the default is the cheap one: <code>haiku</code>.
+        </span>
+      </label>
+
+      <label className={styles.field}>
         <span className={styles.checkbox}>
           <input
             type="checkbox"

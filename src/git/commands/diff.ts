@@ -95,6 +95,18 @@ export function buildStagedDiffCommand(options: DiffOptions = {}): GitCommand {
 }
 
 /**
+ * File-level summary of what is staged: one line per file, plus a total.
+ *
+ * The fallback when a staged patch is too large to send to an AI CLI whole.
+ * `--stat` is not parsed by anything — it is prose for a model — so it
+ * deliberately skips {@link DIFF_FLAGS}, which exist to keep *patches*
+ * machine-stable.
+ */
+export function buildStagedStatCommand(options: DiffOptions = {}): GitCommand {
+  return { args: ['diff', '--cached', '--stat', '--no-color', ...pathArgs(options)] };
+}
+
+/**
  * The patch a single commit introduced.
  *
  * `--format=` drops the commit header so stdout is nothing but the patch, and

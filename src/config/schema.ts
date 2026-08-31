@@ -46,6 +46,22 @@ export interface AppConfig {
    * destination this app has always had.
    */
   autoFetchMinutes: number;
+  /**
+   * Program run by the "AI Commit" button; empty turns the button off.
+   *
+   * A program name or path, never a command line — arguments are the app's to
+   * decide, and a string like `claude --print` would be looked up as a file of
+   * that literal name. Defaults to `claude`.
+   *
+   * This is the second setting that can cause anything to leave the machine,
+   * and it is the more consequential one: the *staged diff* is written to this
+   * program's standard input. Krakenless itself opens no socket and holds no
+   * API key — where that text goes next is decided by the CLI the user chose
+   * and already authenticated (ADR-0033).
+   */
+  aiCommand: string;
+  /** Model passed to that program. Cheap by default: a subject line is a small job. */
+  aiModel: string;
   layout: LayoutConfig;
 }
 
@@ -96,6 +112,8 @@ export function defaultConfig(): AppConfig {
     recentRepos: [],
     editorCommand: '',
     mergetool: '',
+    aiCommand: 'claude',
+    aiModel: 'haiku',
     theme: 'dark',
     remoteAvatars: false,
     autoFetchMinutes: 5,
@@ -247,6 +265,8 @@ export function parseConfig(text: string | null): AppConfig {
     recentRepos: asRecentRepos(raw['recentRepos']),
     editorCommand: asString(raw['editorCommand'], defaults.editorCommand),
     mergetool: asString(raw['mergetool'], defaults.mergetool),
+    aiCommand: asString(raw['aiCommand'], defaults.aiCommand),
+    aiModel: asString(raw['aiModel'], defaults.aiModel),
     theme:
       theme === 'light' || theme === 'system' || theme === 'dark'
         ? theme

@@ -10,6 +10,7 @@
 import { saveConfig } from '../config/store';
 import { withRecentRepo, withoutRecentRepo } from '../config/schema';
 import { getCommitDiff, getStagedDiff, getWorktreeDiff } from '../git/diff';
+import { generateCommitMessage, type GeneratedMessage } from '../ai/message';
 import { GitError } from '../git/errors';
 import { readLog } from '../git/log';
 import { openRepository } from '../git/repository';
@@ -236,6 +237,39 @@ async function mutate(store: Store, run: () => Promise<unknown>): Promise<void> 
     // Same ordering rule as `operate`: the panels must be current before the
     // controls come back to life.
     await Promise.all([refreshStatus(store), refreshDiff(store)]);
+    store.dispatch({ type: 'busy', busy: false });
+  }
+}
+
+/**
+ * Asks the configured AI CLI for a commit message and returns it.
+ *
+ * Returns the draft rather than writing it into the store: the message belongs
+ * in the box the user is editing, and this function must not be able to commit
+ * anything. Errors come back as a thrown {@link GitError} so the commit box can
+ * show them where the user is looking, instead of a notice somewhere else.
+ *
+ * Not routed through `mutate`: nothing here writes to the repository, so the
+ * panels must not be reloaded and the destructive controls must not be
+ * disabled. It sets `busy` only so the button cannot be pressed twice.
+ */
+export async function suggestCommitMessage(store: Store): Promise<GeneratedMessage> {
+  const root = currentRoot(store);
+  if (root === null) {
+    throw new GitError('command-failed', 'No repository is open.');
+  }
+  const { aiCommand, aiModel } = store.getState().config;
+  if (aiCommand.trim().length === 0) {
+    throw new GitError(
+      'command-failed',
+      'No AI command is configured. Set one in Settings.',
+    );
+  }
+
+  store.dispatch({ type: 'busy', busy: true });
+  try {
+    return await generateCommitMessage(root, aiCommand, aiModel);
+  } finally {
     store.dispatch({ type: 'busy', busy: false });
   }
 }

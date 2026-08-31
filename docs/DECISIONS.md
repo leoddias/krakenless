@@ -663,3 +663,58 @@ so one context-free hunk must not turn off git's position check for every other
 hunk travelling with it.
 `ParsedFileDiff` is what `serializeHunks` accepts, so the serializer stays
 usable from tests and from parser output without inventing a side.
+
+## ADR-0033 — The AI commit message comes from a CLI the user already trusts, not from an API client
+
+**Decision:** An "AI Commit" button sits beside Commit. It runs a
+user-configured program (`aiCommand`, default `claude`) with a fixed argument
+list, writes the staged diff to that program's standard input, and puts the
+one line it prints into the commit message box. Two settings exist: the program
+and the model (`aiModel`, default `haiku`). Krakenless ships no HTTP client, no
+API client library, and stores no credential. The button never commits.
+Supersedes the "BYOK AI in v0.2+" clause of ADR-0021's privacy rule: there is
+no key to bring.
+**Why:** The app's whole architecture is "shell out to a binary the user
+installed" — that is how it uses git, and it works here for the same reasons.
+An in-app API client would need a key, and a key needs somewhere to live: the
+config file is plain text the docs invite users to hand-edit, and an OS
+keychain is a dependency and a new failure mode. Shelling out has none of that.
+Authentication is the CLI's problem and it is already solved on the user's
+machine; the app never sees a token, so it cannot leak one.
+
+Every flag is load-bearing. `-p` makes it non-interactive — without it the CLI
+opens a session and the app hangs until the timeout. `--restricted` removes the
+tools that run commands or code: a commit-message button must not be able to
+execute anything in the repository. `--no-session-persistence` keeps a private
+diff out of a transcript on disk. `--system-prompt` *replaces* the CLI's own
+prompt rather than appending, which drops the coding-agent preamble — cheaper
+and less of an invitation to do more than answer. `--bare` is deliberately
+absent despite looking right: it forces authentication to an API key and never
+reads the CLI's own login, which is the one thing this design depends on.
+
+The diff travels on **stdin**, never in the argument list, for the same reason
+`git apply` reads a patch that way — an argument list is visible to every
+process on the machine.
+**Consequences:** The staged diff leaves the machine if the configured CLI
+sends it somewhere. That is a real change to the privacy stance and it is
+stated in Settings in those words, next to the field that causes it — the
+honest framing is that the user chooses the tool and Krakenless hands it the
+code. Nothing happens until the button is pressed, and an empty `aiCommand`
+turns the feature off entirely.
+
+The result is a *draft*: it lands in the message box and a person presses
+Commit. That is the safety property the whole feature rests on, and it has a
+test that fails if the button ever commits. It also makes prompt injection from
+diff content a non-event — the worst case is a strange sentence the user reads
+before accepting.
+
+A patch over 60,000 characters is replaced by `git diff --cached --stat`, and
+the UI **says so**. Truncating the patch instead would produce a confident
+message about whichever files happened to come first, with nothing downstream
+able to tell that had happened.
+
+The Rust side reuses `run_capture`, extracted from `run_git`: the pipe-reader
+threads, the process-tree kill and the bounded waits are the parts that hang or
+silently truncate when copied, so there is one copy. `ai_runner` refuses a
+program name containing whitespace — `claude --print` in that field is a
+command line, and running it looks for a file of that literal name.

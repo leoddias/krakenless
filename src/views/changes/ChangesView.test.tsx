@@ -1,4 +1,12 @@
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RepoStatus, StatusEntry } from '../../git/types';
 import {
@@ -6,6 +14,7 @@ import {
   discard,
   refreshStatus,
   stage,
+  suggestCommitMessage,
   unstage,
 } from '../../state/actions';
 import { StoreProvider } from '../../state/hooks';
@@ -18,6 +27,7 @@ vi.mock('../../state/actions', () => ({
   discard: vi.fn(),
   commitStaged: vi.fn(),
   refreshStatus: vi.fn(),
+  suggestCommitMessage: vi.fn(),
 }));
 
 const stageMock = vi.mocked(stage);
@@ -25,6 +35,7 @@ const unstageMock = vi.mocked(unstage);
 const discardMock = vi.mocked(discard);
 const commitMock = vi.mocked(commitStaged);
 const refreshMock = vi.mocked(refreshStatus);
+const suggestMock = vi.mocked(suggestCommitMessage);
 
 function entry(overrides: Partial<StatusEntry> & { path: string }): StatusEntry {
   return {
@@ -845,5 +856,96 @@ describe('busy gate', () => {
     act(() => store.dispatch({ type: 'busy', busy: true }));
 
     expect(screen.getByRole('button', { name: 'Discard 1 file' })).toBeDisabled();
+  });
+});
+
+describe('the AI Commit button', () => {
+  /** A repository with one staged file, which is what the button needs. */
+  function withStaged(): Store {
+    return renderWithEntries([entry({ path: 'a.ts', index: 'modified' })]);
+  }
+
+  beforeEach(() => {
+    suggestMock
+      .mockReset()
+      .mockResolvedValue({ message: 'feat: add a thing', kind: 'patch' });
+  });
+
+  function aiButton(): HTMLElement {
+    return screen.getByRole('button', { name: 'AI Commit' });
+  }
+
+  it('sits next to Commit', () => {
+    withStaged();
+    expect(aiButton()).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Commit' })).toBeInTheDocument();
+  });
+
+  it('fills the message box and never commits', async () => {
+    // The whole safety property of this feature: a model's sentence about
+    // somebody's code is a draft, and a person presses Commit.
+    withStaged();
+
+    fireEvent.click(aiButton());
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('Commit message')).toHaveValue('feat: add a thing'),
+    );
+    expect(commitMock).not.toHaveBeenCalled();
+  });
+
+  it('is off until something is staged', () => {
+    renderWithEntries([entry({ path: 'a.ts', worktree: 'modified' })]);
+    expect(aiButton()).toBeDisabled();
+  });
+
+  it('is off when no AI command is configured', () => {
+    renderChanges((store) => {
+      openRepo(store);
+      store.dispatch({
+        type: 'config/loaded',
+        config: { ...store.getState().config, aiCommand: '   ' },
+      });
+      store.dispatch({
+        type: 'status/loaded',
+        status: statusOf([entry({ path: 'a.ts', index: 'modified' })]),
+      });
+    });
+
+    expect(aiButton()).toBeDisabled();
+    expect(aiButton()).toHaveAttribute('title', expect.stringContaining('Settings'));
+  });
+
+  it('says when the message came from a file summary, not the diff', async () => {
+    // Otherwise the user weighs a vaguer message as if it had seen the code.
+    suggestMock.mockResolvedValue({ message: 'chore: update files', kind: 'summary' });
+    withStaged();
+
+    fireEvent.click(aiButton());
+
+    expect(await screen.findByText(/too large to send whole/)).toBeInTheDocument();
+  });
+
+  it('shows a failure without labelling it a commit failure', async () => {
+    suggestMock.mockRejectedValue(new Error('Could not start "claude"'));
+    withStaged();
+
+    fireEvent.click(aiButton());
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Could not start "claude"');
+    expect(alert).not.toHaveTextContent('Commit failed');
+  });
+
+  it('leaves what the user typed alone when it fails', async () => {
+    suggestMock.mockRejectedValue(new Error('nope'));
+    withStaged();
+    const box = screen.getByLabelText('Commit message');
+    fireEvent.change(box, { target: { value: 'my own message' } });
+
+    fireEvent.click(aiButton());
+
+    await screen.findByRole('alert');
+    expect(box).toHaveValue('my own message');
   });
 });
