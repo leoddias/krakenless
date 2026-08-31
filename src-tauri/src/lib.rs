@@ -1,3 +1,4 @@
+mod ai_runner;
 mod avatars;
 mod config;
 mod external;
@@ -34,7 +35,8 @@ pub fn run() {
             external::reveal_folder,
             worktree::worktree_read,
             worktree::worktree_write,
-            rebase_state::rebase_state
+            rebase_state::rebase_state,
+            ai_runner::ai_run
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

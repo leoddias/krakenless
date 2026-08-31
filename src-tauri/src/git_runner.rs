@@ -200,21 +200,43 @@ pub fn run_git(
         .current_dir(&cwd)
         .args(GIT_GLOBAL_ARGS)
         .args(args)
+        // Keep output machine-stable regardless of the user's environment.
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("LC_ALL", "C");
+
+    run_capture(command, timeout, stdin_text)
+}
+
+/// Spawns a fully configured command and captures it, with a deadline.
+///
+/// Extracted so the AI runner can reuse it rather than grow a second copy of
+/// this lifecycle. Everything subtle about running a child process lives here
+/// — the two reader threads that stop a full pipe from deadlocking us, the
+/// stdin writer thread for the same reason, killing the whole process tree on
+/// timeout, and the bounded wait afterwards. A second, hand-copied version of
+/// this is where a hang or a silently truncated capture would come from.
+///
+/// The caller owns policy: program, arguments, working directory and
+/// environment are already set on `command`. Only stdio is decided here,
+/// because it depends on whether there is stdin to write.
+pub fn run_capture(
+    mut command: Command,
+    timeout: Duration,
+    stdin_text: Option<String>,
+) -> Result<GitOutput, GitRunError> {
+    command
         .stdin(if stdin_text.is_some() {
             Stdio::piped()
         } else {
             Stdio::null()
         })
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        // Keep output machine-stable regardless of the user's environment.
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("LC_ALL", "C");
+        .stderr(Stdio::piped());
 
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
     #[cfg(unix)]
-    // Own process group, so killing on timeout reaches everything git spawned.
+    // Own process group, so killing on timeout reaches everything it spawned.
     command.process_group(0);
 
     let mut child = command
@@ -235,7 +257,7 @@ pub fn run_git(
             // would sit waiting for input until the timeout killed it.
             None => {
                 kill_tree(&mut child);
-                return Err(GitRunError::IoFailed("git stdin was not available".into()));
+                return Err(GitRunError::IoFailed("child stdin was not available".into()));
             }
         }
     }
