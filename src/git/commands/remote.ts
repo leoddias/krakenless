@@ -106,25 +106,3 @@ export function buildPushTagCommand(remote: string, tag: string): GitCommand {
 export function buildMergeAbortCommand(): GitCommand {
   return { args: ['merge', '--abort'], destructive: true };
 }
-
-/** Reads which operation the repository is in the middle of, if any. */
-export function buildOperationProbeCommand(): GitCommand {
-  return {
-    args: [
-      'rev-parse',
-      '--path-format=absolute',
-      '--git-path',
-      'MERGE_HEAD',
-      '--git-path',
-      'rebase-merge',
-      '--git-path',
-      'rebase-apply',
-      '--git-path',
-      'CHERRY_PICK_HEAD',
-      '--git-path',
-      'REVERT_HEAD',
-      '--git-path',
-      'BISECT_LOG',
-    ],
-  };
-}

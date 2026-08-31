@@ -17,6 +17,19 @@ function exactLines(stdout: string, expected: number, args: string[]): string[] 
     lines.pop();
   }
   if (lines.length !== expected) {
+    // `rev-parse` echoes flags it does not recognize to stdout and still
+    // exits 0, so an old git turns each unsupported flag into an extra output
+    // line. Name that cause instead of reporting a bare line count. Only the
+    // first line qualifies: git echoes flags in argument order, before any
+    // value — a later `--` line is a path fragment, not a flag.
+    const echoed = lines[0];
+    if (lines.length > expected && echoed !== undefined && echoed.startsWith('--')) {
+      throw new GitError(
+        'parse-failed',
+        `This git does not support ${echoed} — please update git`,
+        { args },
+      );
+    }
     throw new GitError(
       'parse-failed',
       `Expected ${expected} line(s) from git rev-parse, got ${lines.length}`,

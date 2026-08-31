@@ -13,18 +13,22 @@ describe('repo command builders', () => {
     // command exit 128 in a bare repository.
     expect(buildRepoProbeCommand().args).toEqual([
       'rev-parse',
-      '--path-format=absolute',
       '--absolute-git-dir',
       '--is-bare-repository',
     ]);
   });
 
   it('asks for the worktree root separately', () => {
-    expect(buildToplevelCommand().args).toEqual([
-      'rev-parse',
-      '--path-format=absolute',
-      '--show-toplevel',
-    ]);
+    expect(buildToplevelCommand().args).toEqual(['rev-parse', '--show-toplevel']);
+  });
+
+  it('uses no flag newer than git 2.13, and never --path-format', () => {
+    // rev-parse echoes unknown flags to stdout and exits 0, so any flag the
+    // user's git predates silently corrupts the output instead of failing.
+    // --path-format specifically (git 2.31) broke opening on older gits.
+    for (const build of [buildRepoProbeCommand, buildToplevelCommand]) {
+      expect(build().args).not.toContain('--path-format=absolute');
+    }
   });
 
   it('verifies HEAD quietly so an empty repo is not noisy', () => {
@@ -75,6 +79,19 @@ describe('parseRepoProbe', () => {
     expect(() => parseRepoProbe('/home/u/we\nird/.git\nfalse\n')).toThrow(GitError);
     expect(() => parseRepoProbe('/srv/app/.git\n')).toThrow(/Expected 2 line/);
     expect(() => parseRepoProbe('')).toThrow(GitError);
+  });
+
+  it('names the unsupported flag when an old git echoes it back', () => {
+    // git < 2.31 echoed `--path-format=absolute` as an extra stdout line and
+    // exited 0 — the user-visible bug was a cryptic "Expected 2 line(s), got 3".
+    expect(() =>
+      parseRepoProbe('--path-format=absolute\nC:/repos/app/.git\nfalse\n'),
+    ).toThrow(/does not support --path-format=absolute/);
+    // A `--` on a *later* line is a path fragment (newline in the directory
+    // name), not an echoed flag — that must stay a plain line-count error.
+    expect(() => parseRepoProbe('/home/u/proj\n--weird/.git\nfalse\n')).toThrow(
+      /Expected 2 line/,
+    );
   });
 
   it('refuses a bare flag that is not a boolean', () => {
