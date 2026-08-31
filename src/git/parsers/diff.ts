@@ -1,5 +1,5 @@
 import { GitError } from '../errors';
-import type { DiffLine, FileChangeKind, FileDiff, Hunk } from '../types';
+import type { DiffLine, FileChangeKind, Hunk, ParsedFileDiff } from '../types';
 
 /**
  * Parser for git's unified patch format.
@@ -418,7 +418,7 @@ function startsEntry(line: string): boolean {
 function parseFileEntry(
   lines: string[],
   start: number,
-): { file: FileDiff; next: number } {
+): { file: ParsedFileDiff; next: number } {
   const headerLine = lines[start] as string;
   const headerLines: string[] = [headerLine];
   const facts: HeaderFacts = { kind: 'modified', binary: false };
@@ -496,7 +496,7 @@ function parseFileEntry(
 function parseCombinedEntry(
   lines: string[],
   start: number,
-): { file: FileDiff; next: number } {
+): { file: ParsedFileDiff; next: number } {
   const headerLine = lines[start] as string;
   const headerLines: string[] = [headerLine];
   const facts: HeaderFacts = { kind: 'modified', binary: false };
@@ -554,7 +554,7 @@ function parseCombinedEntry(
 }
 
 /** Reads a `* Unmerged path <p>` notice, which carries no patch at all. */
-function parseUnmergedNotice(line: string): FileDiff {
+function parseUnmergedNotice(line: string): ParsedFileDiff {
   const path = decodePath(line.slice(UNMERGED_NOTICE.length));
   if (path.length === 0) fail('Empty path in an "* Unmerged path" notice');
   return {
@@ -569,7 +569,7 @@ function parseUnmergedNotice(line: string): FileDiff {
 }
 
 /**
- * Turns unified diff text into one {@link FileDiff} per entry.
+ * Turns unified diff text into one {@link ParsedFileDiff} per entry.
  *
  * Entries with no hunks are normal and mean different things depending on
  * `headerLines`: a mode-only change, a 100% rename, an empty new file, a
@@ -585,14 +585,14 @@ function parseUnmergedNotice(line: string): FileDiff {
  * add (verified against git 2.39, where `--raw` reports `T` for the same
  * change), so this parser never produces that kind — the status parser does.
  */
-export function parseDiff(text: string): FileDiff[] {
+export function parseDiff(text: string): ParsedFileDiff[] {
   if (text.length === 0) return [];
 
   const lines = text.split('\n');
   // Git terminates every line it writes, leaving one empty trailing element.
   if (lines[lines.length - 1] === '') lines.pop();
 
-  const files: FileDiff[] = [];
+  const files: ParsedFileDiff[] = [];
   let i = 0;
 
   while (i < lines.length) {

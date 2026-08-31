@@ -1,0 +1,83 @@
+/* Sits with the notice bar, but unlike a notice it stays until each entry is
+   acted on: the oid it carries is the only route back to discarded work. */
+.bar {
+  padding: 0.4rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.title {
+  margin: 0 0 0.3rem;
+  color: var(--muted);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.15rem 0;
+}
+
+.path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.oid {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+}
+
+.undo,
+.dismiss {
+  flex: 0 0 auto;
+  padding: 0.05rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--surface-raised);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.6875rem;
+  cursor: pointer;
+}
+
+.undo {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--fg-strong);
+}
+
+.undo:disabled,
+.dismiss:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.undo:not(:disabled):hover,
+.dismiss:not(:disabled):hover {
+  background: var(--surface-hover);
+}
+
+.undo:focus-visible,
+.dismiss:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}

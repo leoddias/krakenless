@@ -9,6 +9,7 @@ function fileDiff(overrides: Partial<FileDiff> = {}): FileDiff {
     kind: 'modified',
     binary: false,
     conflicted: false,
+    side: 'unstaged',
     headerLines: ['diff --git a/src/a.ts b/src/a.ts'],
     hunks: [],
     ...overrides,

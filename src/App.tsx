@@ -31,7 +31,7 @@ import { SettingsView } from './views/settings';
 import { RefsView } from './views/refs';
 import { resolveShortcut } from './views/shell/shortcuts';
 import { RemoteBar } from './views/remote';
-import { NoticeBar } from './views/shell';
+import { DiscardBackups, NoticeBar } from './views/shell';
 import { CheckoutPicker } from './views/shell/CheckoutPicker';
 import {
   ChevronRightIcon,
@@ -461,6 +461,7 @@ function RepoPane({
           />
           <ConflictBanner />
           <NoticeBar />
+          <DiscardBackups />
           <PanelGrid />
           <StatusBar root={root} />
           {/*

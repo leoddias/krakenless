@@ -155,7 +155,24 @@ export interface Hunk {
 export type FileChangeKind =
   'modified' | 'added' | 'deleted' | 'renamed' | 'copied' | 'type-changed';
 
-export interface FileDiff {
+/**
+ * Which comparison an entry came out of.
+ *
+ * Load-bearing, not a label. The diff panel concatenates the worktree and the
+ * cached diff, so the same path can appear twice, and the *only* difference
+ * between "stage this hunk" and "unstage this hunk" is which side produced it.
+ * A button that guessed would move the wrong hunk in the wrong direction.
+ */
+export type DiffSide = 'unstaged' | 'staged' | 'commit';
+
+/**
+ * A file entry exactly as the parser read it out of a patch.
+ *
+ * The parser cannot know which comparison it is reading — the patch text is
+ * identical either way — so the side is stamped on by the caller that chose
+ * the command, in `src/git/diff.ts`.
+ */
+export interface ParsedFileDiff {
   oldPath: string;
   newPath: string;
   kind: FileChangeKind;
@@ -178,6 +195,10 @@ export interface FileDiff {
   /** Raw `diff --git` header lines preceding the first hunk. */
   headerLines: string[];
   hunks: Hunk[];
+}
+
+export interface FileDiff extends ParsedFileDiff {
+  side: DiffSide;
 }
 
 // --- refs, remotes, stash ---------------------------------------------------

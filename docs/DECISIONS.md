@@ -594,3 +594,72 @@ they still need the merge tool or an editor. The trailing newline is carried
 from the original rather than assumed. `resolveConflict` writes before staging,
 never the reverse: staging first would, on a failed write, leave the index
 claiming a resolution the file does not contain.
+
+## ADR-0032 — Hunks are staged and discarded one at a time, and every diff entry knows its side
+
+**Decision:** The diff panel offers per-hunk actions in each hunk header:
+`Stage Hunk` / `Discard Hunk` on an unstaged entry, `Unstage Hunk` on a staged
+one, and nothing on a commit. To make that possible every `FileDiff` now
+carries a `side` (`'unstaged' | 'staged' | 'commit'`), stamped in
+`src/git/diff.ts` by the function that chose the command; the parser returns
+`ParsedFileDiff`, which has no side, because a patch reads identically whichever
+comparison produced it. Staging and unstaging reuse the existing
+`applyHunks` (`git apply --cached`, `--check` first). Discarding is new:
+`discardHunks` writes the file's current bytes to the object store with
+`git hash-object -w --no-filters`, runs `git apply --check --reverse`, then
+`git apply --reverse` against the **working tree**, and returns the oid. The
+app keeps that oid in a bounded store slice (`discards`) surfaced as a *Recent
+discards* bar with an **Undo** button that writes the blob back itself. Discard
+is offered only on the unstaged side; no hunk actions at all are offered for
+binary, conflicted, renamed, copied or symlink entries; and discard in
+particular is withheld for added, deleted and type-changed files. The reverse
+patch is serialized with `target: 'worktree'`, which omits the file-level
+`old mode`/`new mode` lines and positions each hunk by its parsed *new*-side
+numbers.
+**Why:** The panel concatenates the worktree and cached diffs, so one path can
+appear twice and the two rows were previously indistinguishable — a button
+there would have been a coin flip between staging and unstaging. The side is
+the only thing that answers it, so it is carried as data rather than inferred.
+Discarding a hunk is the sharpest operation in the app: unlike every other
+discard it removes an edit git has never been told about, so there is no stash
+and no reflog to fall back on, and the blob backup is the entire recovery
+route — it is therefore taken *before* the apply, and a backup that fails to
+produce an oid aborts the discard rather than proceeding unprotected.
+`--no-filters` is load-bearing: with a clean driver or `core.autocrlf` in play
+git would store normalised content, and restoring it would rewrite lines the
+discard never touched.
+
+The undo is a **button, not a printed command**. `git cat-file -p <oid> > path`
+is byte-exact in `cmd.exe` and in `pwsh` 7, but in Windows PowerShell 5.1 — the
+default shell on Windows 11, this app's primary platform — `>` is `Out-File`,
+which re-encodes the stream as UTF-16LE with a byte-order mark and appends a
+newline. Printing it would have handed the user a "recovery" that corrupts the
+file it claims to restore. For the same reason the oid lives in the store
+rather than in a notice: a notice is replaced by the very next operation, and
+this oid is the only handle on work that has no stash, no reflog and no commit
+behind it.
+
+Symlinks are refused because a symlink's patch body is its *target string*:
+restoring it by writing that text to the path follows the link and truncates
+whatever it points at — a file outside the repository the user never selected.
+Added files are refused because reverse-applying a `new file mode` patch
+deletes the file from disk, which is not what the confirmation describes. Mode
+lines are dropped from the reverse patch because they describe the file rather
+than any hunk, so a one-hunk discard would otherwise silently revert an
+executable bit the content backup cannot restore. Discard is withheld on the staged side because "discard"
+there has two plausible meanings (drop from the index, or from both) and the
+user cannot tell which they are getting; unstaging first makes the question
+concrete. The refused file kinds are exactly the shapes `serializeHunks` throws
+on — for a rename, a patch carrying only some hunks would record the content
+without the rename.
+**Consequences:** The undo command restores the **whole file**, not just the
+discarded hunks, because that is the state that actually existed and can be
+described honestly. `git apply --reverse` on the worktree is recognised as
+destructive by `isDestructive()` from its arguments, independently of the
+builder's flag. The dry run uses exactly the flags the real apply will use,
+including `--unidiff-zero`, so it proves something about the apply that follows.
+`--unidiff-zero` is decided with `every`, not `some`: it is a per-*patch* flag,
+so one context-free hunk must not turn off git's position check for every other
+hunk travelling with it.
+`ParsedFileDiff` is what `serializeHunks` accepts, so the serializer stays
+usable from tests and from parser output without inventing a side.

@@ -14,6 +14,7 @@ import {
   selectCommit,
   stage,
   stageHunks,
+  undoDiscard,
   unstage,
 } from './actions';
 import { createStore, isBusy } from './store';
@@ -31,6 +32,10 @@ const unstagePaths = vi.hoisted(() => vi.fn());
 const applyHunks = vi.hoisted(() => vi.fn());
 const commit = vi.hoisted(() => vi.fn());
 const discardPaths = vi.hoisted(() => vi.fn());
+const discardHunks = vi.hoisted(() => vi.fn());
+const readBackupBlob = vi.hoisted(() => vi.fn());
+const openWorktreeFile = vi.hoisted(() => vi.fn());
+const saveWorktreeFile = vi.hoisted(() => vi.fn());
 const listBranches = vi.hoisted(() => vi.fn());
 const listStashes = vi.hoisted(() => vi.fn());
 const fetchRemoteFn = vi.hoisted(() => vi.fn());
@@ -65,6 +70,14 @@ vi.mock('../git/stage', () => ({
   applyHunks,
   commit,
   discardPaths,
+  discardHunks,
+  readBackupBlob,
+  discardHunkRefusal: () => null,
+}));
+vi.mock('../fs/file', () => ({
+  openWorktreeFile,
+  saveWorktreeFile,
+  FileError: class extends Error {},
 }));
 
 const REPO = {
@@ -90,6 +103,7 @@ function file(path: string) {
     kind: 'modified' as const,
     binary: false,
     conflicted: false,
+    side: 'unstaged' as const,
     headerLines: [],
     hunks: [],
   };
@@ -492,5 +506,60 @@ describe('actions', () => {
       { ref: 'stash@{0}', oid: 'abc' },
       expect.objectContaining({ reason: 'Drop stash@{0}?' }),
     );
+  });
+});
+
+describe('undoDiscard', () => {
+  const ORIGINAL = 'the original bytes\n';
+  const BACKUP = {
+    path: 'src/a.ts',
+    blobOid: 'a'.repeat(40),
+    at: '2026-08-31T10:00:00.000Z',
+  };
+
+  beforeEach(() => {
+    readBackupBlob.mockResolvedValue(ORIGINAL);
+    openWorktreeFile.mockResolvedValue({
+      path: 'src/a.ts',
+      text: '',
+      shape: {},
+      stamp: 'stamp',
+    });
+    saveWorktreeFile.mockResolvedValue(undefined);
+  });
+
+  async function opened() {
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+    store.dispatch({ type: 'discard/recorded', backup: BACKUP });
+    return store;
+  }
+
+  it('writes the blob back verbatim through the app, not a shell redirect', async () => {
+    const store = await opened();
+
+    await undoDiscard(store, BACKUP);
+
+    expect(readBackupBlob).toHaveBeenCalledWith(REPO.root, BACKUP.blobOid);
+    // Exactly what came out of the object store: `saveWorktreeFile` reformats
+    // nothing, so line endings and a missing final newline survive.
+    expect(saveWorktreeFile).toHaveBeenCalledWith(
+      REPO.root,
+      expect.objectContaining({ path: 'src/a.ts' }),
+      ORIGINAL,
+    );
+    expect(store.getState().discards).toEqual([]);
+  });
+
+  it('keeps the backup listed when the restore fails', async () => {
+    // Dropping the record on a failed restore would throw away the oid that is
+    // still the only way back to the discarded work.
+    saveWorktreeFile.mockRejectedValue(new GitError('command-failed', 'disk full'));
+    const store = await opened();
+
+    await undoDiscard(store, BACKUP);
+
+    expect(store.getState().discards).toEqual([BACKUP]);
+    expect(store.getState().notice?.tone).toBe('error');
   });
 });

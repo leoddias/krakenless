@@ -10,7 +10,7 @@
  */
 
 import { GitError } from './errors';
-import type { DiffLine, FileDiff, Hunk } from './types';
+import type { DiffLine, Hunk, ParsedFileDiff } from './types';
 
 /** Marker git writes when a side's last line has no trailing newline. */
 const NO_NEWLINE = '\\ No newline at end of file';
@@ -26,7 +26,20 @@ function fail(message: string): never {
  */
 const DEFAULT_MODE = '100644';
 
-function fileHeader(file: FileDiff): string[] {
+/**
+ * Where the patch will be applied, which changes what a correct patch *is*.
+ *
+ * - `index`: forward `git apply --cached`. Git positions by the old side, so
+ *   the new-side numbers only need internal consistency — and they must carry
+ *   the shift left by the hunks that are *not* being staged.
+ * - `worktree`: reverse `git apply` against the file on disk. Now the **new**
+ *   side is what git matches against, and every selected hunk's parsed
+ *   position is already true for the file as it currently stands. Correcting
+ *   the offsets here would move each hunk to a line it does not occupy.
+ */
+export type PatchTarget = 'index' | 'worktree';
+
+function fileHeader(file: ParsedFileDiff, target: PatchTarget): string[] {
   const oldSide = file.kind === 'added' ? '/dev/null' : `a/${file.oldPath}`;
   const newSide = file.kind === 'deleted' ? '/dev/null' : `b/${file.newPath}`;
   const lines = [`diff --git a/${file.oldPath} b/${file.newPath}`];
@@ -38,7 +51,15 @@ function fileHeader(file: FileDiff): string[] {
     lines.push(`new file mode ${file.newMode ?? DEFAULT_MODE}`);
   } else if (file.kind === 'deleted') {
     lines.push(`deleted file mode ${file.oldMode ?? DEFAULT_MODE}`);
-  } else if (file.oldMode !== undefined && file.newMode !== undefined) {
+  } else if (
+    file.oldMode !== undefined &&
+    file.newMode !== undefined &&
+    // Never on a discard. These lines are a property of the *file*, not of any
+    // hunk, so `apply --reverse` would chmod the worktree file back even when
+    // the user picked a single hunk — reverting a change they never selected,
+    // and one the content backup cannot restore.
+    target === 'index'
+  ) {
     lines.push(`old mode ${file.oldMode}`, `new mode ${file.newMode}`);
   }
 
@@ -136,12 +157,22 @@ function newStartOf(hunk: Hunk, body: HunkBody, newOffset: number): number {
  * The offset is corrected here; getting it wrong is how a partial stage writes
  * content into the wrong place in the file.
  */
-export function serializeHunks(file: FileDiff, hunks: Hunk[]): string {
+export function serializeHunks(
+  file: ParsedFileDiff,
+  hunks: Hunk[],
+  target: PatchTarget = 'index',
+): string {
   if (file.binary) {
     fail(`Cannot build a patch for the binary file ${file.newPath}`);
   }
   if (file.conflicted) {
     fail(`Cannot build a patch for the conflicted file ${file.newPath}`);
+  }
+  if (file.newMode === '120000' || file.oldMode === '120000') {
+    // A symlink's "content" is its target string. Reverse-applying that patch
+    // is fine, but nothing downstream can safely restore it, so no caller gets
+    // to build the patch in the first place.
+    fail(`Hunk-level staging is not supported for the symlink ${file.newPath}`);
   }
   if (file.kind === 'renamed' || file.kind === 'copied') {
     // Git infers a rename from the differing paths in the header, so a patch
@@ -156,7 +187,7 @@ export function serializeHunks(file: FileDiff, hunks: Hunk[]): string {
     fail(`No hunks selected for ${file.newPath}`);
   }
 
-  const lines = fileHeader(file);
+  const lines = fileHeader(file, target);
   let newOffset = 0;
 
   for (const hunk of hunks) {
@@ -168,7 +199,7 @@ export function serializeHunks(file: FileDiff, hunks: Hunk[]): string {
       renderHeader(
         hunk.oldStart,
         body.oldCount,
-        newStartOf(hunk, body, newOffset),
+        target === 'worktree' ? hunk.newStart : newStartOf(hunk, body, newOffset),
         body.newCount,
       ),
     );
@@ -184,6 +215,6 @@ export function serializeHunks(file: FileDiff, hunks: Hunk[]): string {
  * Equivalent to `git add <path>` but goes through the same code path as a
  * partial stage, so both are exercised by the same tests.
  */
-export function serializeFile(file: FileDiff): string {
+export function serializeFile(file: ParsedFileDiff): string {
   return serializeHunks(file, file.hunks);
 }

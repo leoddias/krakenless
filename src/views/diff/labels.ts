@@ -6,7 +6,19 @@
  * a user act on a change they did not actually see.
  */
 
-import type { DiffLine, FileDiff } from '../../git/types';
+import type { DiffLine, DiffSide, FileDiff } from '../../git/types';
+
+/**
+ * Which comparison an entry came from, said in the panel. The worktree and
+ * cached diffs are shown in one list, so a path with both staged and unstaged
+ * changes appears twice — identical rows would make the per-hunk buttons a
+ * coin flip.
+ */
+export const DIFF_SIDE_LABELS: Record<DiffSide, string> = {
+  unstaged: 'Unstaged',
+  staged: 'Staged',
+  commit: 'In commit',
+};
 
 export const CHANGE_KIND_LABELS: Record<FileDiff['kind'], string> = {
   modified: 'Modified',

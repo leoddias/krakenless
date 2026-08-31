@@ -1,9 +1,26 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FileDiff, Hunk } from '../../git/types';
+import { discardHunk, stageHunks } from '../../state/actions';
 import { StoreProvider } from '../../state/hooks';
 import { createStore, type Store } from '../../state/store';
 import { DiffView } from './DiffView';
+
+// Only the two hunk actions are replaced: the editor tests below drive the
+// real `openFileForEdit`, and a blanket mock would take them out with it.
+vi.mock('../../state/actions', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../state/actions')>()),
+  discardHunk: vi.fn().mockResolvedValue(undefined),
+  stageHunks: vi.fn().mockResolvedValue(undefined),
+}));
+
+const stageMock = vi.mocked(stageHunks);
+const discardMock = vi.mocked(discardHunk);
+
+beforeEach(() => {
+  stageMock.mockClear();
+  discardMock.mockClear();
+});
 
 // Vitest runs without `globals`, so Testing Library's auto-cleanup is not
 // registered for us — without this each render leaks into the next test.
@@ -27,6 +44,7 @@ function fileDiff(overrides: Partial<FileDiff> = {}): FileDiff {
     kind: 'modified',
     binary: false,
     conflicted: false,
+    side: 'unstaged',
     headerLines: ['diff --git a/src/a.ts b/src/a.ts'],
     hunks: [],
     ...overrides,
@@ -191,7 +209,9 @@ describe('DiffView hunk rendering', () => {
         ],
       }),
     );
-    const button = screen.getByRole('button', { name: /src\/a\.ts/ });
+    // Scoped to the file list: the per-hunk buttons name their file too.
+    const list = screen.getByRole('navigation', { name: 'Changed files' });
+    const button = within(list).getByRole('button', { name: /src\/a\.ts/ });
     expect(within(button).getByText('+1')).toBeInTheDocument();
     expect(within(button).getByText('-1')).toBeInTheDocument();
   });
@@ -374,5 +394,121 @@ describe('DiffView editing', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Close' }));
     expect(lineRows().length).toBeGreaterThan(0);
+  });
+});
+
+describe('per-hunk actions', () => {
+  function showFile(overrides: Partial<FileDiff> = {}): Store {
+    return renderView((store) =>
+      store.dispatch({
+        type: 'diff/loaded',
+        files: [fileDiff({ hunks: [sampleHunk], ...overrides })],
+      }),
+    );
+  }
+
+  it('stages the one hunk that was clicked, not the file', () => {
+    const store = showFile();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Stage Hunk of src\/a\.ts/ }));
+
+    expect(stageMock).toHaveBeenCalledWith(store, expect.anything(), [sampleHunk], {
+      reverse: false,
+    });
+  });
+
+  it('unstages from the staged side, in the other direction', () => {
+    // Same button position, opposite effect. The side is the only thing that
+    // says which, and both entries for one path can be on screen at once.
+    const store = showFile({ side: 'staged' });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Unstage Hunk of src\/a\.ts/ }));
+
+    expect(stageMock).toHaveBeenCalledWith(store, expect.anything(), [sampleHunk], {
+      reverse: true,
+    });
+    expect(screen.queryByRole('button', { name: /Discard Hunk/ })).toBeNull();
+  });
+
+  it('offers nothing on a commit, which has nothing to move', () => {
+    showFile({ side: 'commit' });
+    expect(screen.queryByRole('button', { name: /Hunk/ })).toBeNull();
+  });
+
+  it('asks before discarding, and does nothing until the answer', () => {
+    showFile();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Discard Hunk of src\/a\.ts/ }));
+
+    expect(discardMock).not.toHaveBeenCalled();
+    const dialog = screen.getByRole('alertdialog', { name: 'Confirm discard hunk' });
+    expect(dialog).toHaveTextContent('src/a.ts');
+  });
+
+  it('discards only after the confirmation is answered', () => {
+    const store = showFile();
+    fireEvent.click(screen.getByRole('button', { name: /^Discard Hunk of src\/a\.ts/ }));
+
+    const dialog = screen.getByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Discard hunk' }));
+
+    expect(discardMock).toHaveBeenCalledTimes(1);
+    // The reason travels with the call: the confirmation token is minted from
+    // the words the user actually saw.
+    expect(discardMock).toHaveBeenCalledWith(
+      store,
+      expect.anything(),
+      [sampleHunk],
+      expect.stringContaining('src/a.ts'),
+    );
+  });
+
+  it('cancelling discards nothing and closes the question', () => {
+    showFile();
+    fireEvent.click(screen.getByRole('button', { name: /^Discard Hunk of src\/a\.ts/ }));
+
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Cancel' }),
+    );
+
+    expect(discardMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+
+  it('offers no hunk buttons for a file no patch can be built for', () => {
+    // `serializeHunks` throws on these, so a button could only ever fail.
+    showFile({ kind: 'renamed', oldPath: 'src/old.ts' });
+
+    expect(screen.queryByRole('button', { name: /Stage Hunk/ })).toBeNull();
+    expect(screen.getByText(/Hunk-level staging is not available/)).toBeInTheDocument();
+  });
+
+  it('tells the two sides of one path apart in the file list', () => {
+    renderView((store) =>
+      store.dispatch({
+        type: 'diff/loaded',
+        files: [
+          fileDiff({ hunks: [sampleHunk] }),
+          fileDiff({ hunks: [sampleHunk], side: 'staged' }),
+        ],
+      }),
+    );
+
+    const list = screen.getByRole('navigation', { name: 'Changed files' });
+    expect(within(list).getByText('Unstaged')).toBeInTheDocument();
+    expect(within(list).getByText('Staged')).toBeInTheDocument();
+  });
+
+  it('disables the buttons while a git command is running', () => {
+    // A second click queued behind an in-flight apply would build its patch
+    // from a diff the first one has already invalidated.
+    const store = showFile();
+    act(() => {
+      store.dispatch({ type: 'busy', busy: true });
+    });
+
+    for (const button of screen.getAllByRole('button', { name: /Hunk of src/ })) {
+      expect(button).toBeDisabled();
+    }
   });
 });

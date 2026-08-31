@@ -6,7 +6,7 @@ import {
 } from './commands/diff';
 import { parseDiff } from './parsers/diff';
 import { runGit } from './runner';
-import type { FileDiff, GitCommand } from './types';
+import type { DiffSide, FileDiff, GitCommand } from './types';
 
 export type { DiffOptions } from './commands/diff';
 
@@ -22,9 +22,16 @@ export type { DiffOptions } from './commands/diff';
  * than a plausible-looking lie. Binary files are unaffected: without
  * `--binary` git only prints `Binary files … differ`, which is pure ASCII.
  */
-async function diff(repo: string, command: GitCommand): Promise<FileDiff[]> {
+async function diff(
+  repo: string,
+  command: GitCommand,
+  side: DiffSide,
+): Promise<FileDiff[]> {
   const output = await runGit(repo, command);
-  return parseDiff(output.stdout);
+  // Stamped here, at the only place that knows which command produced the
+  // text: the patch itself reads the same whichever comparison it came from,
+  // and the side is what later decides staging direction.
+  return parseDiff(output.stdout).map((file) => ({ ...file, side }));
 }
 
 /** Unstaged changes: working tree against the index. */
@@ -32,7 +39,7 @@ export function getWorktreeDiff(
   repo: string,
   options: DiffOptions = {},
 ): Promise<FileDiff[]> {
-  return diff(repo, buildWorktreeDiffCommand(options));
+  return diff(repo, buildWorktreeDiffCommand(options), 'unstaged');
 }
 
 /** Staged changes: index against HEAD. */
@@ -40,7 +47,7 @@ export function getStagedDiff(
   repo: string,
   options: DiffOptions = {},
 ): Promise<FileDiff[]> {
-  return diff(repo, buildStagedDiffCommand(options));
+  return diff(repo, buildStagedDiffCommand(options), 'staged');
 }
 
 /** The patch a single commit introduced, against its first parent. */
@@ -49,5 +56,5 @@ export function getCommitDiff(
   rev: string,
   options: DiffOptions = {},
 ): Promise<FileDiff[]> {
-  return diff(repo, buildCommitDiffCommand(rev, options));
+  return diff(repo, buildCommitDiffCommand(rev, options), 'commit');
 }

@@ -35,6 +35,7 @@ function file(path: string): FileDiff {
     kind: 'modified',
     binary: false,
     conflicted: false,
+    side: 'unstaged',
     headerLines: [],
     hunks: [
       {

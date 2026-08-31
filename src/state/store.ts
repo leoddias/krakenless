@@ -58,6 +58,23 @@ export interface Selection {
   path: string | null;
 }
 
+/** How many hunk-discard backups are kept before the oldest is dropped. */
+const MAX_DISCARD_BACKUPS = 20;
+
+/**
+ * A file's bytes as they were immediately before a hunk was discarded.
+ *
+ * The blob is a loose object in no tree and on no ref, so this record is the
+ * only thing that names it. `git gc` leaves unreferenced objects alone for two
+ * weeks by default, which is the window this covers.
+ */
+export interface DiscardBackup {
+  path: string;
+  blobOid: string;
+  /** ISO 8601, so the list reads as history rather than as an unordered set. */
+  at: string;
+}
+
 /**
  * A message the user must be able to read *after* the operation finished —
  * notably the stash label a discard leaves behind, which is the only way back
@@ -119,6 +136,16 @@ export interface AppState {
   resolving: string | null;
   /** Last thing a write operation did, shown until the user moves on. */
   notice: Notice | null;
+  /**
+   * Blobs saved before hunk discards, newest first.
+   *
+   * Kept here rather than announced once in a notice: a notice is replaced by
+   * the very next operation, and the oid is the *only* handle on work that
+   * exists nowhere else in the repository — no stash entry, no reflog, no
+   * commit. Losing it with the next click would make the discard
+   * unrecoverable in practice while the code claimed otherwise.
+   */
+  discards: DiscardBackup[];
   selection: Selection;
   /**
    * How many repository-changing commands are in flight.
@@ -144,6 +171,7 @@ export function initialState(): AppState {
     operation: noOperation(),
     resolving: null,
     notice: null,
+    discards: [],
     selection: { commitOid: null, path: null },
     busyDepth: 0,
   };
@@ -180,6 +208,8 @@ export type Action =
   | { type: 'resolve/open'; path: string }
   | { type: 'resolve/closed' }
   | { type: 'notice'; notice: NoticeInput | null }
+  | { type: 'discard/recorded'; backup: DiscardBackup }
+  | { type: 'discard/forgotten'; blobOid: string }
   | { type: 'selection/commit'; oid: string | null }
   | { type: 'selection/path'; path: string | null }
   | { type: 'busy'; busy: boolean };
@@ -290,6 +320,21 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, resolving: action.path };
     case 'resolve/closed':
       return { ...state, resolving: null };
+
+    case 'discard/recorded':
+      // Bounded so a long session cannot grow the list without limit; the
+      // oldest entry falls off the end, and its blob is still in the object
+      // store for `git fsck --lost-found` if it is ever wanted.
+      return {
+        ...state,
+        discards: [action.backup, ...state.discards].slice(0, MAX_DISCARD_BACKUPS),
+      };
+
+    case 'discard/forgotten':
+      return {
+        ...state,
+        discards: state.discards.filter((entry) => entry.blobOid !== action.blobOid),
+      };
 
     case 'notice':
       return {

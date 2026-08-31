@@ -9,12 +9,21 @@
 
 import { useState, type ReactNode } from 'react';
 import type { DiffLine, FileDiff, Hunk } from '../../git/types';
+import { discardHunk, stageHunks } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
+import { isBusy } from '../../state/store';
 import { FileEditor } from './FileEditor';
+import {
+  discardHunkQuestion,
+  hunkActionBlocker,
+  hunkActions,
+  type HunkAction,
+} from './hunkActions';
 import styles from './DiffView.module.css';
 import {
   CHANGE_KIND_LABELS,
   countLines,
+  DIFF_SIDE_LABELS,
   displayPath,
   emptyBodyReason,
   LINE_KIND_LABELS,
@@ -147,7 +156,7 @@ function FileList({
           </button>
         </li>
         {files.map((file) => (
-          <li key={file.newPath}>
+          <li key={`${file.side}:${file.newPath}`}>
             <button
               type="button"
               className={styles.fileButton}
@@ -156,6 +165,12 @@ function FileList({
             >
               <span className={styles.filePath}>{displayPath(file)}</span>
               <span className={styles.fileKind}>{CHANGE_KIND_LABELS[file.kind]}</span>
+              {/*
+                The worktree and cached diffs are concatenated, so the same path
+                can be listed twice. Without this the two rows are identical and
+                the user cannot tell which one their buttons will act on.
+              */}
+              <span className={styles.fileSide}>{DIFF_SIDE_LABELS[file.side]}</span>
               <FileCounts file={file} />
             </button>
           </li>
@@ -215,7 +230,7 @@ function FileDiffs({
     <div className={styles.content}>
       {shown.map((file) => (
         <FileDiffBlock
-          key={file.newPath}
+          key={`${file.side}:${file.newPath}`}
           file={file}
           editable={editable}
           editing={editing === file.newPath}
@@ -241,12 +256,16 @@ function FileDiffBlock({
   // A deleted file has nothing on disk to open; the rest are edited at their
   // current path, which for a rename is the new one.
   const canEdit = editable && file.kind !== 'deleted';
+  // Said once above the hunks rather than repeated on every one of them, and
+  // only when there are hunks a user would otherwise expect buttons on.
+  const blocker = file.side === 'commit' ? null : hunkActionBlocker(file);
 
   return (
     <article className={styles.file} aria-label={displayPath(file)}>
       <header className={styles.fileHeader}>
         <span className={styles.filePath}>{displayPath(file)}</span>
         <span className={styles.fileKind}>{CHANGE_KIND_LABELS[file.kind]}</span>
+        <span className={styles.fileSide}>{DIFF_SIDE_LABELS[file.side]}</span>
         {canEdit && !editing && (
           <button
             type="button"
@@ -261,7 +280,14 @@ function FileDiffBlock({
       {editing ? (
         <FileEditor key={file.newPath} path={file.newPath} onClose={() => onEdit(null)} />
       ) : note === null ? (
-        file.hunks.map((hunk, index) => <HunkBlock key={index} hunk={hunk} />)
+        <>
+          {blocker !== null && file.hunks.length > 0 && (
+            <p className={styles.fileNote}>{blocker}</p>
+          )}
+          {file.hunks.map((hunk, index) => (
+            <HunkBlock key={index} file={file} hunk={hunk} />
+          ))}
+        </>
       ) : (
         <p className={styles.fileNote}>{note}</p>
       )}
@@ -269,10 +295,64 @@ function FileDiffBlock({
   );
 }
 
-function HunkBlock({ hunk }: { hunk: Hunk }): ReactNode {
+function HunkBlock({ file, hunk }: { file: FileDiff; hunk: Hunk }): ReactNode {
+  const store = useStore();
+  const busy = useAppState(isBusy);
+  const [confirming, setConfirming] = useState(false);
+  const actions = hunkActions(file);
+
+  const run = (action: HunkAction): void => {
+    if (action === 'discard') {
+      setConfirming(true);
+      return;
+    }
+    void stageHunks(store, file, [hunk], { reverse: action === 'unstage' });
+  };
+
   return (
     <div className={styles.hunk}>
-      <div className={styles.hunkHeader}>{hunk.header}</div>
+      <div className={styles.hunkHeader}>
+        <span className={styles.hunkRange}>{hunk.header}</span>
+        {actions.length > 0 && (
+          <span className={styles.hunkActions}>
+            {actions.map((spec) => (
+              <button
+                key={spec.action}
+                type="button"
+                className={spec.danger ? styles.hunkDanger : styles.hunkAction}
+                disabled={busy}
+                // The header alone does not say which file, and the same hunk
+                // range exists in every other file on screen.
+                aria-label={`${spec.label} of ${file.newPath}, ${hunk.header}`}
+                onClick={() => {
+                  run(spec.action);
+                }}
+              >
+                {spec.label}
+              </button>
+            ))}
+          </span>
+        )}
+      </div>
+
+      {confirming && (
+        <ConfirmDiscardHunk
+          question={discardHunkQuestion(file.newPath, hunk.header)}
+          busy={busy}
+          onCancel={() => {
+            setConfirming(false);
+          }}
+          onConfirm={() => {
+            setConfirming(false);
+            void discardHunk(
+              store,
+              file,
+              [hunk],
+              discardHunkQuestion(file.newPath, hunk.header),
+            );
+          }}
+        />
+      )}
       <div className={styles.lines}>
         {hunk.lines.map((line, index) => (
           <div
@@ -295,6 +375,42 @@ function HunkBlock({ hunk }: { hunk: Hunk }): ReactNode {
             <span className={styles.lineText}>{line.text}</span>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The one destructive control in this panel, so it asks in full sentences and
+ * defaults to Cancel. Inline rather than a modal: the hunk it is about has to
+ * stay on screen while the question is being read.
+ */
+function ConfirmDiscardHunk({
+  question,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  question: string;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}): ReactNode {
+  return (
+    <div className={styles.confirm} role="alertdialog" aria-label="Confirm discard hunk">
+      <p className={styles.confirmText}>{question}</p>
+      <div className={styles.confirmButtons}>
+        <button type="button" className={styles.hunkAction} onClick={onCancel}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          className={styles.hunkDanger}
+          disabled={busy}
+          onClick={onConfirm}
+        >
+          Discard hunk
+        </button>
       </div>
     </div>
   );

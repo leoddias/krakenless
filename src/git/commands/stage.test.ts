@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   buildApplyCachedCommand,
   buildApplyCheckCommand,
+  buildBackupBlobCommand,
+  buildDiscardHunkCheckCommand,
+  buildDiscardHunkCommand,
   buildCommitCommand,
   buildDiscardCommand,
   buildStageCommand,
@@ -167,5 +170,56 @@ describe('stash builders', () => {
 
   it('validates the stash ref', () => {
     expect(() => buildStashDropCommand('--all')).toThrow(GitError);
+  });
+});
+
+describe('buildDiscardHunkCommand', () => {
+  it('applies in reverse to the working tree, not the index', () => {
+    // The absence of `--cached` is the whole point: this undoes the edit on
+    // disk. With it, the command would quietly unstage instead of discard.
+    const args = buildDiscardHunkCommand({}).args;
+    expect(args).toEqual(['apply', '--whitespace=nowarn', '--reverse', '-']);
+    expect(args).not.toContain('--cached');
+  });
+
+  it('is recognised as destructive from its arguments alone', () => {
+    // Not from the builder's flag — the deny-list is the enforcement, and it
+    // has to catch this shape even if a future builder forgets to mark it.
+    expect(isDestructive(buildDiscardHunkCommand({}).args)).toBe(true);
+    expect(buildDiscardHunkCommand({}).destructive).toBe(true);
+  });
+
+  it('only disables the context check when asked', () => {
+    expect(buildDiscardHunkCommand({}).args).not.toContain('--unidiff-zero');
+    expect(buildDiscardHunkCommand({ zeroContext: true }).args).toContain(
+      '--unidiff-zero',
+    );
+  });
+
+  it('checks with exactly the flags it will apply with', () => {
+    // A dry run made under different rules proves nothing about the apply.
+    const check = buildDiscardHunkCheckCommand({ zeroContext: true }).args;
+    const real = buildDiscardHunkCommand({ zeroContext: true }).args;
+    expect(check.filter((arg) => arg !== '--check')).toEqual(real);
+    expect(check).toContain('--check');
+  });
+});
+
+describe('buildBackupBlobCommand', () => {
+  it('stores the bytes on disk, unfiltered', () => {
+    // `--no-filters` is what makes this a backup: with a clean driver or
+    // core.autocrlf in play, git would store normalised content and restoring
+    // it would rewrite lines the discard never touched.
+    expect(buildBackupBlobCommand('src/a.ts').args).toEqual([
+      'hash-object',
+      '-w',
+      '--no-filters',
+      '--',
+      'src/a.ts',
+    ]);
+  });
+
+  it('refuses a path that points outside the repository', () => {
+    expect(() => buildBackupBlobCommand('../outside.ts')).toThrow(GitError);
   });
 });

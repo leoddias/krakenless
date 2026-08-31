@@ -16,10 +16,13 @@ import { openRepository } from '../git/repository';
 import {
   applyHunks,
   commit,
+  discardHunks,
   discardPaths,
+  readBackupBlob,
   stagePaths,
   unstagePaths,
   type DiscardResult,
+  type HunkDiscardResult,
 } from '../git/stage';
 import type { CommitOptions } from '../git/commands/stage';
 import { userConfirmed } from '../git/confirm';
@@ -66,7 +69,7 @@ import { hasConflictMarkers } from '../git/conflict';
 import { listWorktreeSummaries } from '../git/worktrees';
 import { FileError, openWorktreeFile, saveWorktreeFile, type OpenFile } from '../fs/file';
 import type { FileDiff, Hunk } from '../git/types';
-import type { Store } from './store';
+import type { DiscardBackup, Store } from './store';
 
 /** Number of commits the history panel loads at once. */
 export const LOG_PAGE_SIZE = 200;
@@ -259,6 +262,95 @@ export async function stageHunks(
   const root = currentRoot(store);
   if (root === null || hunks.length === 0) return;
   await mutate(store, () => applyHunks(root, file, hunks, options));
+}
+
+/**
+ * Discards one hunk from the working tree.
+ *
+ * The undo command is surfaced as a notice rather than kept internally: this
+ * removes an edit git was never told about, and the route back only counts as
+ * a route back if the user is shown it.
+ */
+export async function discardHunk(
+  store: Store,
+  file: FileDiff,
+  hunks: Hunk[],
+  confirmationReason: string,
+): Promise<void> {
+  const root = currentRoot(store);
+  if (root === null || hunks.length === 0) return;
+
+  let result: HunkDiscardResult | null = null;
+  try {
+    await mutate(store, async () => {
+      result = await discardHunks(root, file, hunks, userConfirmed(confirmationReason));
+    });
+  } catch (error) {
+    store.dispatch({ type: 'notice', notice: { tone: 'error', ...describe(error) } });
+    return;
+  }
+
+  if (result !== null) {
+    const outcome: HunkDiscardResult = result;
+    // Recorded before the notice: the notice is the announcement, this is the
+    // route back, and the route back must not depend on the announcement
+    // surviving the next click.
+    store.dispatch({
+      type: 'discard/recorded',
+      backup: {
+        path: outcome.path,
+        blobOid: outcome.blobOid,
+        at: new Date().toISOString(),
+      },
+    });
+    const count = hunks.length;
+    store.dispatch({
+      type: 'notice',
+      notice: {
+        tone: 'info',
+        message:
+          `Discarded ${String(count)} hunk${count === 1 ? '' : 's'} from ` +
+          `${file.newPath}. Undo it from Recent discards.`,
+      },
+    });
+  }
+}
+
+/**
+ * Puts a discarded file back from its backup blob.
+ *
+ * Writes through the same worktree writer the conflict resolver uses rather
+ * than telling the user to run a shell redirect: `git cat-file -p <oid> > path`
+ * is byte-exact in `cmd.exe` and `pwsh`, but Windows PowerShell 5.1 treats `>`
+ * as `Out-File` and re-encodes the stream to UTF-16LE with a BOM. Doing the
+ * write here is the only way the promise of recovery is actually kept on the
+ * platform this app targets.
+ */
+export async function undoDiscard(store: Store, backup: DiscardBackup): Promise<void> {
+  const root = currentRoot(store);
+  if (root === null) return;
+
+  try {
+    await mutate(store, async () => {
+      const contents = await readBackupBlob(root, backup.blobOid);
+      // Re-read for the current stamp only. The blob's bytes are written back
+      // verbatim — `saveWorktreeFile` reformats nothing — so the line endings
+      // and the missing trailing newline come back as they were.
+      const current = await openWorktreeFile(root, backup.path);
+      await saveWorktreeFile(root, current, contents);
+    });
+  } catch (error) {
+    store.dispatch({ type: 'notice', notice: { tone: 'error', ...describe(error) } });
+    return;
+  }
+
+  // Only once the write succeeded: dropping the record on a failed restore
+  // would throw away the oid that is still the only way back.
+  store.dispatch({ type: 'discard/forgotten', blobOid: backup.blobOid });
+  store.dispatch({
+    type: 'notice',
+    notice: { tone: 'info', message: `Restored ${backup.path} from its backup.` },
+  });
 }
 
 /**

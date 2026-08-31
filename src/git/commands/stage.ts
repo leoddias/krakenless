@@ -1,4 +1,5 @@
 import { assertRevision, pathspec } from '../argsafety';
+import { GitError } from '../errors';
 import type { GitCommand } from '../types';
 
 /**
@@ -55,6 +56,64 @@ export function buildApplyCachedCommand(options: ApplyOptions): GitCommand {
 /** Dry run of the same patch. Used to refuse a patch before it can half-apply. */
 export function buildApplyCheckCommand(options: ApplyOptions): GitCommand {
   return { args: applyArgs(options, true) };
+}
+
+/**
+ * Reverse-applies a patch to the **working tree**, which is how a single hunk
+ * is discarded.
+ *
+ * No `--cached`: the point is to undo the edit on disk. That makes this the one
+ * builder here that destroys content git has never seen, so `stage.ts` writes
+ * the file to the object store first and hands back the command that restores
+ * it. `isDestructive()` recognises the shape independently (ADR-0016).
+ */
+function worktreeReverseArgs(
+  options: { zeroContext?: boolean },
+  check: boolean,
+): string[] {
+  const args = ['apply'];
+  if (check) args.push('--check');
+  args.push('--whitespace=nowarn');
+  if (options.zeroContext === true) args.push('--unidiff-zero');
+  args.push('--reverse', '-');
+  return args;
+}
+
+export function buildDiscardHunkCommand(options: { zeroContext?: boolean }): GitCommand {
+  return { args: worktreeReverseArgs(options, false), destructive: true };
+}
+
+/** Dry run of the same reverse patch, so a stale selection changes nothing. */
+export function buildDiscardHunkCheckCommand(options: {
+  zeroContext?: boolean;
+}): GitCommand {
+  return { args: worktreeReverseArgs(options, true) };
+}
+
+/**
+ * Writes the file's current bytes into the object store and prints the oid.
+ *
+ * `--no-filters` is what makes this a backup rather than an approximation: with
+ * filters on, a `clean` driver or `core.autocrlf` stores normalised content, so
+ * restoring it would rewrite lines the discard never touched.
+ */
+export function buildBackupBlobCommand(path: string): GitCommand {
+  return { args: ['hash-object', '-w', '--no-filters', ...pathspec([path])] };
+}
+
+/**
+ * Reads a blob back out of the object store by oid.
+ *
+ * `--textconv` and friends are not in play for `cat-file -p` on a blob, so this
+ * returns the stored bytes. The oid is checked against the two real oid
+ * lengths rather than passed through `assertRevision`: only an oid this app
+ * wrote a moment ago belongs here, and a ref name would be a bug, not a use.
+ */
+export function buildReadBlobCommand(blobOid: string): GitCommand {
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(blobOid)) {
+    throw new GitError('bad-argument', `Not an object id: ${blobOid}`);
+  }
+  return { args: ['cat-file', 'blob', blobOid] };
 }
 
 export interface CommitOptions {

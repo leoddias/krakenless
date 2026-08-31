@@ -169,13 +169,94 @@
 }
 
 .hunkHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   padding: 0.15rem 0.75rem;
   background: var(--surface-raised);
   color: var(--info);
   font-family: var(--font-mono);
   font-size: 0.75rem;
-  white-space: pre;
+}
+
+/* The `@@` range keeps the old behaviour: it scrolls rather than wrapping,
+   because a wrapped header reads as two hunks. */
+.hunkRange {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow-x: auto;
+  white-space: pre;
+}
+
+/* Pinned to the header's right edge, the way the file's own actions are. */
+.hunkActions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.3rem;
+}
+
+.hunkAction,
+.hunkDanger {
+  padding: 0.05rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--surface);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 0.6875rem;
+  cursor: pointer;
+}
+
+/* Discard is the only one that removes work, and it never shares a colour with
+   the button beside it. */
+.hunkDanger {
+  border-color: var(--danger-line, var(--border));
+  color: var(--danger, var(--fg));
+}
+
+.hunkAction:disabled,
+.hunkDanger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.hunkAction:not(:disabled):hover,
+.hunkDanger:not(:disabled):hover {
+  background: var(--surface-hover);
+}
+
+.hunkAction:focus-visible,
+.hunkDanger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Which side this entry came from, next to the path. */
+.fileSide {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.confirm {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.confirmText {
+  margin: 0 0 0.5rem;
+  color: var(--fg);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.confirmButtons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
 }
 
 /* Long lines scroll here instead of wrapping, which would fake line breaks. */
