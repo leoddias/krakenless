@@ -1,9 +1,17 @@
 name: Pages
 
 # The landing page is plain static files in `site/`, so there is nothing to
-# build — this workflow only uploads them. It runs on pushes that touch the
-# site so an unrelated commit does not redeploy.
+# build — this workflow only uploads them.
+#
+# It deploys when a **release is published**, not when the Release workflow
+# succeeds. That workflow creates a *draft*, and a draft's assets have no
+# public download URLs at all: deploying then would ship a page whose every
+# download button 404s until a human got round to publishing. `release:
+# published` fires at the moment the links start working, which is the moment
+# the page should change.
 on:
+  release:
+    types: [published]
   push:
     branches: [main]
     paths:
@@ -16,8 +24,6 @@ permissions:
   pages: write
   id-token: write
 
-# One deploy at a time; a queued run supersedes an older one rather than
-# racing it, but a run already publishing is allowed to finish.
 concurrency:
   group: pages
   cancel-in-progress: false
@@ -31,6 +37,65 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+
+      # Which release the page should point at. On a release event that is the
+      # one just published; on a push to `site/` or a manual run it is whatever
+      # is currently the latest, so editing the page's prose never silently
+      # rolls its download links back to an older version.
+      - name: Resolve the release to advertise
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.release.tag_name }}"
+          if [ -z "$tag" ]; then
+            tag=$(gh release view --json tagName --jq .tagName)
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          # `v0.1.5-alpha` -> `0.1.5`: the tag names the release, the bare
+          # version names the asset files.
+          version=$(printf '%s' "$tag" | sed -E 's/^v//; s/-.*$//')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Advertising $tag (assets named $version)"
+
+      # Rewritten in the checkout, never committed. The file in the repository
+      # keeps real, working values so it can be opened and reviewed on its own;
+      # this only moves them forward to the release being advertised.
+      - name: Point the downloads at that release
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          sed -i -E \
+            -e "s#/releases/download/v[0-9]+\.[0-9]+\.[0-9]+[^/]*/#/releases/download/${TAG}/#g" \
+            -e "s#Krakenless_[0-9]+\.[0-9]+\.[0-9]+_#Krakenless_${VERSION}_#g" \
+            -e "s#Version <strong>[0-9]+\.[0-9]+\.[0-9]+[^<]*</strong>#Version <strong>${TAG#v}</strong>#g" \
+            site/index.html
+          grep -o 'Krakenless_[^"]*' site/index.html | sort -u
+
+      # A download button that 404s is worse than an out-of-date one: it reads
+      # as "the project is broken" rather than "the page is behind". Every file
+      # the page offers is checked against what the release actually holds, and
+      # a mismatch stops the deploy with the names side by side.
+      - name: Verify every advertised file exists in the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --json assets --jq '.assets[].name' | sort > /tmp/have.txt
+          grep -o 'Krakenless_[^"]*' site/index.html | sort -u > /tmp/want.txt
+          echo "Release holds:"; sed 's/^/  /' /tmp/have.txt
+          echo "Page offers:";   sed 's/^/  /' /tmp/want.txt
+          missing=$(comm -23 /tmp/want.txt /tmp/have.txt)
+          if [ -n "$missing" ]; then
+            echo "::error::These files are linked on the page but are not in $TAG:"
+            printf '  %s\n' $missing
+            exit 1
+          fi
+
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

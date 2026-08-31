@@ -5,6 +5,10 @@ name: Release
 # runs on an ordinary push — CI artifacts are auth-gated and expire in 14 days,
 # which is why they cannot serve as a public download.
 #
+# This is now the *only* automated gate in the repository: the per-push CI
+# workflow was removed, so lint, format, clippy and both test suites run here
+# or nowhere.
+#
 # The release is created as a **draft**: the binaries are unsigned, so Windows
 # SmartScreen and macOS Gatekeeper will both warn about them, and whoever
 # publishes should have written that into the release notes first.
@@ -36,12 +40,20 @@ jobs:
           node-version: 22
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
           key: release-${{ matrix.os }}
 
       - run: npm ci
+
+      # These used to live in a CI workflow that ran on every push. With that
+      # gone, the release is the only gate there is, so it carries them: a
+      # release must not be cut from code that fails its own checks.
+      - run: npm run lint
+      - run: npm run format:check
 
       # Before *any* cargo command: `custom-protocol` is a default feature, so
       # `generate_context!` embeds `dist/` at compile time and panics when it is
@@ -54,7 +66,10 @@ jobs:
         run: |
           git config --global user.email "ci@example.com"
           git config --global user.name "CI"
+      - run: git --version
       - run: npm test
+      - name: Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --manifest-path src-tauri/Cargo.toml
 
       - name: Build installers
