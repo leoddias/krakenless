@@ -16,9 +16,17 @@ function raw(overrides: Record<string, unknown> = {}) {
   };
 }
 
-/** Queues one response per git invocation, in call order. */
+/** What a supported git answers `--version` with. */
+const SUPPORTED_GIT = { stdout: 'git version 2.39.2.windows.1\n' };
+
+/**
+ * Queues one response per git invocation, in call order.
+ *
+ * The version probe runs first for every open, so it is queued here rather
+ * than repeated in each test.
+ */
 function respond(...responses: Record<string, unknown>[]) {
-  for (const response of responses) {
+  for (const response of [SUPPORTED_GIT, ...responses]) {
     invoke.mockResolvedValueOnce(raw(response));
   }
 }
@@ -65,7 +73,13 @@ describe('openRepository', () => {
       bare: true,
       empty: false,
     });
-    expect(invoke).toHaveBeenCalledTimes(2);
+    // Asserted by argument, not by call count: `--show-toplevel` exits 128 in
+    // a bare repository, and a count also moves whenever an unrelated probe is
+    // added — which says nothing about whether this one was skipped.
+    const asked = invoke.mock.calls.flatMap(
+      (call) => (call[1] as { args: string[] }).args,
+    );
+    expect(asked).not.toContain('--show-toplevel');
   });
 
   it('reports a non-repository instead of inventing one', async () => {

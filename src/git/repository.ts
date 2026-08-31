@@ -2,11 +2,31 @@ import {
   buildHeadOidCommand,
   buildRepoProbeCommand,
   buildToplevelCommand,
+  buildVersionCommand,
 } from './commands/repo';
 import { GitError } from './errors';
 import { buildRepoInfo, parseRepoProbe, parseToplevel } from './parsers/repo';
+import { parseGitVersion, unsupportedGitMessage } from './parsers/version';
 import { runGit } from './runner';
 import type { RepoInfo } from './types';
+
+/**
+ * Refuses a git too old to run this app's commands, before running any of them.
+ *
+ * First, deliberately. Git does not report an unsupported flag as a version
+ * problem — `rev-parse` echoes an unknown flag to stdout and exits 0, and a
+ * rejected flag value fails with a message naming a flag the user never typed.
+ * Both shipped as bugs. Asking the version up front replaces that whole class
+ * of confusion with one sentence, and it costs a single process that reads
+ * nothing and writes nothing.
+ */
+async function assertSupportedGit(path: string): Promise<void> {
+  const output = await runGit(path, buildVersionCommand());
+  const message = unsupportedGitMessage(parseGitVersion(output.stdout));
+  if (message !== null) {
+    throw new GitError('git-missing', message, { args: ['--version'] });
+  }
+}
 
 /**
  * True only for the one failure that legitimately means "this repository has
@@ -28,6 +48,8 @@ function meansNoCommitsYet(error: unknown): boolean {
  * returning a half-filled object, so the UI can say something true.
  */
 export async function openRepository(path: string): Promise<RepoInfo> {
+  await assertSupportedGit(path);
+
   const probe = await runGit(path, buildRepoProbeCommand());
   const { gitDir, bare } = parseRepoProbe(probe.stdout);
 

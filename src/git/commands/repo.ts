@@ -20,6 +20,14 @@ export function buildRepoProbeCommand(): GitCommand {
   };
 }
 
+/**
+ * `git --version`. Takes no repository and touches nothing, which is why it is
+ * safe to run before the app knows whether the path is a repository at all.
+ */
+export function buildVersionCommand(): GitCommand {
+  return { args: ['--version'] };
+}
+
 /** Working-tree root. Only valid for non-bare repositories. One output line. */
 export function buildToplevelCommand(): GitCommand {
   return { args: ['rev-parse', '--show-toplevel'] };
