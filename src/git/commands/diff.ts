@@ -99,9 +99,19 @@ export function buildStagedDiffCommand(options: DiffOptions = {}): GitCommand {
  *
  * `--format=` drops the commit header so stdout is nothing but the patch, and
  * `--no-show-signature` keeps `log.showSignature` from putting a gpg report
- * back in front of it. `--diff-merges=first-parent` matters most: without it
- * `git show` of a merge emits a *combined* diff (`diff --cc`, `@@@` headers),
- * which is a different format that `git apply` cannot consume.
+ * back in front of it.
+ *
+ * `-m --first-parent` matters most: without it `git show` of a merge emits a
+ * *combined* diff (`diff --cc`, `@@@` headers), which is a different format
+ * that `git apply` cannot consume.
+ *
+ * Not `--diff-merges=first-parent`, which says the same thing in one flag but
+ * only from git 2.31. Older git knows the option and rejects the *value*
+ * (`fatal: unknown value for --diff-merges: first-parent`) — and since this
+ * flag is on every commit diff, that failure is not limited to merges: it
+ * makes the diff panel unusable for every commit in the repository. `-m` and
+ * `--first-parent` both long predate it, and produce byte-identical output for
+ * merge, ordinary and root commits alike.
  */
 export function buildCommitDiffCommand(
   rev: string,
@@ -112,7 +122,8 @@ export function buildCommitDiffCommand(
       'show',
       '--format=',
       '--no-show-signature',
-      '--diff-merges=first-parent',
+      '-m',
+      '--first-parent',
       ...DIFF_FLAGS,
       assertRevision(rev),
       ...terminatedPathArgs(options),

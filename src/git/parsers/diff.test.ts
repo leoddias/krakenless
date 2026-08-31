@@ -458,12 +458,23 @@ describe('diff command builders', () => {
     expect(buildStagedDiffCommand().args).toEqual(['diff', '--cached', ...shared]);
   });
 
+  it('asks for the first-parent diff with flags every supported git has', () => {
+    // Not `--diff-merges=first-parent`: git before 2.31 knows the option and
+    // rejects the value, and this flag rides on *every* commit diff — so the
+    // panel fails for ordinary commits too, not just merges.
+    const args = buildCommitDiffCommand('a1b2c3d').args;
+    expect(args).not.toContain('--diff-merges=first-parent');
+    expect(args).toContain('-m');
+    expect(args).toContain('--first-parent');
+  });
+
   it('builds a single-commit diff against the first parent', () => {
     expect(buildCommitDiffCommand('a1b2c3d').args).toEqual([
       'show',
       '--format=',
       '--no-show-signature',
-      '--diff-merges=first-parent',
+      '-m',
+      '--first-parent',
       ...shared,
       'a1b2c3d',
       // Ends the revision list so a ref that also names a file is unambiguous.
@@ -489,7 +500,8 @@ describe('diff command builders', () => {
       'show',
       '--format=',
       '--no-show-signature',
-      '--diff-merges=first-parent',
+      '-m',
+      '--first-parent',
       ...shared,
       'HEAD',
       '--',
