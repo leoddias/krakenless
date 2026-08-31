@@ -161,17 +161,34 @@ describe('what a one-hunk discard must not touch', () => {
     // The mode lines describe the file, not the hunk. Emitting them would have
     // `apply --reverse` chmod the file back — reverting a change the user never
     // selected, and one the content backup cannot restore.
-    if (process.platform === 'win32') return; // No exec bit to speak of.
-    makeTwoHunks();
+    // Runs everywhere, Windows included. The mode difference is created in the
+    // *index* rather than on disk: with `core.filemode` on, git compares the
+    // index's 100755 against what it stats in the worktree, and NTFS — which
+    // has no exec bit — reports 100644. A `chmod` on disk would have made this
+    // a POSIX-only test, and the CI failure that prompted this fix was in
+    // exactly the branch Windows never ran.
+    git(['config', 'core.filemode', 'true']);
+    // While the file is still clean: `update-index` is the plumbing form of
+    // `git add`, so doing this *after* the edits would stage the very changes
+    // this test needs to be unstaged — which is what broke it on macOS.
     git(['update-index', '--chmod=+x', 'a.txt']);
-    execFileSync('chmod', ['+x', join(repo, 'a.txt')]);
+    makeTwoHunks();
 
     const [file] = worktreeDiff();
+    // The fixture has to actually produce a mode change, or the assertions
+    // below pass for the wrong reason.
+    expect(file?.oldMode).toBe('100755');
+    expect(file?.newMode).toBe('100644');
+
     const patch = reversePatch(file!, [file!.hunks[0]!]);
     expect(patch).not.toContain('old mode');
     git(buildDiscardHunkCommand({}).args, patch);
 
-    expect(git(['diff', '--summary'])).not.toContain('mode change');
+    // The hunk is gone and the exec bit is still there. Reverting the mode
+    // would be reverting a change the user never selected — and the content
+    // backup could not put it back.
+    expect(read('a.txt')).not.toContain('line 1 EDITED');
+    expect(git(['diff', '--summary'])).toContain('mode change');
   });
 
   it('discards the second hunk at its real position', () => {
