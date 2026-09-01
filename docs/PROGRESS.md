@@ -40,6 +40,15 @@
 - The discard path — the only code that takes work off disk — has integration
   tests that **execute the recovery command the UI displays**. Keep that
   property for any future change to `stage.ts` or `recovery.ts`.
+- **A diverged branch is no longer a dead end** (2026-08-31, ADR-0035): push is
+  blocked with the reason while behind, and Pull becomes a confirmed
+  "Pull (merge)". New error kinds `diverged` / `non-fast-forward`.
+- **The background fetch is observable and brings tags** (2026-08-31,
+  ADR-0034 superseding ADR-0025): `--no-tags` is gone, `--no-prune-tags` is
+  explicit, ref snapshots decide which panels refresh, and one notice names
+  what arrived. Neither change has been used by hand in the running app yet.
+- **Test status now:** `npm test` 1756 passing (84 files); lint/format/tsc
+  clean. Rust untouched since 0.1.7.
 - **Not built:** conflict *resolution* UI, interactive rebase. Both are v0.2.
 
 ## Released
@@ -56,7 +65,16 @@
 
 ## Next up (in order)
 
-1. **Use the 2026-08-27 batch by hand.** All of it is tested and none of it has
+0. **Publish the v0.1.8-alpha release** if not already done: the tag was
+   pushed on 2026-08-31 and `release.yml` builds a *draft* — check
+   `gh run list --workflow=release.yml`, then `gh release edit v0.1.8-alpha
+   --draft=false --prerelease` after confirming the four assets exist and the
+   notes mention the unsigned-binary warnings.
+1. **Use the diverged-branch flow by hand** (ADR-0035): make a repo diverge,
+   watch Push refuse with the reason, run "Pull (merge)" through its dialog —
+   including a conflicted one. Also watch the background fetch tick (ADR-0034)
+   report an arriving tag. Neither has been seen running, only asserted.
+2. **Use the 2026-08-27 batch by hand.** All of it is tested and none of it has
    been run: a push while switching tabs (ADR-0028 — the whole point is that the
    window stays alive), dragging a branch chip onto the checkout to merge
    (ADR-0026), a repository with a real `git worktree` so the WIP row and the
@@ -93,6 +111,29 @@
   until `buildPushCommand` emits a `<local>:<upstream>` refspec.
 
 ## Session log
+
+### 2026-08-31 — the diverged dead end, an honest background fetch, 0.1.8-alpha
+
+A user report drove both halves: pushing while behind errored, pulling errored
+too, and only the CLI got them out. Root cause one: `pull --ff-only` plus a
+rejected push left divergence with no in-app resolution. Fixed by ADR-0035 —
+`diverged`/`non-fast-forward` error kinds classified from real git stderr,
+push blocked in the UI while behind (reason in visible text), and a confirmed
+"Pull (merge)" running `pull --no-rebase --ff --no-edit`, reusing the
+`DialogHost`. Root cause two (parallel task-worker in a worktree): the
+background fetch *was* wired but unobservable — silent by design, `--no-tags`
+made pushed tags invisible forever, and one rejected tick killed the schedule
+for the life of the window. Fixed by ADR-0034: tags follow fetched history,
+`--no-prune-tags` guards against `fetch.pruneTags=true`, ref snapshots
+(`for-each-ref`, new parser) gate the panel refreshes, and one notice names
+what arrived; the manual Fetch button reports "Fetched: 1 new tag (v1.0)."
+Both halves went through the full loop: safety-reviewer blocked once each
+(prune-tags deletion; loose conflict sniff; tag rejection misread as
+non-fast-forward) and every finding was fixed with a test. Suite: 1756
+passing, 84 files. Touched: `src/git` (errors, refs, commands/remote, new
+commands/refsnapshot + parser, confirm), `src/state` (actions, autoFetch, new
+fetchNews), `src/views/remote`. Released: tag `v0.1.8-alpha` pushed;
+`release.yml` was still building at handoff time — see *Next up* item 0.
 
 ### 2026-08-27 — freshness, merging, worktrees, and git off the UI thread
 
