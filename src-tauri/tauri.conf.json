@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Krakenless",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "identifier": "dev.krakenless.app",
   "build": {
     "frontendDist": "../dist",
