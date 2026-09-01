@@ -21,9 +21,29 @@ export interface FetchOptions {
   prune?: boolean;
 }
 
+/**
+ * Fetches, following the tags that point into the history being fetched.
+ *
+ * No `--no-tags`, which is what this used to pass and what made a tag somebody
+ * else pushed invisible here forever: the release the whole team is talking
+ * about simply did not exist in this app. Git's default is the honest middle —
+ * a tag arrives when the commit it names does, and a tag on a branch nobody
+ * fetched stays where it is. `--tags` is deliberately not passed either: it
+ * pulls down every tag the remote has ever had, which on an old repository is
+ * thousands of refs nobody asked for.
+ *
+ * `--prune` is paired with an explicit `--no-prune-tags`, and that pairing is
+ * not decoration. `fetch.pruneTags=true` in the user's own config — a line
+ * plenty of dotfiles carry — makes a plain `--prune` delete `refs/tags/*` that
+ * the remote does not have, and a tag created here and never pushed is exactly
+ * that. On a five-minute background timer that is silent data loss: the tag is
+ * often the only name on a commit, and an unreferenced commit is eventually
+ * collected. A tag that vanished upstream is not evidence it should vanish
+ * here, and nothing in this app deletes a ref without being asked.
+ */
 export function buildFetchCommand(options: FetchOptions = {}): GitCommand {
-  const args = ['fetch', '--no-tags', '--progress'];
-  if (options.prune === true) args.push('--prune');
+  const args = ['fetch', '--progress'];
+  if (options.prune === true) args.push('--prune', '--no-prune-tags');
   args.push(options.remote === undefined ? '--all' : assertRefName(options.remote));
   return { args, timeoutMs: NETWORK_TIMEOUT_MS };
 }

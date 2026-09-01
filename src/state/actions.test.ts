@@ -39,6 +39,7 @@ const saveWorktreeFile = vi.hoisted(() => vi.fn());
 const listBranches = vi.hoisted(() => vi.fn());
 const listStashes = vi.hoisted(() => vi.fn());
 const fetchRemoteFn = vi.hoisted(() => vi.fn());
+const readRefSnapshot = vi.hoisted(() => vi.fn());
 const pullFn = vi.hoisted(() => vi.fn());
 const pushFn = vi.hoisted(() => vi.fn());
 const switchBranch = vi.hoisted(() => vi.fn());
@@ -56,6 +57,7 @@ vi.mock('../git/refs', () => ({
   listBranches,
   listStashes,
   fetch: fetchRemoteFn,
+  readRefSnapshot,
   pull: pullFn,
   push: pushFn,
   switchBranch,
@@ -125,7 +127,13 @@ describe('actions', () => {
     commit.mockResolvedValue(undefined);
     listBranches.mockResolvedValue([]);
     listStashes.mockResolvedValue([]);
-    fetchRemoteFn.mockResolvedValue(undefined);
+    fetchRemoteFn.mockResolvedValue({
+      stdout: '',
+      stderr: '',
+      code: 0,
+      timedOut: false,
+      stdoutLossy: false,
+    });
     pullFn.mockResolvedValue(undefined);
     pushFn.mockResolvedValue(undefined);
     switchBranch.mockResolvedValue(undefined);
@@ -393,7 +401,13 @@ describe('actions', () => {
     // unchanged; claiming success would send the user to an unrelated stash.
     listBranches.mockResolvedValue([]);
     listStashes.mockResolvedValue([]);
-    fetchRemoteFn.mockResolvedValue(undefined);
+    fetchRemoteFn.mockResolvedValue({
+      stdout: '',
+      stderr: '',
+      code: 0,
+      timedOut: false,
+      stdoutLossy: false,
+    });
     pullFn.mockResolvedValue(undefined);
     pushFn.mockResolvedValue(undefined);
     switchBranch.mockResolvedValue(undefined);
@@ -455,17 +469,56 @@ describe('actions', () => {
   });
 
   it('refreshes everything after a fetch, including branches and stashes', async () => {
+    readRefSnapshot.mockResolvedValue(new Map());
     const store = createStore();
     await openRepo(store, 'C:/repos/app');
     listBranches.mockClear();
     listStashes.mockClear();
 
-    await fetchRemote(store);
+    await expect(fetchRemote(store)).resolves.toBe(true);
 
     expect(fetchRemoteFn).toHaveBeenCalledWith(REPO.root, { prune: true });
     expect(listBranches).toHaveBeenCalled();
     expect(listStashes).toHaveBeenCalled();
     expect(isBusy(store.getState())).toBe(false);
+  });
+
+  it('says what a fetch brought back, tags included', async () => {
+    // Without this the button is indistinguishable from a broken one: nothing
+    // on screen moves when the news is a tag.
+    readRefSnapshot
+      .mockResolvedValueOnce(new Map())
+      .mockResolvedValueOnce(new Map([['refs/tags/v1.0', 'a'.repeat(40)]]));
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await expect(fetchRemote(store)).resolves.toBe(true);
+    expect(store.getState().notice).toMatchObject({
+      tone: 'info',
+      message: 'Fetched: 1 new tag (v1.0).',
+    });
+  });
+
+  it('says so plainly when a fetch brought nothing', async () => {
+    const same = new Map([['refs/remotes/origin/main', 'b'.repeat(40)]]);
+    readRefSnapshot.mockResolvedValue(same);
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await expect(fetchRemote(store)).resolves.toBe(true);
+    expect(store.getState().notice?.message).toBe('Fetched: nothing new.');
+  });
+
+  it('reports a failed fetch as the error it is, with no success line over it', async () => {
+    readRefSnapshot.mockResolvedValue(new Map());
+    fetchRemoteFn.mockRejectedValue(
+      new GitError('command-failed', 'Could not resolve host'),
+    );
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await expect(fetchRemote(store)).resolves.toBe(false);
+    expect(store.getState().notice).toMatchObject({ tone: 'error' });
   });
 
   it('keeps the panels consistent when a branch switch fails', async () => {
