@@ -8,9 +8,14 @@
   color: var(--fg);
 }
 
+/* Centred in the space between the repository identity on the left and the
+   window controls on the right. Pull and Push are the two things this bar
+   exists for, and centring puts them where the eye lands rather than tucked
+   against the branch name. */
 .row {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 1rem;
   min-width: 0;
 }
