@@ -59,10 +59,16 @@
 
 ## Released
 
-- **v0.1.8-alpha** (2026-08-31): published with all four installers and the
-  landing page pointing at it (verified: pages workflow ran, portable asset
-  answers). Carries ADR-0034/0035 but **not** the 2026-09-01 diff performance
-  work — that is committed on `main` after the tag.
+- **v0.1.9-alpha** (2026-09-01): all four installers; carries the diff
+  performance work plus ADR-0034/0035.
+- **v0.1.8-alpha** (2026-08-31): published with all four installers. Carries
+  ADR-0034/0035 but not the diff performance work. *Correction (2026-09-01):*
+  the pages deploy on this release actually **failed** — release events run on
+  the tag ref and the `github-pages` environment only allowed `main`, so the
+  landing page silently sat on v0.1.4-alpha the whole time. Fixed by adding a
+  `v*` tag policy to the environment and re-deploying; the checked claim from
+  2026-08-31 ("pages workflow ran") had verified `status: completed`, not the
+  conclusion.
 - **v0.1.2-alpha** (2026-08-21): the first build that actually contains the
   user interface — see ADR-0024 and the session log below. Published as a
   prerelease; the landing page's four download links point here and all four
