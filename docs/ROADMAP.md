@@ -80,6 +80,21 @@ after 2 more weeks → proceed to v0.2. Else: keep as personal tool, stop invest
 
 ## Backlog (ideas parking lot — not scheduled)
 
+**A tag that exists locally and points elsewhere on the remote diverges
+silently forever.** Detecting it needs `git ls-remote --tags` (a network read
+per check); the fetch flags in ADR-0034 deliberately never move a local tag.
+
+**The fetch interval is per open repository.** N tabs mean N schedules and N
+git processes on every tick — ADR-0023's uncapped-tabs warning applies.
+
+**`git fetch --progress` output is discarded.** The runner captures stderr but
+nothing reads it; a progress bar for slow remotes would start there.
+
+**A lease push still is not offered in the UI.** The `--force-with-lease`
+plumbing exists and is gated on a confirmation, but the lease must carry an
+explicit `<branch>:<oid>` from the counts the user saw before a button is safe
+to show (see the note in `src/git/commands/remote.ts`).
+
 **A stash cannot be renamed from the history.** GitKraken's stash menu offers
 "Edit stash message", which means rewriting the stash commit and moving the ref.
 "Share as Cloud Patch" is deliberately never — it needs an account and a server.

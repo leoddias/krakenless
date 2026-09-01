@@ -155,7 +155,7 @@ export async function runFetch(
   // closed lid nobody should be told about twelve times an hour. News is the
   // opposite: somebody pushed, this checkout is now behind, and saying so is
   // the only way the user learns it without watching the counts. One line, only
-  // when a ref actually moved, and recorded in the ADR superseding ADR-0025.
+  // when a ref actually moved — ADR-0034.
   const message = news === null ? null : describeFetchNews(news);
   if (message === null) return;
 

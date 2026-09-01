@@ -381,6 +381,8 @@ v0.1.x-alpha artefact before this change is broken and should be replaced, not
 just superseded.
 ## ADR-0025 — Krakenless fetches in the background, on by default, silently
 
+**Status:** superseded by ADR-0034
+
 **Decision:** The app runs `git fetch --no-tags --prune --all` against the open
 repository every five minutes by default, configurable in Settings to Off, 1, 5,
 15 or 30 minutes (`autoFetchMinutes` in `config.json`; `0` means off and starts
@@ -718,3 +720,68 @@ threads, the process-tree kill and the bounded waits are the parts that hang or
 silently truncate when copied, so there is one copy. `ai_runner` refuses a
 program name containing whitespace — `claude --print` in that field is a
 command line, and running it looks for a file of that literal name.
+
+## ADR-0034 — The background fetch brings tags, says what it brought, and redraws only what moved (supersedes ADR-0025)
+
+**Date:** 2026-08-31 · **Status:** accepted
+
+**Decision:** The background fetch runs `git fetch --progress --prune
+--no-prune-tags --all`. `--no-tags` is gone: a tag pointing into fetched
+history now arrives, which is git's own default; `--tags` is still not passed.
+`--no-prune-tags` is stated explicitly because `fetch.pruneTags=true` in a
+user's config turns `--prune` into a tag deleter, and a tag created here and
+never pushed is exactly what it deletes. Each tick re-reads the status
+unconditionally; branches, commits and remotes are re-read only when a ref
+actually moved, decided by comparing `for-each-ref` snapshots taken either
+side of the fetch. When refs moved, one `info` notice names them — but never
+over a warning or an error already on screen. Failure stays silent, as
+ADR-0025 said, and a rejected tick no longer kills the schedule.
+
+**Why:** A silent fetch that also redraws nothing is indistinguishable from
+one that never runs, which is how a working schedule was reported as broken.
+`--no-tags` made every tag anybody else pushed invisible forever. Refreshing
+four panels twelve times an hour to redraw identical numbers costs processes
+and blanks lists mid-scroll; the status is the exception because it is the
+panel that lies loudest when stale. Rejected alternatives: `--tags` (drags
+down every historic tag whether or not its commits arrived), refreshing
+everything every tick (ADR-0025's behavior, the churn named above), and
+keeping full silence (the bug report this supersession answers).
+
+**Consequences:** Tags now arrive without being asked for. A repository whose
+remote is busy produces a notice line per tick; a quiet one produces none.
+The ref snapshot is two extra local git processes per tick and must never
+become the input to a write path. The manual Fetch button now reports what
+arrived ("Fetched: 1 new tag (v1.0).") instead of a bare "Fetch finished".
+
+## ADR-0035 — A diverged branch resolves through a confirmed merge-pull, never an implicit one
+
+**Date:** 2026-08-31 · **Status:** accepted
+
+**Decision:** Pull stays `git pull --ff-only`. When the branch and its
+upstream have diverged, the ff-only refusal and the push rejection are
+classified as their own error kinds (`diverged`, `non-fast-forward`) with
+actionable messages; push is blocked in the UI whenever the branch is behind,
+with the reason in visible text; and the Pull button becomes "Pull (merge)",
+which asks a confirmation naming both refs and both counts and then runs
+`git pull --no-rebase --ff --no-edit`. The flags pin the strategy against
+`pull.rebase` and `pull.ff=only` in the user's config: the sentence the user
+agreed to describes a merge that rewrites nothing, so no config may quietly
+turn it into a rebase or a refusal loop. A conflicted stop is an outcome, not
+a failure — the conflict banner and merge-abort already handle it.
+
+**Why:** Divergence used to be a dead end: push rejected, pull refused, and
+the only way out was the command line — the exact failure a git GUI exists to
+prevent. Rejected alternatives: defaulting pull to merge or rebase (makes a
+history-shaping decision on the user's behalf, the thing `--ff-only` was
+chosen to avoid); offering rebase as the escape hatch (rewrites commits under
+a button labelled "pull"); force push (never offered, ADR unchanged); doing
+nothing and improving only the error text (leaves the dead end in place).
+
+**Consequences:** The merge-pull writes a merge commit the user did not
+author, so it is only reachable through a confirmation dialog that mints the
+token in the words shown. The push gate now refuses on `behind > 0` as of the
+last fetch; a remote that rewound past that fetch makes the block
+conservative, which is the only safe direction. Every new stderr pattern
+ships with real-sample tests, including the negatives (a rejected tag push is
+not "non-fast-forward"; a refname echoing the divergence sentence is not
+"diverged").
