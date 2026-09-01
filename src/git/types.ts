@@ -39,6 +39,8 @@ export type GitErrorKind =
   | 'needs-confirmation'
   | 'authentication'
   | 'conflict'
+  | 'diverged'
+  | 'non-fast-forward'
   | 'command-failed'
   | 'parse-failed'
   | 'undecodable-output';

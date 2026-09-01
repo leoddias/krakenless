@@ -254,6 +254,24 @@ export function pullBlock(gate: Gate): string | null {
   }
 }
 
+/**
+ * The counts when the branch and its upstream have both moved, else `null`.
+ *
+ * Only claimed off numbers git actually reported, and only as of the last
+ * fetch — which is exactly the freshness of everything else on this panel.
+ * `pull --ff-only` fetches before it refuses, so even counts that were stale
+ * when the user clicked Pull are current by the time its refusal re-renders
+ * this as the merge-pull.
+ */
+export function divergence(
+  upstream: UpstreamState,
+): { ahead: number; behind: number } | null {
+  if (upstream.kind !== 'tracking') return null;
+  const { ahead, behind } = upstream;
+  if (ahead === undefined || behind === undefined) return null;
+  return ahead > 0 && behind > 0 ? { ahead, behind } : null;
+}
+
 export function pushBlock(gate: Gate): string | null {
   const shared = sharedBlock(gate);
   if (shared !== null) return shared;
@@ -269,14 +287,27 @@ export function pushBlock(gate: Gate): string | null {
       return `Krakenless cannot read the upstream "${gate.upstream.upstream}", so it will not choose a remote on a guess.`;
     case 'no-upstream':
       return publishBlock(gate);
-    case 'tracking':
+    case 'tracking': {
       // The push builder always writes `refs/heads/<name>:refs/heads/<name>`,
       // so a branch tracking a differently-named upstream would be pushed to a
       // *different* branch than the one whose counts are on screen. Refuse
       // rather than publish commits somewhere the user was not shown.
-      return gate.upstream.upstream.branch === gate.upstream.branch
-        ? null
-        : `This branch tracks ${gate.upstream.upstream.remote}/${gate.upstream.upstream.branch}, which has a different name. Krakenless only pushes a branch to its own name, so push this one from the command line: git push ${gate.upstream.upstream.remote} ${gate.upstream.branch}:${gate.upstream.upstream.branch}`;
+      if (gate.upstream.upstream.branch !== gate.upstream.branch) {
+        return `This branch tracks ${gate.upstream.upstream.remote}/${gate.upstream.upstream.branch}, which has a different name. Krakenless only pushes a branch to its own name, so push this one from the command line: git push ${gate.upstream.upstream.remote} ${gate.upstream.branch}:${gate.upstream.upstream.branch}`;
+      }
+      // A branch that is behind cannot be pushed — git refuses a non-fast-
+      // forward update — so offering the button only manufactures the
+      // rejection. The counts are as fresh as the last fetch; if the remote
+      // rewound since, the block errs on the side of not pushing, which is
+      // the only safe side. Never `ahead === 0` alone: undefined counts mean
+      // "not known", and an unknown push is git's to refuse, not ours.
+      const behind = gate.upstream.behind ?? 0;
+      if (behind > 0) {
+        const commits = behind === 1 ? 'one commit' : `${behind} commits`;
+        return `The upstream has ${commits} this branch does not, so git would refuse this push. Pull first, then push.`;
+      }
+      return null;
+    }
   }
 }
 
@@ -298,6 +329,33 @@ function publishBlock(gate: Gate): string | null {
     return 'Krakenless knows of no remote to publish to. Add one with git remote add, then fetch.';
   }
   return null;
+}
+
+/**
+ * The question the merge-pull asks, and the confirmation reason it mints.
+ *
+ * Spelled out in full because this is the one place the app writes a merge
+ * commit the user did not start from a commit menu: the sentence has to say
+ * what will be merged into what, that nothing is rewritten, and what a
+ * conflicted stop looks like — those are the terms the confirmation token
+ * records the user as having agreed to.
+ */
+export function pullMergeQuestion(
+  branch: string,
+  upstream: UpstreamRef,
+  counts: { ahead: number; behind: number },
+): string {
+  const remoteRef = `${upstream.remote}/${upstream.branch}`;
+  return (
+    `${branch} and ${remoteRef} have diverged: yours has ${plural(counts.ahead)} ` +
+    `${remoteRef} does not, and theirs has ${plural(counts.behind)} yours does not. ` +
+    `Pulling will fetch and merge ${remoteRef} into ${branch}, adding a merge commit. ` +
+    `No commit is rewritten, and a merge that stops on conflicts can be aborted from the conflict banner.`
+  );
+}
+
+function plural(count: number): string {
+  return count === 1 ? '1 commit' : `${count} commits`;
 }
 
 /** Exactly what a push would send, or `null` when it must not run at all. */

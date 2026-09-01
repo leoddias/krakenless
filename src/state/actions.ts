@@ -50,11 +50,13 @@ import {
   listRemotes,
   listStashes,
   pull,
+  pullMerge,
   push,
   pushTag,
   switchBranch,
   switchNewBranch,
   type DeleteBranchOutcome,
+  type PullMergeOutcome,
 } from '../git/refs';
 import { getStatus } from '../git/status';
 import {
@@ -670,6 +672,40 @@ export async function pullCurrent(store: Store): Promise<boolean> {
   const root = currentRoot(store);
   if (root === null) return false;
   return operate(store, () => pull(root));
+}
+
+/**
+ * The explicit merge-pull for a diverged branch. Follows `mergeRefInto`'s
+ * shape: a conflicted stop is reported as a warning next to the conflict
+ * banner, not as a failure — git did what the user confirmed, up to the point
+ * where only they can decide. Returns the outcome (or `null` for a failure,
+ * already reported as a notice) so the toolbar can describe what actually
+ * happened instead of a generic "finished".
+ */
+export async function pullMergeCurrent(
+  store: Store,
+  confirmationReason: string,
+): Promise<PullMergeOutcome | null> {
+  const root = currentRoot(store);
+  if (root === null) return null;
+
+  let outcome: PullMergeOutcome | null = null;
+  const ran = await operate(store, async () => {
+    outcome = await pullMerge(root, userConfirmed(confirmationReason));
+  });
+  if (!ran) return null;
+
+  if (outcome === 'conflicted') {
+    store.dispatch({
+      type: 'notice',
+      notice: {
+        tone: 'warning',
+        message:
+          'The pull stopped on merge conflicts. Resolve them, then commit the merge — or abort it from the conflict banner.',
+      },
+    });
+  }
+  return outcome;
 }
 
 export async function pushCurrent(

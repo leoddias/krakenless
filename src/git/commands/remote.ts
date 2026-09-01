@@ -40,6 +40,30 @@ export function buildPullCommand(): GitCommand {
   return { args: ['pull', '--ff-only', '--progress'], timeoutMs: NETWORK_TIMEOUT_MS };
 }
 
+/**
+ * Pulls with an explicit merge — the escape hatch for a diverged branch.
+ *
+ * This is the operation `buildPullCommand` deliberately refuses to do
+ * implicitly. It exists so divergence has an in-app resolution instead of a
+ * dead end: fast-forward when possible, a merge commit when not. `--no-rebase`
+ * pins the strategy against a `pull.rebase` config, because the confirmation
+ * the user answered described a merge, not a rebase that rewrites their
+ * commits. `--ff` pins it against `pull.ff=only` — without it, the very
+ * config that surfaced the divergence would make the escape hatch refuse
+ * too, and confirming would loop back to the same error forever. `--no-edit`
+ * for the same reason merge has it: there is no terminal to host an editor.
+ *
+ * Not marked destructive for the reason merge is not: it only adds commits,
+ * `ORIG_HEAD` names where the branch was, and a conflicted stop is undone by
+ * `git merge --abort`. The confirmation this operation gets is the UI's.
+ */
+export function buildPullMergeCommand(): GitCommand {
+  return {
+    args: ['pull', '--no-rebase', '--ff', '--no-edit', '--progress'],
+    timeoutMs: NETWORK_TIMEOUT_MS,
+  };
+}
+
 export interface PushOptions {
   remote: string;
   branch: string;

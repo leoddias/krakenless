@@ -42,7 +42,10 @@ export function isConfirmation(value: unknown): value is Confirmation {
  * was emptied says the user agreed to nothing.
  */
 export function approve(confirmation: Confirmation): { confirmed: true } {
-  if (confirmation.reason.length === 0) {
+  // The token symbol is re-checked too, not just the reason: this is the last
+  // gate, and an object cast into the type never passed through
+  // `userConfirmed`, so nobody was ever asked.
+  if (!isConfirmation(confirmation) || confirmation.reason.length === 0) {
     throw new GitError('needs-confirmation', 'Confirmation is missing its reason');
   }
   return { confirmed: true };

@@ -10,6 +10,7 @@ import {
   buildFetchCommand,
   buildMergeAbortCommand,
   buildPullCommand,
+  buildPullMergeCommand,
   buildPushCommand,
   buildPushTagCommand,
   buildRemoteListCommand,
@@ -23,7 +24,7 @@ import {
   buildStashListCommand,
 } from './commands/stage';
 import { approve, type Confirmation } from './confirm';
-import { GitError } from './errors';
+import { classifyFailure, GitError } from './errors';
 import { parseBranches, parseRemotes, parseStashes } from './parsers/branch';
 import { runGit } from './runner';
 import type { Branch, Remote, StashEntry } from './types';
@@ -60,25 +61,46 @@ export function fetch(repo: string, options: FetchOptions = {}): Promise<unknown
 /**
  * Pulls, fast-forward only.
  *
- * When the branches have diverged git refuses, and that refusal is turned into
- * a message the user can act on rather than a silent merge they did not choose.
+ * When the branches have diverged git refuses, and `classifyFailure` turns
+ * that refusal into a `diverged` error the UI answers with the explicit
+ * merge-pull ({@link pullMerge}) rather than a silent merge nobody chose.
  */
 export async function pull(repo: string): Promise<void> {
-  try {
-    await runGit(repo, buildPullCommand(), SAFE);
-  } catch (error) {
-    if (
-      error instanceof GitError &&
-      /not possible to fast-forward|diverg/i.test(error.stderr)
-    ) {
-      throw new GitError(
-        'command-failed',
-        'Your branch and its upstream have diverged. Merge or rebase explicitly to continue.',
-        { args: error.args, code: error.code, stderr: error.stderr },
-      );
-    }
-    throw error;
-  }
+  await runGit(repo, buildPullCommand(), SAFE);
+}
+
+/** How a merge-pull ended when it did not fail outright. */
+export type PullMergeOutcome = 'pulled' | 'conflicted';
+
+/**
+ * Pulls with an explicit merge — the answer to a `diverged` refusal from
+ * {@link pull}.
+ *
+ * Takes a {@link Confirmation} even though the command is not destructive:
+ * this is the one operation that writes a merge commit the user did not
+ * author, so it must not be reachable without them having read what it does.
+ *
+ * Exit code 1 is allowed for the reason `mergeInto` allows it: it is how git
+ * reports a conflicted stop, which is an outcome the UI explains next to the
+ * conflict banner, not a failure. The allowed exit is classified by the same
+ * code that classifies a thrown one, so what counts as "conflicted" cannot
+ * drift between the two paths; anything else is re-thrown as the failure it
+ * is, with its real kind and arguments.
+ */
+export async function pullMerge(
+  repo: string,
+  confirmation: Confirmation,
+): Promise<PullMergeOutcome> {
+  const command = buildPullMergeCommand();
+  const output = await runGit(repo, command, {
+    ...approve(confirmation),
+    allowExitCodes: [1],
+  });
+  if (output.code === 0) return 'pulled';
+
+  const failure = classifyFailure(command.args, output);
+  if (failure.kind === 'conflict') return 'conflicted';
+  throw failure;
 }
 
 /**

@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { deleteBranch, listStashes, pull, push, pushTag } from './refs';
+import { deleteBranch, listStashes, pull, pullMerge, push, pushTag } from './refs';
 import { userConfirmed } from './confirm';
 import { GitError } from './errors';
 import {
   buildFetchCommand,
   buildPullCommand,
+  buildPullMergeCommand,
   buildPushCommand,
   buildPushTagCommand,
 } from './commands/remote';
@@ -53,6 +54,24 @@ describe('network builders', () => {
   it('gives network commands a longer timeout than local ones', () => {
     expect(buildFetchCommand().timeoutMs).toBeGreaterThan(60_000);
     expect(buildPullCommand().timeoutMs).toBeGreaterThan(60_000);
+    expect(buildPullMergeCommand().timeoutMs).toBeGreaterThan(60_000);
+  });
+
+  it('pins the merge-pull to a merge, never a rebase, and never forces', () => {
+    // pull.rebase=true in the user's config would otherwise rewrite the very
+    // commits the confirmation said would be kept.
+    const command = buildPullMergeCommand();
+    expect(command.args).toContain('--no-rebase');
+    expect(command.args).toContain('--no-edit');
+    expect(command.args).not.toContain('--ff-only');
+    expect(command.args).not.toContain('--force');
+    expect(command.destructive).toBeFalsy();
+  });
+
+  it('overrides pull.ff=only, which is what stranded the branch to begin with', () => {
+    // Without --ff, the config that made the plain pull refuse would make the
+    // confirmed escape hatch refuse too, forever.
+    expect(buildPullMergeCommand().args).toContain('--ff');
   });
 
   it('pushes a tag by its fully qualified name, and never forces it', () => {
@@ -89,19 +108,76 @@ describe('pull', () => {
     invoke.mockReset();
   });
 
-  it('explains divergence instead of leaving the raw git error', () => {
+  it('reports divergence by its own kind, with a message the user can act on', async () => {
     invoke.mockResolvedValue(
       raw({
         code: 128,
         stderr: 'fatal: Not possible to fast-forward, aborting.',
       }),
     );
-    return expect(pull('C:/repo')).rejects.toThrow(/diverged/i);
+    await expect(pull('C:/repo')).rejects.toMatchObject({ kind: 'diverged' });
+    await expect(pull('C:/repo')).rejects.toThrow(/diverged/i);
   });
 
   it('passes other failures through untouched', async () => {
     invoke.mockResolvedValue(raw({ code: 128, stderr: 'fatal: Authentication failed' }));
     await expect(pull('C:/repo')).rejects.toMatchObject({ kind: 'authentication' });
+  });
+});
+
+describe('pullMerge', () => {
+  beforeEach(() => {
+    invoke.mockReset();
+  });
+
+  const OK = userConfirmed('Merge origin/main into main?');
+
+  it('reports a clean pull', async () => {
+    invoke.mockResolvedValue(raw());
+    await expect(pullMerge('C:/repo', OK)).resolves.toBe('pulled');
+  });
+
+  it('reports a conflicted stop as an outcome, not a failure', async () => {
+    invoke.mockResolvedValue(
+      raw({
+        code: 1,
+        stdout:
+          'CONFLICT (content): Merge conflict in src/app.ts\nAutomatic merge failed; fix conflicts and then commit the result.',
+      }),
+    );
+    await expect(pullMerge('C:/repo', OK)).resolves.toBe('conflicted');
+  });
+
+  it('re-throws an exit-1 refusal that is not a conflict', async () => {
+    invoke.mockResolvedValue(
+      raw({
+        code: 1,
+        stderr:
+          'error: Your local changes to the following files would be overwritten by merge:\n\tsrc/app.ts',
+      }),
+    );
+    await expect(pullMerge('C:/repo', OK)).rejects.toMatchObject({
+      kind: 'command-failed',
+      message: expect.stringMatching(/local changes/i) as string,
+    });
+  });
+
+  it('refuses a confirmation whose reason was emptied', async () => {
+    invoke.mockResolvedValue(raw());
+    await expect(
+      pullMerge('C:/repo', { reason: '' } as unknown as ReturnType<typeof userConfirmed>),
+    ).rejects.toMatchObject({ kind: 'needs-confirmation' });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('refuses an object cast into the token type — nobody was asked', async () => {
+    invoke.mockResolvedValue(raw());
+    await expect(
+      pullMerge('C:/repo', {
+        reason: 'looks legitimate',
+      } as unknown as ReturnType<typeof userConfirmed>),
+    ).rejects.toMatchObject({ kind: 'needs-confirmation' });
+    expect(invoke).not.toHaveBeenCalled();
   });
 });
 

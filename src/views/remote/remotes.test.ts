@@ -3,9 +3,11 @@ import type { Branch, RepoStatus } from '../../git/types';
 import type { Loadable } from '../../state/store';
 import {
   candidateRemotes,
+  divergence,
   fetchBlock,
   parseUpstream,
   pullBlock,
+  pullMergeQuestion,
   pushBlock,
   pushIntent,
   readUpstream,
@@ -414,6 +416,97 @@ describe('gates', () => {
     const unborn = gate({ upstream: { kind: 'unborn', branch: 'main' } });
     expect(pullBlock(unborn)).toMatch(/no commits yet/);
     expect(pushBlock(unborn)).toMatch(/no commits yet/);
+  });
+
+  it('blocks push while the branch is behind — git would refuse it anyway', () => {
+    const behind = gate({
+      upstream: {
+        kind: 'tracking',
+        branch: 'main',
+        upstream: { remote: 'origin', branch: 'main' },
+        ahead: 0,
+        behind: 2,
+      },
+    });
+    expect(pushBlock(behind)).toMatch(/2 commits/);
+    expect(pushBlock(behind)).toMatch(/pull first/i);
+    // Pull is the way out, so it must stay open.
+    expect(pullBlock(behind)).toBeNull();
+  });
+
+  it('names one behind commit in the singular', () => {
+    const behind = gate({
+      upstream: {
+        kind: 'tracking',
+        branch: 'main',
+        upstream: { remote: 'origin', branch: 'main' },
+        ahead: 3,
+        behind: 1,
+      },
+    });
+    expect(pushBlock(behind)).toMatch(/one commit/);
+  });
+
+  it('never blocks push on counts git did not report', () => {
+    // Undefined counts mean "not known", and an unknown push is git's to
+    // refuse, not ours — blocking it would strand a healthy branch.
+    const unknown = gate({
+      upstream: {
+        kind: 'tracking',
+        branch: 'main',
+        upstream: { remote: 'origin', branch: 'main' },
+      },
+    });
+    expect(pushBlock(unknown)).toBeNull();
+  });
+});
+
+describe('divergence', () => {
+  const tracking = (ahead?: number, behind?: number) =>
+    ({
+      kind: 'tracking',
+      branch: 'main',
+      upstream: { remote: 'origin', branch: 'main' },
+      ...(ahead === undefined ? {} : { ahead }),
+      ...(behind === undefined ? {} : { behind }),
+    }) as const;
+
+  it('reports the counts only when both sides have moved', () => {
+    expect(divergence(tracking(2, 3))).toEqual({ ahead: 2, behind: 3 });
+  });
+
+  it('is null when only one side moved, or neither', () => {
+    expect(divergence(tracking(2, 0))).toBeNull();
+    expect(divergence(tracking(0, 3))).toBeNull();
+    expect(divergence(tracking(0, 0))).toBeNull();
+  });
+
+  it('claims nothing off counts git did not report', () => {
+    expect(divergence(tracking())).toBeNull();
+    expect(divergence(tracking(2))).toBeNull();
+    expect(divergence(tracking(undefined, 3))).toBeNull();
+  });
+
+  it('is null for every non-tracking state', () => {
+    expect(divergence({ kind: 'unknown' })).toBeNull();
+    expect(divergence({ kind: 'detached' })).toBeNull();
+    expect(divergence({ kind: 'no-upstream', branch: 'x' })).toBeNull();
+  });
+});
+
+describe('pullMergeQuestion', () => {
+  it('names both refs, both counts, and the way back out', () => {
+    const question = pullMergeQuestion(
+      'main',
+      { remote: 'origin', branch: 'main' },
+      { ahead: 2, behind: 1 },
+    );
+    expect(question).toContain('origin/main');
+    expect(question).toContain('2 commits');
+    expect(question).toContain('1 commit ');
+    expect(question).toMatch(/merge commit/);
+    expect(question).toMatch(/no commit is rewritten/i);
+    expect(question).toMatch(/aborted/);
   });
 });
 

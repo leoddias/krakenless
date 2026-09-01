@@ -19,17 +19,21 @@ import { useEffect, useState, type ReactNode } from 'react';
 import {
   fetchRemote,
   pullCurrent,
+  pullMergeCurrent,
   pushCurrent,
   refreshBranches,
 } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
 import { isBusy } from '../../state/store';
+import { DialogHost, type ConfirmDialog } from '../history/CommitActions';
 import { FetchIcon, PullIcon, PushIcon, SpinnerIcon } from '../shell/icons';
 import styles from './RemoteBar.module.css';
 import {
   candidateRemotes,
+  divergence,
   fetchBlock,
   pullBlock,
+  pullMergeQuestion,
   pushBlock,
   pushIntent,
   readUpstream,
@@ -37,7 +41,7 @@ import {
   type Gate,
 } from './remotes';
 
-type ActionKind = 'fetch' | 'pull' | 'push' | 'publish';
+type ActionKind = 'fetch' | 'pull' | 'pull-merge' | 'push' | 'publish';
 
 interface Outcome {
   kind: ActionKind;
@@ -54,6 +58,7 @@ interface Outcome {
 const RUNNING_LABEL: Record<ActionKind, string> = {
   fetch: 'Fetching…',
   pull: 'Pulling…',
+  'pull-merge': 'Pulling and merging…',
   push: 'Pushing…',
   publish: 'Publishing the branch…',
 };
@@ -62,6 +67,7 @@ const SUCCESS_LABEL: Record<ActionKind, string> = {
   fetch: 'Fetch finished. The counts below were re-read afterwards.',
   // Not "fast-forwarded": `pull --ff-only` also succeeds with nothing to do.
   pull: 'Pull finished. Fast-forward only, so nothing was merged on your behalf.',
+  'pull-merge': 'Pull finished. The upstream was merged into your branch.',
   push: 'Push finished.',
   publish: 'Branch published and set as the upstream.',
 };
@@ -69,6 +75,10 @@ const SUCCESS_LABEL: Record<ActionKind, string> = {
 const FAILURE_LABEL: Record<ActionKind, string> = {
   fetch: 'Fetch did not complete.',
   pull: 'Pull did not complete, and your branch was left as it was.',
+  // No claim about the branch's state: a merge can resolve cleanly and then
+  // fail at the commit (a signing key, a hook), leaving a merge in progress
+  // that the operation panel reports.
+  'pull-merge': 'Pull did not complete.',
   push: 'Push did not complete. Nothing was published.',
   publish: 'Publishing did not complete. The branch still has no upstream.',
 };
@@ -84,6 +94,10 @@ export function RemoteBar(): ReactNode {
 
   const [running, setRunning] = useState<ActionKind | null>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
+  // The merge-pull question, while it is on screen. Kept as dialog state (not
+  // derived) so a background refresh that changes the counts mid-question
+  // cannot swap the sentence the user is about to agree to.
+  const [dialog, setDialog] = useState<ConfirmDialog | null>(null);
   // The pick is stored with the repository it was made in: two repositories
   // can both have a remote called `origin` and mean different servers, so a
   // choice must never carry over. Kept as state rather than reset in an
@@ -144,6 +158,48 @@ export function RemoteBar(): ReactNode {
     }
   };
 
+  // The one action whose outcome has three honest answers, not two. A
+  // conflicted stop sets no outcome line at all: the warning notice and the
+  // conflict banner already narrate it, and a third copy is the two-copies
+  // failure mode this file's header forbids.
+  const runMergePull = async (reason: string): Promise<void> => {
+    setRunning('pull-merge');
+    setOutcome(null);
+    try {
+      const result = await pullMergeCurrent(store, reason);
+      if (result !== 'conflicted') {
+        setOutcome({
+          kind: 'pull-merge',
+          ok: result === 'pulled',
+          repoRoot,
+          branch: branchNow,
+        });
+      }
+    } catch {
+      setOutcome({ kind: 'pull-merge', ok: false, repoRoot, branch: branchNow });
+    } finally {
+      setRunning(null);
+    }
+  };
+
+  const diverged = divergence(upstream);
+  const onPull = (): void => {
+    if (diverged !== null && upstream.kind === 'tracking') {
+      setDialog({
+        kind: 'confirm',
+        title: `Merge ${upstream.upstream.remote}/${upstream.upstream.branch} into ${upstream.branch}?`,
+        question: pullMergeQuestion(upstream.branch, upstream.upstream, diverged),
+        confirmLabel: 'Pull and merge',
+        // Not danger, for the reason the merge dialog is not: a merge adds
+        // commits and rewrites none.
+        danger: false,
+        run: (reason) => runMergePull(reason),
+      });
+      return;
+    }
+    void run('pull', () => pullCurrent(store));
+  };
+
   const onPush = (): void => {
     // Derived from the gate, not from the button's `disabled` attribute: the
     // refusals encoded there are what keep a push off a branch the user was
@@ -185,11 +241,17 @@ export function RemoteBar(): ReactNode {
     },
     {
       id: 'remote-pull',
-      label: 'Pull',
-      icon: spinning('pull', <PullIcon />),
+      // The label changes with what the click will actually do: a diverged
+      // branch cannot fast-forward, so the button says the merge is coming
+      // and the click asks before running it.
+      label: diverged === null ? 'Pull' : 'Pull (merge)',
+      icon: spinning(diverged === null ? 'pull' : 'pull-merge', <PullIcon />),
       reason: pullBlock(gate),
-      hint: 'Fast-forward only. If your branch and its upstream have diverged, git stops and says so instead of merging for you.',
-      onClick: () => void run('pull', () => pullCurrent(store)),
+      hint:
+        diverged === null
+          ? 'Fast-forward only. If your branch and its upstream have diverged, git stops and says so instead of merging for you.'
+          : 'Your branch and its upstream have diverged. This asks for confirmation, then fetches and merges the upstream into your branch.',
+      onClick: onPull,
     },
     {
       id: 'remote-push',
@@ -272,6 +334,10 @@ export function RemoteBar(): ReactNode {
             </p>
           )}
         </div>
+      )}
+
+      {dialog !== null && (
+        <DialogHost dialog={dialog} onClose={() => setDialog(null)} busy={busy} />
       )}
     </section>
   );

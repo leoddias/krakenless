@@ -4,6 +4,7 @@ import type { Branch, RepoStatus } from '../../git/types';
 import {
   fetchRemote,
   pullCurrent,
+  pullMergeCurrent,
   pushCurrent,
   refreshBranches,
 } from '../../state/actions';
@@ -14,12 +15,14 @@ import { RemoteBar } from './RemoteBar';
 vi.mock('../../state/actions', () => ({
   fetchRemote: vi.fn(),
   pullCurrent: vi.fn(),
+  pullMergeCurrent: vi.fn(),
   pushCurrent: vi.fn(),
   refreshBranches: vi.fn(),
 }));
 
 const fetchMock = vi.mocked(fetchRemote);
 const pullMock = vi.mocked(pullCurrent);
+const pullMergeMock = vi.mocked(pullMergeCurrent);
 const pushMock = vi.mocked(pushCurrent);
 const refreshBranchesMock = vi.mocked(refreshBranches);
 
@@ -27,6 +30,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   fetchMock.mockResolvedValue(true);
   pullMock.mockResolvedValue(true);
+  pullMergeMock.mockResolvedValue('pulled');
   pushMock.mockResolvedValue(true);
   refreshBranchesMock.mockResolvedValue(undefined);
 });
@@ -170,6 +174,15 @@ describe('RemoteBar — actions', () => {
     for (const control of screen.getAllByRole('button')) {
       expect(control).not.toHaveAccessibleName(/force/i);
     }
+    // Divergence resolves through the merge-pull, never through force: push
+    // is blocked outright and the way out is spelled next to it.
+    expect(button('Pull (merge)')).toBeEnabled();
+    expect(screen.getByText(/Pull first, then push/)).toBeInTheDocument();
+  });
+
+  it('still names the no-force promise while push is offered', () => {
+    renderReady({ upstream: 'origin/main', ahead: 1 });
+    expect(button('Push')).toBeEnabled();
     expect(screen.getByText(/Krakenless never force-pushes/)).toBeInTheDocument();
   });
 });
@@ -415,5 +428,75 @@ describe('RemoteBar — honesty about failure', () => {
     });
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.getByText(/Fetch finished/)).toBeInTheDocument();
+  });
+});
+
+describe('RemoteBar — a diverged branch', () => {
+  const diverged = { upstream: 'origin/main', ahead: 2, behind: 3 };
+
+  it('turns Pull into the merge-pull and blocks Push with the way out', () => {
+    renderReady(diverged);
+    expect(button('Pull (merge)')).toBeEnabled();
+    expect(button('Push')).toBeDisabled();
+    expect(screen.getByText(/Pull first, then push/)).toBeInTheDocument();
+  });
+
+  it('asks before merging, and runs nothing until the user agrees', async () => {
+    renderReady(diverged);
+    fireEvent.click(button('Pull (merge)'));
+
+    // The question names both refs and both counts; nothing has run yet.
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveTextContent(/origin\/main/);
+    expect(dialog).toHaveTextContent(/2 commits/);
+    expect(pullMergeMock).not.toHaveBeenCalled();
+    expect(pullMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.click(button('Pull and merge'));
+    });
+    expect(pullMergeMock).toHaveBeenCalledTimes(1);
+    // The confirmation reason is the sentence the user read.
+    expect(pullMergeMock.mock.calls[0]?.[1]).toMatch(/merge origin\/main into main/i);
+    expect(screen.getByText(/The upstream was merged/)).toBeInTheDocument();
+  });
+
+  it('runs nothing when the question is cancelled', () => {
+    renderReady(diverged);
+    fireEvent.click(button('Pull (merge)'));
+    fireEvent.click(button('Cancel'));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(pullMergeMock).not.toHaveBeenCalled();
+  });
+
+  it('adds no outcome line for a conflicted stop — the notice and banner narrate it', async () => {
+    pullMergeMock.mockResolvedValue('conflicted');
+    renderReady(diverged);
+    fireEvent.click(button('Pull (merge)'));
+    await act(async () => {
+      fireEvent.click(button('Pull and merge'));
+    });
+    expect(screen.queryByText(/Pull finished/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('reports a failed merge-pull as one', async () => {
+    pullMergeMock.mockResolvedValue(null);
+    renderReady(diverged);
+    fireEvent.click(button('Pull (merge)'));
+    await act(async () => {
+      fireEvent.click(button('Pull and merge'));
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent(/Pull did not complete/);
+  });
+});
+
+describe('RemoteBar — a branch merely behind', () => {
+  it('keeps the fast-forward pull and blocks only the push', () => {
+    renderReady({ upstream: 'origin/main', ahead: 0, behind: 2 });
+    expect(button('Pull')).toBeEnabled();
+    expect(button('Push')).toBeDisabled();
+    expect(screen.getByText(/2 commits this branch does not/)).toBeInTheDocument();
   });
 });

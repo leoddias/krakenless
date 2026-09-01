@@ -37,6 +37,32 @@ const AUTHENTICATION = [
   /invalid username or (password|token)/i,
 ];
 
+/**
+ * `git pull --ff-only` refusing because the branch and its upstream have both
+ * moved. The first two phrasings are current git; "have diverged" appears in
+ * the `pull.ff` advice text of older releases.
+ */
+const DIVERGED = [
+  /fatal: not possible to fast-forward/i,
+  /need to specify how to reconcile divergent branches/i,
+  // The quotes are git's own framing; without them a refname that happens to
+  // contain this sentence, echoed back in an unrelated error, would match.
+  /your branch and '.+' have diverged/i,
+];
+
+/**
+ * A push the remote refused because it is ahead. Git prints the rejection
+ * marker per ref and the reason in a hint; both are matched so the kind
+ * survives `advice.pushNonFastForward=false`, which silences the hints. The
+ * hint pattern names the two branch-behind wordings in full: a bare
+ * "updates were rejected" would also match the tag-already-exists rejection,
+ * whose "pull first" advice is wrong — no pull resolves a tag clash.
+ */
+const NON_FAST_FORWARD = [
+  /\[rejected\][^\n]*\((non-fast-forward|fetch first)\)/i,
+  /updates were rejected because the (tip of your current branch is behind|remote contains work)/i,
+];
+
 const CONFLICT = [
   /^CONFLICT \(/m,
   /automatic merge failed/i,
@@ -69,6 +95,20 @@ export function classifyFailure(args: string[], output: GitOutput): GitError {
   }
   if (CONFLICT.some((pattern) => pattern.test(announced))) {
     return new GitError('conflict', 'Conflicts must be resolved first', context);
+  }
+  if (DIVERGED.some((pattern) => pattern.test(announced))) {
+    return new GitError(
+      'diverged',
+      'This branch and its upstream have diverged: both have commits the other does not. A fast-forward pull is impossible — merge the upstream to combine them.',
+      context,
+    );
+  }
+  if (NON_FAST_FORWARD.some((pattern) => pattern.test(announced))) {
+    return new GitError(
+      'non-fast-forward',
+      'The remote has commits this branch does not have, so the push was refused. Pull first, then push again. Nothing was published.',
+      context,
+    );
   }
 
   const firstLine = stderr.split('\n')[0] ?? '';
