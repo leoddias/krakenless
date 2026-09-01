@@ -3,12 +3,16 @@ import { FIRST_FETCH_DELAY_MS, runFetch, startAutoFetch } from './autoFetch';
 import { createStore, type Store } from './store';
 
 const gitFetch = vi.hoisted(() => vi.fn());
+const readRefSnapshot = vi.hoisted(() => vi.fn());
 const refreshBranches = vi.hoisted(() => vi.fn());
 const refreshCommits = vi.hoisted(() => vi.fn());
 const refreshStatus = vi.hoisted(() => vi.fn());
 const refreshRemotes = vi.hoisted(() => vi.fn());
 
-vi.mock('../git/refs', () => ({ fetch: gitFetch }));
+// The change detection in `fetchNews` is exercised for real here: what the
+// schedule does depends entirely on whether a ref moved, so stubbing that out
+// would leave the interesting half of this module untested.
+vi.mock('../git/refs', () => ({ fetch: gitFetch, readRefSnapshot }));
 vi.mock('./actions', () => ({
   refreshBranches,
   refreshCommits,
@@ -34,10 +38,35 @@ function openStore(): Store {
   return store;
 }
 
+/** What the runner hands back: a fetch reports its refusals on stderr. */
+function gitOutput(stderr = '') {
+  return { stdout: '', stderr, code: 0, timedOut: false, stdoutLossy: false };
+}
+
+const OLD = '1111111111111111111111111111111111111111';
+const NEW = '2222222222222222222222222222222222222222';
+
+/** Ref snapshots for "somebody pushed to origin/main while we were away". */
+function movedRefs(): void {
+  readRefSnapshot
+    .mockResolvedValueOnce(new Map([['refs/remotes/origin/main', OLD]]))
+    .mockResolvedValueOnce(new Map([['refs/remotes/origin/main', NEW]]));
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.resetAllMocks();
-  gitFetch.mockResolvedValue(undefined);
+  gitFetch.mockResolvedValue(gitOutput());
+  // The default for the schedule tests: every fetch brings something, so a
+  // missing refresh is a defect rather than the no-news short circuit. Counted
+  // rather than random — the values are never asserted on, and a random one
+  // reads as if it were.
+  let moves = 0;
+  readRefSnapshot.mockImplementation(() =>
+    Promise.resolve(
+      new Map([['refs/remotes/origin/main', String(++moves).padStart(40, '0')]]),
+    ),
+  );
   refreshBranches.mockResolvedValue(undefined);
   refreshCommits.mockResolvedValue(undefined);
   refreshStatus.mockResolvedValue(undefined);
@@ -93,12 +122,23 @@ describe('runFetch', () => {
     expect(refreshBranches).not.toHaveBeenCalled();
   });
 
+  it('re-reads the status even while the fetch keeps failing', async () => {
+    // A laptop off-network all afternoon still has a user committing in a
+    // terminal, and a working-tree panel that never updates again is the same
+    // stale row somebody clicks Discard on.
+    gitFetch.mockRejectedValue(new Error('Could not resolve host'));
+
+    await runFetch(openStore(), ROOT);
+
+    expect(refreshStatus).toHaveBeenCalledTimes(1);
+  });
+
   it('never marks the app busy, so no click is lost under it', async () => {
     const store = openStore();
     let busyDuringFetch = false;
     gitFetch.mockImplementation(() => {
       busyDuringFetch = store.getState().busyDepth > 0;
-      return Promise.resolve(undefined);
+      return Promise.resolve(gitOutput());
     });
 
     await runFetch(store, ROOT);
@@ -111,6 +151,83 @@ describe('runFetch', () => {
 
     expect(gitFetch).toHaveBeenCalledTimes(1);
     expect(refreshBranches).not.toHaveBeenCalled();
+  });
+
+  it('leaves every panel alone when no ref moved', async () => {
+    // The common case, twelve times an hour, forever. Reloading four panels to
+    // redraw identical numbers costs four git processes and can blank a list
+    // under the user's cursor.
+    const same = new Map([['refs/remotes/origin/main', OLD]]);
+    readRefSnapshot.mockResolvedValue(same);
+    const store = openStore();
+
+    await runFetch(store, ROOT);
+
+    expect(gitFetch).toHaveBeenCalledTimes(1);
+    expect(refreshBranches).not.toHaveBeenCalled();
+    expect(refreshCommits).not.toHaveBeenCalled();
+    expect(store.getState().notice).toBeNull();
+  });
+
+  it('still re-reads the status when no ref moved', async () => {
+    // A commit made in a terminal moves no remote ref, and the snapshot cannot
+    // see it, so this must not hide behind the change check.
+    readRefSnapshot.mockResolvedValue(new Map([['refs/remotes/origin/main', OLD]]));
+
+    await runFetch(openStore(), ROOT);
+
+    expect(refreshStatus).toHaveBeenCalledTimes(1);
+    expect(refreshBranches).not.toHaveBeenCalled();
+  });
+
+  it('refreshes and says what arrived when a ref moved', async () => {
+    movedRefs();
+    const store = openStore();
+
+    await runFetch(store, ROOT);
+
+    expect(refreshBranches).toHaveBeenCalledTimes(1);
+    expect(store.getState().notice).toMatchObject({
+      tone: 'info',
+      message: 'Fetched: 1 branch updated (origin/main).',
+    });
+  });
+
+  it('names a tag that arrived, which is the news nothing else reports', async () => {
+    readRefSnapshot
+      .mockResolvedValueOnce(new Map())
+      .mockResolvedValueOnce(new Map([['refs/tags/v1.0', NEW]]));
+    const store = openStore();
+
+    await runFetch(store, ROOT);
+
+    expect(store.getState().notice?.message).toBe('Fetched: 1 new tag (v1.0).');
+  });
+
+  it('refreshes but keeps quiet over an error the user still needs', async () => {
+    movedRefs();
+    const store = openStore();
+    store.dispatch({
+      type: 'notice',
+      notice: { tone: 'error', message: 'Push rejected: fetch first.' },
+    });
+
+    await runFetch(store, ROOT);
+
+    expect(refreshBranches).toHaveBeenCalledTimes(1);
+    expect(store.getState().notice?.message).toBe('Push rejected: fetch first.');
+  });
+
+  it('refreshes anyway when it cannot tell what changed', async () => {
+    readRefSnapshot.mockRejectedValue(new Error('for-each-ref failed'));
+    const store = openStore();
+
+    await runFetch(store, ROOT);
+
+    // Not knowing is a reason to re-read, never a reason to claim nothing
+    // happened — but it is not something to announce either.
+    expect(refreshBranches).toHaveBeenCalledTimes(1);
+    expect(store.getState().notice).toBeNull();
   });
 });
 
@@ -145,8 +262,8 @@ describe('startAutoFetch', () => {
     let release: () => void = () => {};
     gitFetch.mockImplementation(
       () =>
-        new Promise<void>((resolve) => {
-          release = resolve;
+        new Promise((resolve) => {
+          release = () => resolve(gitOutput());
         }),
     );
     const handle = startAutoFetch(openStore(), ROOT, 1);
@@ -178,6 +295,22 @@ describe('startAutoFetch', () => {
 
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(gitFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps its schedule after a tick fails outright', async () => {
+    // A rejected tick used to be chained onto: every later fetch waited on a
+    // promise that would never settle, so one bad refresh silently ended
+    // background fetching for the life of the window.
+    refreshBranches.mockRejectedValueOnce(new Error('panel blew up'));
+    const handle = startAutoFetch(openStore(), ROOT, 1);
+
+    await vi.advanceTimersByTimeAsync(FIRST_FETCH_DELAY_MS);
+    expect(gitFetch).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(gitFetch).toHaveBeenCalledTimes(2);
+
+    await handle.stop();
   });
 
   it('does not wait longer than the interval for the first fetch', async () => {

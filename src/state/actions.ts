@@ -8,6 +8,7 @@
  */
 
 import { saveConfig } from '../config/store';
+import { describeFetchNews, fetchAndCompare, type FetchNews } from './fetchNews';
 import { withRecentRepo, withoutRecentRepo } from '../config/schema';
 import { getCommitDiff, getStagedDiff, getWorktreeDiff } from '../git/diff';
 import { generateCommitMessage, type GeneratedMessage } from '../ai/message';
@@ -45,7 +46,6 @@ import {
   createBranch,
   deleteBranch,
   dropStash,
-  fetch,
   listBranches,
   listRemotes,
   listStashes,
@@ -660,10 +660,32 @@ async function operate(store: Store, run: () => Promise<unknown>): Promise<boole
   }
 }
 
+/**
+ * Fetches on demand, and says what came back.
+ *
+ * A fetch that works and a fetch that silently does nothing look identical
+ * without this: no panel changes when the remote has not moved, so the button
+ * reads as broken. The answer is always stated — including "nothing new",
+ * which is the answer the user is usually hoping for.
+ */
 export async function fetchRemote(store: Store): Promise<boolean> {
   const root = currentRoot(store);
   if (root === null) return false;
-  return operate(store, () => fetch(root, { prune: true }));
+
+  const outcome: { news: FetchNews | null } = { news: null };
+  const ok = await operate(store, async () => {
+    outcome.news = await fetchAndCompare(root, { prune: true });
+  });
+  if (!ok) return false;
+
+  // `null` news means the ref comparison failed, not that nothing arrived;
+  // claiming "nothing new" there would be a guess presented as a fact.
+  const message =
+    outcome.news === null
+      ? 'Fetched.'
+      : (describeFetchNews(outcome.news) ?? 'Fetched: nothing new.');
+  store.dispatch({ type: 'notice', notice: { tone: 'info', message } });
+  return true;
 }
 
 export async function pullCurrent(store: Store): Promise<boolean> {

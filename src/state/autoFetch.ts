@@ -21,13 +21,13 @@
  *   running is dropped, so a slow remote can never stack fetches up behind it.
  */
 
-import { fetch as gitFetch } from '../git/refs';
 import {
   refreshBranches,
   refreshCommits,
   refreshRemotes,
   refreshStatus,
 } from './actions';
+import { describeFetchNews, fetchAndCompare, hasNews, type FetchNews } from './fetchNews';
 import { isBusy, type Store } from './store';
 
 /**
@@ -68,7 +68,12 @@ export function startAutoFetch(
   let stopped = false;
 
   const tick = (): void => {
-    running = running.then(() => runFetch(store, root, () => stopped));
+    // `catch` is what keeps the schedule alive. Chaining the next tick onto a
+    // promise that rejected would cancel every fetch from then on — an app
+    // that quietly stops fetching after one bad night is exactly the failure
+    // this whole module exists to prevent, and it would look identical to a
+    // schedule that never started.
+    running = running.then(() => runFetch(store, root, () => stopped)).catch(() => {});
     // Chained off the fetch rather than a fixed interval: the gap the user
     // chose is a gap between fetches, not a deadline a slow remote can make the
     // app miss and then try to catch up on.
@@ -109,10 +114,18 @@ export async function runFetch(
   // costs a process and produces an error nobody would ever see.
   if (state.remotes.state === 'ready' && state.remotes.value.length === 0) return;
 
+  // The status is re-read on every tick, before the fetch and whatever it
+  // brings. It is one local git process, and it is the panel that lies loudest
+  // when it is stale: a file committed in a terminal still listed as modified
+  // is a row somebody clicks Discard on. Above the fetch rather than after it,
+  // so a laptop that has been off-network all afternoon still gets it.
+  await refreshStatus(store);
+
+  let news: FetchNews | null;
   try {
     // `--prune`, so a branch deleted on the remote stops being offered here;
     // that only ever removes a remote-tracking ref, never a local branch.
-    await gitFetch(root, { prune: true });
+    news = await fetchAndCompare(root, { prune: true });
   } catch {
     // Offline, no credentials, remote gone — all ordinary, none of them the
     // user's problem right now. The Fetch button still says so when asked.
@@ -121,14 +134,36 @@ export async function runFetch(
 
   if (cancelled()) return;
 
+  // The common case, every five minutes forever: nothing moved. Re-reading the
+  // rest to redraw identical numbers costs three more git processes a tick and
+  // can blank a list mid-scroll, so a fetch that changed no ref changes nothing
+  // else. `null` means the comparison itself failed, and then the safe
+  // assumption is that something did move.
+  if (news !== null && !hasNews(news)) return;
+
   // Only what a fetch can change: remote-tracking branches, the commits they
-  // point at, the ahead/behind on the current branch, and the remote list
-  // itself (a pruned or renamed remote shows up here). The working tree and
-  // the stash list cannot move, so they are not re-read.
+  // point at, and the remote list itself (a pruned or renamed remote shows up
+  // here). The working tree and the stash list cannot move, so they are not
+  // re-read.
   await Promise.all([
     refreshBranches(store),
     refreshCommits(store),
-    refreshStatus(store),
     refreshRemotes(store),
   ]);
+
+  // ADR-0025 made this schedule silent because its *failures* are ordinary — a
+  // closed lid nobody should be told about twelve times an hour. News is the
+  // opposite: somebody pushed, this checkout is now behind, and saying so is
+  // the only way the user learns it without watching the counts. One line, only
+  // when a ref actually moved, and recorded in the ADR superseding ADR-0025.
+  const message = news === null ? null : describeFetchNews(news);
+  if (message === null) return;
+
+  // Never over the top of a warning or an error. The notice bar holds one line,
+  // and a timer that fires on its own schedule must not be able to delete the
+  // sentence explaining why the user's own last operation failed.
+  const showing = store.getState().notice;
+  if (showing !== null && showing.tone !== 'info') return;
+
+  store.dispatch({ type: 'notice', notice: { tone: 'info', message } });
 }

@@ -16,6 +16,7 @@ import {
   type FetchOptions,
   type PushOptions,
 } from './commands/remote';
+import { buildRefSnapshotCommand } from './commands/refsnapshot';
 import {
   buildResolveStashCommand,
   buildStashApplyCommand,
@@ -25,6 +26,7 @@ import {
 import { approve, type Confirmation } from './confirm';
 import { GitError } from './errors';
 import { parseBranches, parseRemotes, parseStashes } from './parsers/branch';
+import { parseRefSnapshot, type RefSnapshot } from './parsers/refsnapshot';
 import { runGit } from './runner';
 import type { Branch, Remote, StashEntry } from './types';
 
@@ -49,6 +51,18 @@ export async function listRemotes(repo: string): Promise<Remote[]> {
 export async function listStashes(repo: string): Promise<StashEntry[]> {
   const output = await runGit(repo, buildStashListCommand());
   return parseStashes(output.stdout);
+}
+
+/**
+ * Reads every remote-tracking ref and tag with the oid it points at.
+ *
+ * Taken either side of a fetch, two of these say exactly what arrived — which
+ * is the difference between refreshing four panels because a timer fired and
+ * refreshing them because something actually changed.
+ */
+export async function readRefSnapshot(repo: string): Promise<RefSnapshot> {
+  const output = await runGit(repo, buildRefSnapshotCommand());
+  return parseRefSnapshot(output.stdout);
 }
 
 // --- network ---------------------------------------------------------------

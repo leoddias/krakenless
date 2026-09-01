@@ -50,6 +50,34 @@ describe('network builders', () => {
     expect(buildPullCommand().args).toContain('--ff-only');
   });
 
+  it('lets tags come with the history they point into', () => {
+    // `--no-tags` was here, and it made every tag anyone else pushed invisible
+    // in this app forever. Git's default follows a tag whose commit arrives and
+    // leaves the rest alone, which is the honest middle between nothing and
+    // `--tags` dragging down thousands of old refs.
+    const args = buildFetchCommand({ prune: true }).args;
+    expect(args).toEqual(['fetch', '--progress', '--prune', '--no-prune-tags', '--all']);
+    expect(args).not.toContain('--no-tags');
+    expect(args).not.toContain('--tags');
+  });
+
+  it('refuses to prune tags even when the user configured it', () => {
+    // `fetch.pruneTags=true` turns a plain `--prune` into a tag deleter, and a
+    // tag made here and never pushed is one the remote has never heard of. The
+    // flag has to be stated, not assumed.
+    expect(buildFetchCommand({ prune: true }).args).toContain('--no-prune-tags');
+    expect(buildFetchCommand({ prune: true }).args).not.toContain('--prune-tags');
+  });
+
+  it('fetches one named remote when asked, and all of them otherwise', () => {
+    expect(buildFetchCommand({ remote: 'origin' }).args).toEqual([
+      'fetch',
+      '--progress',
+      'origin',
+    ]);
+    expect(buildFetchCommand().args).toContain('--all');
+  });
+
   it('gives network commands a longer timeout than local ones', () => {
     expect(buildFetchCommand().timeoutMs).toBeGreaterThan(60_000);
     expect(buildPullCommand().timeoutMs).toBeGreaterThan(60_000);
