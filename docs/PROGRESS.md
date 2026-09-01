@@ -47,12 +47,22 @@
   ADR-0034 superseding ADR-0025): `--no-tags` is gone, `--no-prune-tags` is
   explicit, ref snapshots decide which panels refresh, and one notice names
   what arrived. Neither change has been used by hand in the running app yet.
-- **Test status now:** `npm test` 1756 passing (84 files); lint/format/tsc
+- **The diff panel no longer freezes on huge commits** (2026-09-01): commit
+  diffs are LRU-cached by root+oid (`src/state/diffCache.ts`), and rendering
+  is budgeted (`src/views/diff/renderPlan.ts`) — large files collapse behind
+  explicit reveal-in-chunks controls, a truncated hunk withholds its
+  stage/discard buttons, and a stale in-flight diff can no longer land behind
+  a newer selection. Not yet used by hand.
+- **Test status now:** `npm test` 1784 passing (87 files); lint/format/tsc
   clean. Rust untouched since 0.1.7.
 - **Not built:** conflict *resolution* UI, interactive rebase. Both are v0.2.
 
 ## Released
 
+- **v0.1.8-alpha** (2026-08-31): published with all four installers and the
+  landing page pointing at it (verified: pages workflow ran, portable asset
+  answers). Carries ADR-0034/0035 but **not** the 2026-09-01 diff performance
+  work — that is committed on `main` after the tag.
 - **v0.1.2-alpha** (2026-08-21): the first build that actually contains the
   user interface — see ADR-0024 and the session log below. Published as a
   prerelease; the landing page's four download links point here and all four
@@ -65,11 +75,6 @@
 
 ## Next up (in order)
 
-0. **Publish the v0.1.8-alpha release** if not already done: the tag was
-   pushed on 2026-08-31 and `release.yml` builds a *draft* — check
-   `gh run list --workflow=release.yml`, then `gh release edit v0.1.8-alpha
-   --draft=false --prerelease` after confirming the four assets exist and the
-   notes mention the unsigned-binary warnings.
 1. **Use the diverged-branch flow by hand** (ADR-0035): make a repo diverge,
    watch Push refuse with the reason, run "Pull (merge)" through its dialog —
    including a conflicted one. Also watch the background fetch tick (ADR-0034)
@@ -111,6 +116,29 @@
   until `buildPushCommand` emits a `<local>:<upstream>` refspec.
 
 ## Session log
+
+### 2026-09-01 — the diff panel stops freezing on huge commits
+
+A user clicked a commit with an enormous diff and the window locked up; going
+back to it froze again. The git call was long done both times — the freeze was
+the DOM (every line of every file mounted) and the absence of any cache (every
+revisit re-fetched, re-transferred and re-parsed the patch). Fixed in two
+layers, per /task-loop: `src/state/diffCache.ts` (16-entry LRU keyed by
+root+oid, commit diffs only — immutable by construction; frozen in place so a
+mutation of live diff state throws instead of poisoning the cache; cleared on
+open and close) and `src/views/diff/renderPlan.ts` (pure planner: 400-line
+per-file budget, 2,000-line panel budget, 1,000-line reveal chunks; slices
+keep the original hunk object so nothing trimmed can ever reach `git apply`).
+DiffView renders the plan with memoized line rows. Safety review found two
+majors, both fixed with regression tests: a truncated hunk offered
+stage/discard buttons acting on unseen lines (now withheld until the hunk is
+fully shown), and the cache made the pre-existing selection race deterministic
+— a slow diff resolving after the user moved on overwrote the panel (now a
+still-current guard drops late answers). Conventions minors fixed (honest
+collapse copy, dead `countLines` removed). Suite: 1784 passing, 87 files.
+Touched: `src/state` (actions, new diffCache), `src/views/diff`. Backlog: the
+giant patch still crosses IPC once per first visit — a `--stat`-first lazy
+per-file flow would cap that.
 
 ### 2026-08-31 — the diverged dead end, an honest background fetch, 0.1.8-alpha
 
