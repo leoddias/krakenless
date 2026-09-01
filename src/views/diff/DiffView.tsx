@@ -7,8 +7,8 @@
  * that reading can stage or discard something they never actually saw.
  */
 
-import { useState, type ReactNode } from 'react';
-import type { DiffLine, FileDiff, Hunk } from '../../git/types';
+import { memo, useCallback, useMemo, useState, type ReactNode } from 'react';
+import type { DiffLine, FileDiff } from '../../git/types';
 import { discardHunk, stageHunks } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
 import { isBusy } from '../../state/store';
@@ -22,13 +22,36 @@ import {
 import styles from './DiffView.module.css';
 import {
   CHANGE_KIND_LABELS,
-  countLines,
   DIFF_SIDE_LABELS,
   displayPath,
   emptyBodyReason,
   LINE_KIND_LABELS,
   LINE_MARKERS,
 } from './labels';
+import {
+  FILE_LINE_BUDGET,
+  planFiles,
+  REVEAL_CHUNK,
+  sliceHunks,
+  type FilePlan,
+  type HunkSlice,
+} from './renderPlan';
+
+const NO_FILES: readonly FileDiff[] = [];
+const NO_REVEALS: ReadonlyMap<string, number> = new Map();
+
+/**
+ * The user's "show me more of this file" clicks, remembered per file key.
+ *
+ * Stored *with* the file array they were made against, so a new diff arriving
+ * — another commit, a refresh — starts from a clean slate on the very render
+ * that shows it. Deriving during render instead of resetting in an effect
+ * means no frame ever shows the previous diff's reveals.
+ */
+interface Reveals {
+  for: readonly FileDiff[];
+  map: ReadonlyMap<string, number>;
+}
 
 /** Diff panel for the current selection. Reads the store, writes only selection. */
 export function DiffView(): ReactNode {
@@ -50,6 +73,25 @@ export function DiffView(): ReactNode {
   });
   const store = useStore();
   const [editing, setEditing] = useState<string | null>(null);
+  const [reveals, setReveals] = useState<Reveals | null>(null);
+
+  const files = diff.state === 'ready' ? diff.value : NO_FILES;
+  const revealed = reveals !== null && reveals.for === files ? reveals.map : NO_REVEALS;
+  // The whole point of the plan is that this is the only place the full diff
+  // is traversed — once per diff or reveal, not once per render of every row.
+  const plans = useMemo(() => planFiles(files, revealed), [files, revealed]);
+
+  const onReveal = useCallback(
+    (key: string, lines: number): void => {
+      setReveals((current) => {
+        const base = current !== null && current.for === files ? current.map : NO_REVEALS;
+        const next = new Map(base);
+        next.set(key, lines);
+        return { for: files, map: next };
+      });
+    },
+    [files],
+  );
 
   const selectPath = (path: string | null): void => {
     store.dispatch({ type: 'selection/path', path });
@@ -75,17 +117,14 @@ export function DiffView(): ReactNode {
 
       {diff.state === 'ready' && diff.value.length > 0 && (
         <div className={styles.body}>
-          <FileList
-            files={diff.value}
-            selectedPath={selectedPath}
-            onSelect={selectPath}
-          />
+          <FileList plans={plans} selectedPath={selectedPath} onSelect={selectPath} />
           <FileDiffs
-            files={diff.value}
+            plans={plans}
             selectedPath={selectedPath}
             editable={editable}
             editing={editing}
             onEdit={setEditing}
+            onReveal={onReveal}
             untracked={untrackedPath}
           />
         </div>
@@ -133,12 +172,12 @@ function Notice({
   );
 }
 
-function FileList({
-  files,
+const FileList = memo(function FileList({
+  plans,
   selectedPath,
   onSelect,
 }: {
-  files: FileDiff[];
+  plans: FilePlan[];
   selectedPath: string | null;
   onSelect: (path: string | null) => void;
 }): ReactNode {
@@ -152,11 +191,11 @@ function FileList({
             aria-current={selectedPath === null ? 'true' : undefined}
             onClick={() => onSelect(null)}
           >
-            <span className={styles.filePath}>All files ({files.length})</span>
+            <span className={styles.filePath}>All files ({plans.length})</span>
           </button>
         </li>
-        {files.map((file) => (
-          <li key={`${file.side}:${file.newPath}`}>
+        {plans.map(({ file, key, added, deleted }) => (
+          <li key={key}>
             <button
               type="button"
               className={styles.fileButton}
@@ -171,43 +210,40 @@ function FileList({
                 the user cannot tell which one their buttons will act on.
               */}
               <span className={styles.fileSide}>{DIFF_SIDE_LABELS[file.side]}</span>
-              <FileCounts file={file} />
+              <span className={styles.counts}>
+                <span className={styles.added}>{`+${added}`}</span>
+                <span className={styles.deleted}>{`-${deleted}`}</span>
+              </span>
             </button>
           </li>
         ))}
       </ul>
     </nav>
   );
-}
-
-function FileCounts({ file }: { file: FileDiff }): ReactNode {
-  const { added, deleted } = countLines(file);
-  return (
-    <span className={styles.counts}>
-      <span className={styles.added}>{`+${added}`}</span>
-      <span className={styles.deleted}>{`-${deleted}`}</span>
-    </span>
-  );
-}
+});
 
 function FileDiffs({
-  files,
+  plans,
   selectedPath,
   editable,
   editing,
   onEdit,
+  onReveal,
   untracked,
 }: {
-  files: FileDiff[];
+  plans: FilePlan[];
   selectedPath: string | null;
   editable: boolean;
   editing: string | null;
   onEdit: (path: string | null) => void;
+  onReveal: (key: string, lines: number) => void;
   /** True when the selected path is a file git does not track yet. */
   untracked: boolean;
 }): ReactNode {
   const shown =
-    selectedPath === null ? files : files.filter((f) => f.newPath === selectedPath);
+    selectedPath === null
+      ? plans
+      : plans.filter((plan) => plan.file.newPath === selectedPath);
 
   if (shown.length === 0) {
     return (
@@ -228,30 +264,34 @@ function FileDiffs({
 
   return (
     <div className={styles.content}>
-      {shown.map((file) => (
+      {shown.map((plan) => (
         <FileDiffBlock
-          key={`${file.side}:${file.newPath}`}
-          file={file}
+          key={plan.key}
+          plan={plan}
           editable={editable}
-          editing={editing === file.newPath}
+          editing={editing === plan.file.newPath}
           onEdit={onEdit}
+          onReveal={onReveal}
         />
       ))}
     </div>
   );
 }
 
-function FileDiffBlock({
-  file,
+const FileDiffBlock = memo(function FileDiffBlock({
+  plan,
   editable,
   editing,
   onEdit,
+  onReveal,
 }: {
-  file: FileDiff;
+  plan: FilePlan;
   editable: boolean;
   editing: boolean;
   onEdit: (path: string | null) => void;
+  onReveal: (key: string, lines: number) => void;
 }): ReactNode {
+  const { file, key, total, visible } = plan;
   const note = emptyBodyReason(file);
   // A deleted file has nothing on disk to open; the rest are edited at their
   // current path, which for a rename is the new one.
@@ -259,6 +299,10 @@ function FileDiffBlock({
   // Said once above the hunks rather than repeated on every one of them, and
   // only when there are hunks a user would otherwise expect buttons on.
   const blocker = file.side === 'commit' ? null : hunkActionBlocker(file);
+  // Sliced once per (file, visible) — never per render, and never mutating the
+  // hunks themselves: the slice keeps the original hunk object for actions.
+  const slices = useMemo(() => sliceHunks(file, visible), [file, visible]);
+  const hidden = total - visible;
 
   return (
     <article className={styles.file} aria-label={displayPath(file)}>
@@ -281,25 +325,59 @@ function FileDiffBlock({
         <FileEditor key={file.newPath} path={file.newPath} onClose={() => onEdit(null)} />
       ) : note === null ? (
         <>
-          {blocker !== null && file.hunks.length > 0 && (
+          {blocker !== null && slices.length > 0 && (
             <p className={styles.fileNote}>{blocker}</p>
           )}
-          {file.hunks.map((hunk, index) => (
-            <HunkBlock key={index} file={file} hunk={hunk} />
+          {slices.map((slice, index) => (
+            <HunkBlock key={index} file={file} slice={slice} />
           ))}
+          {hidden > 0 && (
+            <div className={styles.fileNote}>
+              {/*
+                Two different reasons a file starts collapsed, told apart
+                honestly: its own size, or the panel's overall budget — a
+                100-line file collapsed by the budget must not be called large.
+              */}
+              {visible > 0
+                ? `${hidden.toLocaleString('en-US')} more lines are not rendered yet.`
+                : total > FILE_LINE_BUDGET
+                  ? `This diff is large (${total.toLocaleString('en-US')} lines), so it is not rendered yet.`
+                  : `${total.toLocaleString('en-US')} lines are not rendered yet, to keep this panel fast.`}{' '}
+              <button
+                type="button"
+                className={styles.hunkAction}
+                onClick={() => onReveal(key, visible + REVEAL_CHUNK)}
+              >
+                {`Show ${Math.min(hidden, REVEAL_CHUNK).toLocaleString('en-US')} ${visible === 0 ? 'lines' : 'more lines'} of ${displayPath(file)}`}
+              </button>
+            </div>
+          )}
         </>
       ) : (
         <p className={styles.fileNote}>{note}</p>
       )}
     </article>
   );
-}
+});
 
-function HunkBlock({ file, hunk }: { file: FileDiff; hunk: Hunk }): ReactNode {
+const HunkBlock = memo(function HunkBlock({
+  file,
+  slice,
+}: {
+  file: FileDiff;
+  slice: HunkSlice;
+}): ReactNode {
+  const hunk = slice.hunk;
   const store = useStore();
   const busy = useAppState(isBusy);
   const [confirming, setConfirming] = useState(false);
-  const actions = hunkActions(file);
+  // A truncated hunk gets no action buttons: they act on the *whole* hunk —
+  // slicing is display-only — and staging or discarding lines the user has
+  // not seen is exactly what this panel promises never to invite. The note
+  // below says how to get the buttons back.
+  const truncated = slice.hidden > 0;
+  const actions = truncated ? [] : hunkActions(file);
+  const withheld = truncated && hunkActions(file).length > 0;
 
   const run = (action: HunkAction): void => {
     if (action === 'discard') {
@@ -313,6 +391,11 @@ function HunkBlock({ file, hunk }: { file: FileDiff; hunk: Hunk }): ReactNode {
     <div className={styles.hunk}>
       <div className={styles.hunkHeader}>
         <span className={styles.hunkRange}>{hunk.header}</span>
+        {withheld && (
+          <span className={styles.fileNote}>
+            {`Only ${slice.lines.length.toLocaleString('en-US')} of this hunk's ${hunk.lines.length.toLocaleString('en-US')} lines are shown. Show the rest to stage or discard it.`}
+          </span>
+        )}
         {actions.length > 0 && (
           <span className={styles.hunkActions}>
             {actions.map((spec) => (
@@ -353,32 +436,49 @@ function HunkBlock({ file, hunk }: { file: FileDiff; hunk: Hunk }): ReactNode {
           }}
         />
       )}
-      <div className={styles.lines}>
-        {hunk.lines.map((line, index) => (
-          <div
-            key={index}
-            className={`${styles.line} ${lineClass(line.kind)}`}
-            data-kind={line.kind}
-            data-old-line={line.oldLine ?? ''}
-            data-new-line={line.newLine ?? ''}
-          >
-            <span className={styles.srOnly}>{`${LINE_KIND_LABELS[line.kind]}: `}</span>
-            <span className={styles.lineNumber} data-side="old">
-              {line.oldLine ?? ''}
-            </span>
-            <span className={styles.lineNumber} data-side="new">
-              {line.newLine ?? ''}
-            </span>
-            <span className={styles.marker} aria-hidden="true">
-              {LINE_MARKERS[line.kind]}
-            </span>
-            <span className={styles.lineText}>{line.text}</span>
-          </div>
-        ))}
-      </div>
+      <LineRows lines={slice.lines} />
     </div>
   );
-}
+});
+
+/**
+ * The line rows, split out and memoized: they are the overwhelming majority
+ * of the panel's DOM, and nothing about them depends on `busy` or any other
+ * store state — so a busy flip must re-render hunk *headers*, never thousands
+ * of line rows. The `lines` array identity is stable per (file, visible)
+ * thanks to the memoized slice.
+ */
+const LineRows = memo(function LineRows({
+  lines,
+}: {
+  lines: readonly DiffLine[];
+}): ReactNode {
+  return (
+    <div className={styles.lines}>
+      {lines.map((line, index) => (
+        <div
+          key={index}
+          className={`${styles.line} ${lineClass(line.kind)}`}
+          data-kind={line.kind}
+          data-old-line={line.oldLine ?? ''}
+          data-new-line={line.newLine ?? ''}
+        >
+          <span className={styles.srOnly}>{`${LINE_KIND_LABELS[line.kind]}: `}</span>
+          <span className={styles.lineNumber} data-side="old">
+            {line.oldLine ?? ''}
+          </span>
+          <span className={styles.lineNumber} data-side="new">
+            {line.newLine ?? ''}
+          </span>
+          <span className={styles.marker} aria-hidden="true">
+            {LINE_MARKERS[line.kind]}
+          </span>
+          <span className={styles.lineText}>{line.text}</span>
+        </div>
+      ))}
+    </div>
+  );
+});
 
 /**
  * The one destructive control in this panel, so it asks in full sentences and

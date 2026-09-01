@@ -90,6 +90,11 @@ git processes on every tick — ADR-0023's uncapped-tabs warning applies.
 **`git fetch --progress` output is discarded.** The runner captures stderr but
 nothing reads it; a progress bar for slow remotes would start there.
 
+**A giant diff still crosses the Tauri IPC as one string.** The DOM is now
+bounded and parsed commit diffs are cached, but the full patch text is still
+transferred and parsed once per first visit. A `--stat`-first flow that loads
+file contents lazily per file would cap that too.
+
 **A lease push still is not offered in the UI.** The `--force-with-lease`
 plumbing exists and is gated on a confirmation, but the lease must carry an
 explicit `<branch>:<oid>` from the counts the user saw before a button is safe

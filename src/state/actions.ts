@@ -8,6 +8,7 @@
  */
 
 import { saveConfig } from '../config/store';
+import { cacheDiff, clearDiffCache, getCachedDiff } from './diffCache';
 import { describeFetchNews, fetchAndCompare, type FetchNews } from './fetchNews';
 import { withRecentRepo, withoutRecentRepo } from '../config/schema';
 import { getCommitDiff, getStagedDiff, getWorktreeDiff } from '../git/diff';
@@ -89,6 +90,9 @@ export async function openRepo(store: Store, path: string): Promise<void> {
   store.dispatch({ type: 'repo/opening' });
   try {
     const repo = await openRepository(path);
+    // Not strictly needed for correctness — the cache key carries the root —
+    // but a fresh repository should not keep another one's diffs in memory.
+    clearDiffCache();
     store.dispatch({ type: 'repo/opened', repo });
     await rememberRepo(store, repo.root);
     // The working tree is the default selection, so its diff is what the user
@@ -183,13 +187,34 @@ export async function refreshDiff(store: Store): Promise<void> {
   if (root === null) return;
   const { commitOid } = store.getState().selection;
 
+  // A commit's diff is immutable, so a cached one is served without touching
+  // git — and without a loading flash, which on a hit would only make the
+  // panel blink between two renders of the same data.
+  if (commitOid !== null) {
+    const cached = getCachedDiff(root, commitOid);
+    if (cached !== undefined) {
+      store.dispatch({ type: 'diff/loaded', files: [...cached] });
+      return;
+    }
+  }
+
+  // True while the answer being awaited is still the question on screen. The
+  // selection can change mid-flight — a slow commit diff, a click on a cached
+  // one that answers instantly — and a late dispatch would put one commit's
+  // diff behind another commit's selection, with the wrong side's stage and
+  // discard buttons attached to it. A dropped result costs nothing: whichever
+  // selection replaced this one runs its own refresh.
+  const stillCurrent = (): boolean =>
+    currentRoot(store) === root && store.getState().selection.commitOid === commitOid;
+
   store.dispatch({ type: 'diff/loading' });
   try {
     if (commitOid !== null) {
-      store.dispatch({
-        type: 'diff/loaded',
-        files: await getCommitDiff(root, commitOid),
-      });
+      const files = await getCommitDiff(root, commitOid);
+      // Cached regardless: the data is correct for its oid even when the user
+      // has moved on, and the next visit gets it for free.
+      cacheDiff(root, commitOid, files);
+      if (stillCurrent()) store.dispatch({ type: 'diff/loaded', files });
       return;
     }
     const [unstaged, staged] = await Promise.all([
@@ -198,9 +223,11 @@ export async function refreshDiff(store: Store): Promise<void> {
     ]);
     // Staged entries come second: the working tree is what the user is looking
     // at, and a path can legitimately appear on both sides.
-    store.dispatch({ type: 'diff/loaded', files: [...unstaged, ...staged] });
+    if (stillCurrent()) {
+      store.dispatch({ type: 'diff/loaded', files: [...unstaged, ...staged] });
+    }
   } catch (error) {
-    store.dispatch({ type: 'diff/failed', ...describe(error) });
+    if (stillCurrent()) store.dispatch({ type: 'diff/failed', ...describe(error) });
   }
 }
 
@@ -221,6 +248,8 @@ export async function selectCommit(store: Store, oid: string | null): Promise<vo
 }
 
 export function closeRepo(store: Store): void {
+  // The diffs of a closed repository have no business staying in memory.
+  clearDiffCache();
   store.dispatch({ type: 'repo/closed' });
 }
 

@@ -231,6 +231,52 @@ describe('actions', () => {
     expect(store.getState().selection.commitOid).toBe('9f1c2ab');
   });
 
+  it('serves a revisited commit from cache instead of re-running git', async () => {
+    // The user's freeze report: a huge commit diff, clicked away from and
+    // back, was fetched, transferred and parsed all over again. A commit's
+    // diff is immutable, so the second visit must cost nothing.
+    getCommitDiff.mockResolvedValue([file('big.lock')]);
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await selectCommit(store, '9f1c2ab');
+    await selectCommit(store, 'other01');
+    await selectCommit(store, '9f1c2ab');
+
+    const commitReads = getCommitDiff.mock.calls.filter((call) => call[1] === '9f1c2ab');
+    expect(commitReads.length).toBe(1);
+    const diff = store.getState().diff;
+    expect(diff.state === 'ready' && diff.value.map((f) => f.newPath)).toEqual([
+      'big.lock',
+    ]);
+  });
+
+  it('never caches the working-tree diff, which is mutable', async () => {
+    getWorktreeDiff.mockResolvedValue([file('a.txt')]);
+    getStagedDiff.mockResolvedValue([]);
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+    getWorktreeDiff.mockClear();
+
+    await selectCommit(store, null);
+    await selectCommit(store, null);
+
+    expect(getWorktreeDiff.mock.calls.length).toBe(2);
+  });
+
+  it('drops the diff cache when a repository is opened', async () => {
+    getCommitDiff.mockResolvedValue([file('a.txt')]);
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+    await selectCommit(store, '9f1c2ab');
+    getCommitDiff.mockClear();
+
+    await openRepo(store, 'C:/repos/app');
+    await selectCommit(store, '9f1c2ab');
+
+    expect(getCommitDiff).toHaveBeenCalledTimes(1);
+  });
+
   it('re-reads the status when the working tree is selected', async () => {
     // The status and the diff are two commands answering one question. Reading
     // only the diff is how the working-tree panel ends up saying "clean" beside
@@ -614,5 +660,68 @@ describe('undoDiscard', () => {
 
     expect(store.getState().discards).toEqual([BACKUP]);
     expect(store.getState().notice?.tone).toBe('error');
+  });
+});
+
+describe('refreshDiff — a stale answer never lands behind a newer selection', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    openRepository.mockResolvedValue(REPO);
+    getStatus.mockResolvedValue(STATUS);
+    readLog.mockResolvedValue([]);
+    getWorktreeDiff.mockResolvedValue([file('worktree.txt')]);
+    getStagedDiff.mockResolvedValue([]);
+    saveConfig.mockResolvedValue(undefined);
+    listBranches.mockResolvedValue([]);
+    listStashes.mockResolvedValue([]);
+  });
+
+  it('drops a slow commit diff that resolves after the user moved on', async () => {
+    // The freeze scenario made this deterministic: a huge commit diff takes
+    // seconds, and a click on a cached commit (or the working tree) answers
+    // instantly. The late result must not overwrite what the user is looking
+    // at — with the wrong side's action buttons attached to it.
+    let resolveSlow: (files: unknown) => void = () => {};
+    getCommitDiff.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveSlow = resolve;
+      }),
+    );
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    const slow = selectCommit(store, 'slowoid');
+    await selectCommit(store, null);
+    resolveSlow([file('huge.lock')]);
+    await slow;
+
+    const diff = store.getState().diff;
+    expect(diff.state === 'ready' && diff.value.map((f) => f.newPath)).toEqual([
+      'worktree.txt',
+    ]);
+  });
+
+  it('drops a slow worktree diff that resolves after a commit was selected', async () => {
+    let resolveSlow: (files: unknown) => void = () => {};
+    getCommitDiff.mockResolvedValue([file('committed.txt')]);
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+    // Armed only now: openRepo runs its own refreshDiff, which must not eat
+    // the one slow answer this test is about.
+    getWorktreeDiff.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveSlow = resolve;
+      }),
+    );
+
+    const slow = refreshDiff(store);
+    await selectCommit(store, '9f1c2ab');
+    resolveSlow([file('worktree.txt')]);
+    await slow;
+
+    const diff = store.getState().diff;
+    expect(diff.state === 'ready' && diff.value.map((f) => f.newPath)).toEqual([
+      'committed.txt',
+    ]);
   });
 });

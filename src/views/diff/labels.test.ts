@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FileDiff } from '../../git/types';
-import { countLines, displayPath, emptyBodyReason } from './labels';
+import { displayPath, emptyBodyReason } from './labels';
 
 function fileDiff(overrides: Partial<FileDiff> = {}): FileDiff {
   return {
@@ -28,43 +28,6 @@ describe('displayPath', () => {
     expect(
       displayPath(fileDiff({ kind: 'copied', oldPath: 'a.ts', newPath: 'c.ts' })),
     ).toBe('a.ts → c.ts');
-  });
-});
-
-describe('countLines', () => {
-  it('counts added and deleted lines across hunks and ignores context and markers', () => {
-    const file = fileDiff({
-      hunks: [
-        {
-          header: '@@ -1,2 +1,2 @@',
-          oldStart: 1,
-          oldLines: 2,
-          newStart: 1,
-          newLines: 2,
-          lines: [
-            { kind: 'context', text: 'a', oldLine: 1, newLine: 1 },
-            { kind: 'deleted', text: 'b', oldLine: 2 },
-            { kind: 'added', text: 'c', newLine: 2 },
-          ],
-        },
-        {
-          header: '@@ -9,1 +9,2 @@',
-          oldStart: 9,
-          oldLines: 1,
-          newStart: 9,
-          newLines: 2,
-          lines: [
-            { kind: 'added', text: 'd', newLine: 9 },
-            { kind: 'no-newline', text: 'No newline at end of file' },
-          ],
-        },
-      ],
-    });
-    expect(countLines(file)).toEqual({ added: 2, deleted: 1 });
-  });
-
-  it('reports zeroes for a file with no hunks', () => {
-    expect(countLines(fileDiff())).toEqual({ added: 0, deleted: 0 });
   });
 });
 

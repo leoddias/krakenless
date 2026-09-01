@@ -53,19 +53,6 @@ export function displayPath(file: FileDiff): string {
   return file.newPath;
 }
 
-/** Added/deleted line totals; `no-newline` markers are not content lines. */
-export function countLines(file: FileDiff): { added: number; deleted: number } {
-  let added = 0;
-  let deleted = 0;
-  for (const hunk of file.hunks) {
-    for (const line of hunk.lines) {
-      if (line.kind === 'added') added += 1;
-      else if (line.kind === 'deleted') deleted += 1;
-    }
-  }
-  return { added, deleted };
-}
-
 /**
  * Why a file has no hunks to render, or `null` when it does have some.
  * Every branch returns a sentence: "no hunks" is never rendered as emptiness.

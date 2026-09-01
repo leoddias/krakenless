@@ -512,3 +512,184 @@ describe('per-hunk actions', () => {
     }
   });
 });
+
+describe('DiffView — large diffs stay responsive', () => {
+  function bigHunk(count: number): Hunk {
+    return {
+      header: `@@ -1,${count} +1,${count} @@`,
+      oldStart: 1,
+      oldLines: count,
+      newStart: 1,
+      newLines: count,
+      lines: Array.from({ length: count }, (_, i) => ({
+        kind: 'context' as const,
+        text: `line ${i}`,
+        oldLine: i + 1,
+        newLine: i + 1,
+      })),
+    };
+  }
+
+  it('collapses a large file behind an explicit control instead of freezing', () => {
+    renderView((store) =>
+      store.dispatch({
+        type: 'diff/loaded',
+        files: [fileDiff({ newPath: 'big.lock', side: 'commit', hunks: [bigHunk(500)] })],
+      }),
+    );
+
+    // Not one of its 500 lines is in the DOM, and the control says how many
+    // it is holding back.
+    expect(lineRows().length).toBe(0);
+    expect(screen.getByText(/This diff is large [(]500 lines[)]/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Show 500 lines/ }));
+    expect(lineRows().length).toBe(500);
+  });
+
+  it('reveals an enormous file in bounded chunks, never all at once', () => {
+    renderView((store) =>
+      store.dispatch({
+        type: 'diff/loaded',
+        files: [
+          fileDiff({ newPath: 'huge.lock', side: 'commit', hunks: [bigHunk(2_500)] }),
+        ],
+      }),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Show 1,000 lines/ }));
+    expect(lineRows().length).toBe(1_000);
+    expect(screen.getByText(/1,500 more lines/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Show 1,000 more lines/ }));
+    expect(lineRows().length).toBe(2_000);
+  });
+
+  it('leaves small files fully rendered next to a collapsed big one', () => {
+    renderView((store) =>
+      store.dispatch({
+        type: 'diff/loaded',
+        files: [
+          fileDiff({ newPath: 'big.lock', side: 'commit', hunks: [bigHunk(2_000)] }),
+          fileDiff({ newPath: 'src/a.ts', side: 'commit', hunks: [sampleHunk] }),
+        ],
+      }),
+    );
+    // The small neighbour renders in full; only the big one is collapsed.
+    expect(lineRows().length).toBe(sampleHunk.lines.length);
+  });
+
+  it('starts a new diff from a clean slate, not the previous reveals', () => {
+    const store = renderView((s) =>
+      s.dispatch({
+        type: 'diff/loaded',
+        files: [fileDiff({ newPath: 'big.lock', side: 'commit', hunks: [bigHunk(600)] })],
+      }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Show 600 lines/ }));
+    expect(lineRows().length).toBe(600);
+
+    // A different commit's diff arrives with a file of the same path: the old
+    // reveal must not leak onto it.
+    act(() => {
+      store.dispatch({
+        type: 'diff/loaded',
+        files: [fileDiff({ newPath: 'big.lock', side: 'commit', hunks: [bigHunk(700)] })],
+      });
+    });
+    expect(lineRows().length).toBe(0);
+    expect(screen.getByRole('button', { name: /Show 700 lines/ })).toBeInTheDocument();
+  });
+
+  it('shows the file counts without rendering the lines', () => {
+    renderView((store) =>
+      store.dispatch({
+        type: 'diff/loaded',
+        files: [
+          fileDiff({
+            newPath: 'big.lock',
+            side: 'commit',
+            hunks: [
+              {
+                ...bigHunk(450),
+                lines: bigHunk(450).lines.map((line, i) =>
+                  i < 40 ? { kind: 'added' as const, text: 'x', newLine: i + 1 } : line,
+                ),
+              },
+            ],
+          }),
+        ],
+      }),
+    );
+    expect(screen.getByText('+40')).toBeInTheDocument();
+    expect(lineRows().length).toBe(0);
+  });
+});
+
+describe('DiffView — collapse reasons stay honest', () => {
+  it('does not call a small file large when the panel budget collapsed it', () => {
+    const hunk100: Hunk = {
+      header: '@@ -1,100 +1,100 @@',
+      oldStart: 1,
+      oldLines: 100,
+      newStart: 1,
+      newLines: 100,
+      lines: Array.from({ length: 100 }, (_, i) => ({
+        kind: 'context' as const,
+        text: `line ${i}`,
+        oldLine: i + 1,
+        newLine: i + 1,
+      })),
+    };
+    renderView((store) =>
+      store.dispatch({
+        type: 'diff/loaded',
+        files: Array.from({ length: 21 }, (_, i) =>
+          fileDiff({ newPath: `f${i}.ts`, side: 'commit', hunks: [hunk100] }),
+        ),
+      }),
+    );
+
+    // The 21st file fits the per-file budget but not the panel's.
+    expect(screen.getByText(/to keep this panel fast/)).toBeInTheDocument();
+    expect(screen.queryByText(/This diff is large \(100 lines\)/)).toBeNull();
+  });
+});
+
+describe('DiffView — a truncated hunk withholds its actions', () => {
+  const bigWorktreeHunk: Hunk = {
+    header: '@@ -1,1500 +1,1500 @@',
+    oldStart: 1,
+    oldLines: 1500,
+    newStart: 1,
+    newLines: 1500,
+    lines: Array.from({ length: 1500 }, (_, i) => ({
+      kind: 'added' as const,
+      text: `line ${i}`,
+      newLine: i + 1,
+    })),
+  };
+
+  it('offers no stage or discard button while part of the hunk is unseen', () => {
+    renderView((store) =>
+      store.dispatch({
+        type: 'diff/loaded',
+        files: [
+          fileDiff({ newPath: 'big.txt', side: 'unstaged', hunks: [bigWorktreeHunk] }),
+        ],
+      }),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Show 1,000 lines/ }));
+    expect(lineRows().length).toBe(1_000);
+    // The buttons act on the whole hunk; 500 of its lines are not on screen.
+    expect(screen.queryByRole('button', { name: /Stage Hunk/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Discard Hunk/ })).toBeNull();
+    expect(screen.getByText(/Show the rest to stage or discard it/)).toBeInTheDocument();
+
+    // Revealing the rest brings the actions back.
+    fireEvent.click(screen.getByRole('button', { name: /Show 500 more lines/ }));
+    expect(lineRows().length).toBe(1_500);
+    expect(screen.getByRole('button', { name: /Stage Hunk/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Discard Hunk/ })).toBeInTheDocument();
+  });
+});
