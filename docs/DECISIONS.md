@@ -938,3 +938,52 @@ read as noise in a plain text node; it is deliberately not a Markdown renderer,
 because a parser for text arriving over the network is a thing to own on
 purpose. The manifest now carries up to 4 kB of release notes in whole lines
 rather than three lines cut anywhere.
+
+## ADR-0039 — Merging to main cuts the release; publishing it is the only manual step
+
+**Date:** 2026-09-02 · **Status:** accepted
+
+**Decision:** `version.yml` runs on every push to `main`. It derives the next
+version from the Conventional Commits since the last tag (`feat` or a `!`
+breaking marker → minor, everything else → patch; pre-1.0, so nothing earns a
+major), writes it, regenerates `Cargo.lock` with `cargo update -p krakenless`,
+proves the result resolves and formats, commits `chore(release): x.y.z-alpha`,
+tags, and dispatches the build. It skips when nothing outside `docs/` changed.
+Publishing the resulting draft stays a human act — that is what makes the
+binaries public and deploys the update manifests.
+
+`ci.yml` returns as a gate on pull requests and pushes to `main`: the same
+checks as the release minus the installers, so it finishes in minutes.
+
+Two mechanics worth writing down, because both are non-obvious and the design
+depends on them:
+
+- **A push made with `GITHUB_TOKEN` raises no workflow event.** That is what
+  stops the release train re-triggering itself, and it is also why the tag push
+  cannot start `release.yml` — so the build is started explicitly with
+  `gh workflow run release.yml --ref <tag>`, and `release.yml` now names its
+  tag rather than inferring it from a ref that is no longer a tag-push ref.
+- **The tag is created last.** Version consistency, formatting and
+  `cargo metadata --locked` all run before it exists, so a lockfile that will
+  not resolve can no longer reach a tag. Deleting and re-pushing a tag is
+  cheap only while nobody has fetched it.
+
+**Why:** the ask was that a contributor be able to help with no manual steps
+beyond approving a release, and the version bump was the visible friction —
+five files, one of them a trap. But the larger friction was that **there was no
+CI on pull requests at all**: the per-push workflow had been removed and the
+release was the only gate, so a contributor got no feedback until somebody cut
+a release forty-five minutes long. Rejected alternatives: a release-PR bot
+(release-please), which gives a changelog but costs a second manual act and the
+question was explicitly about removing manual acts; and a local `npm run
+release` script, which removes the traps but still requires a maintainer's
+machine and so does not answer the question at all.
+
+**Consequences:** every merge that touches code produces a build and a draft.
+Drafts accumulate if they are not published, which is noise but not risk —
+nothing is public until published. Version numbers advance faster than before
+and gaps appear where a run failed; on an alpha that is not worth defending
+against. Contributors do not need the signing secrets: only `release.yml`
+touches them, and it runs from `main`. A fork's pull request cannot read them,
+which is correct and means a fork can never cut a release.
+

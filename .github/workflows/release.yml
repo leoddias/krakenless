@@ -223,6 +223,12 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: installers/*
+          # Named explicitly rather than inferred from the ref. The release is
+          # usually started by `version.yml` with `gh workflow run --ref <tag>`,
+          # because a tag pushed with GITHUB_TOKEN raises no event — and a
+          # dispatched run is not a tag-push run, so nothing should be left to
+          # infer about which tag this is.
+          tag_name: ${{ github.ref_name }}
           # Draft, not published: someone has to read the notes and decide the
           # binaries are ready to hand to people.
           draft: true

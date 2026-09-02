@@ -1,0 +1,79 @@
+name: CI
+
+# The gate a contributor sees. It used to not exist: the per-push workflow was
+# removed and the release was the only check in the repository, so a pull
+# request got no feedback at all until somebody cut a release — and a release
+# takes forty-five minutes because it builds installers for two platforms.
+#
+# This builds no installers. It runs exactly the checks that can fail on a
+# change, so it finishes in minutes and tells the person who wrote the change
+# rather than the person who later tried to ship it.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A force-push to a pull request should not leave the old run burning a runner.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: Gate (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows
+          - os: macos-latest
+            label: macOS
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ci-${{ matrix.os }}
+
+      - run: npm ci
+
+      - run: npm run lint
+      - run: npm run format:check
+
+      # The version is declared in five files and they have to agree. When they
+      # did not, the failure surfaced as an unrelated cargo resolution error
+      # twenty minutes into a release build.
+      - name: Version declarations agree
+        run: node scripts/version.mjs check
+
+      # Before *any* cargo command: `custom-protocol` is a default feature, so
+      # `generate_context!` embeds `dist/` at compile time and panics when it is
+      # not there.
+      - run: npm run build
+
+      - name: Git identity for integration tests
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI"
+      - run: npm test
+
+      # `--locked` is the point of these two. A lockfile that only resolves
+      # against a warm local registry cache passes every check on a developer
+      # machine and fails here, which is where it should fail.
+      - name: Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --locked

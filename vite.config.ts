@@ -13,6 +13,10 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
-    include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    // `scripts/` too: the release tooling edits the files that decide which
+    // version ships, and it has already got that wrong once. It is not app
+    // code, so it is plain `.mjs` and lives outside `src/`, but it is held to
+    // the same bar.
+    include: ['src/**/*.{test,spec}.{ts,tsx}', 'scripts/**/*.{test,spec}.mjs'],
   },
 });

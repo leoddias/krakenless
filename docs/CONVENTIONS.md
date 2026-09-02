@@ -43,27 +43,52 @@
 
 ## Cutting a release
 
-The version lives in five files: `package.json`, `package-lock.json`,
-`src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` and `src-tauri/Cargo.lock`.
-The first four are edited directly. **`Cargo.lock` is not** — bump
-`src-tauri/Cargo.toml` and then run
+Nothing by hand. Merge to `main` and `.github/workflows/version.yml` does the
+rest: it reads the commit subjects since the last tag, picks the bump (`feat`
+or a `!` breaking marker → minor, everything else → patch), writes the version,
+tags, and starts the build. A draft release appears. **Publishing that draft is
+the only manual step**, and it is the step that makes the binaries downloadable
+and deploys the update manifests.
+
+It skips when nothing outside `docs/` changed since the last tag — judged on
+the files touched, not on commit subjects, because a `docs:` commit can still
+change code.
+
+The version is declared in **five** files, and `scripts/version.mjs` is the only
+thing allowed to write four of them:
 
 ```
-cargo update --manifest-path src-tauri/Cargo.toml -p krakenless
+node scripts/version.mjs read     # the current version
+node scripts/version.mjs check    # exit 1 unless all five agree
+node scripts/version.mjs set X    # write the four text files
 ```
 
-A search-and-replace on `Cargo.lock` is how v0.1.10-alpha failed its first
-build: `version = "0.1.9"` matches `cargo-platform` long before it matches
-`krakenless`, so the edit renamed a dependency to a version that does not exist
-while keeping the old checksum. Nothing local notices, because a warm registry
-cache never re-resolves; CI resolves from scratch and dies on the first cargo
-command.
+`Cargo.lock` is the fifth and is never edited — it is regenerated with
+`cargo update --manifest-path src-tauri/Cargo.toml -p krakenless`, the only
+tool that can also confirm the result still resolves.
 
-Before tagging, prove the lock can be resolved the way CI will:
+That separation is the whole point. A search-and-replace of `version = "0.1.9"`
+across `Cargo.lock` matches `cargo-platform` long before it matches
+`krakenless`, and that is exactly what shipped in v0.1.10-alpha: a lockfile
+naming a dependency version that does not exist, with the old checksum. No
+local check notices, because a warm registry cache never re-resolves. `CI`
+resolves from scratch and dies on the first cargo command. Every edit in
+`version.mjs` is anchored to a place rather than to a value, asserts it matched
+exactly once, and is unit-tested — including against a fixture with
+`cargo-platform` sitting above `krakenless` in the file.
 
-```
-cargo metadata --manifest-path src-tauri/Cargo.toml --format-version 1 --locked
-```
+**Releasing by hand**, if the train is ever broken: run the four commands
+above, commit as `chore(release): x.y.z-alpha`, tag `vx.y.z-alpha`, push the
+tag. The `push: tags` trigger on `release.yml` still works.
+
+**A change to `pages.yml` lands one tag late.** A `release` event runs the
+workflow from the *tag's* commit, not from `main`, so a fix to the manifest
+step only takes effect from the next tag onward (ADR-0037).
+
+**Check exit codes, not output.** `npm run format:check | tail` reports the
+exit code of `tail` and always looks green; that let an unformatted file into a
+release commit. The CI gate is the same set of commands, so the cheapest local
+check is to push a branch and open a pull request.
 
 ## Release signing key
 

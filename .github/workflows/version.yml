@@ -1,0 +1,145 @@
+name: Version
+
+# Cuts the release. Merging to `main` is the only thing a contributor does; this
+# decides the version, writes it into the five files that declare it, tags, and
+# starts the build. The one act left to a human is publishing the draft.
+#
+# It exists because the version was bumped by hand across five files, and doing
+# that with a search-and-replace shipped a `Cargo.lock` naming a dependency
+# version that does not exist — a failure invisible on any machine with a warm
+# registry cache. `scripts/version.mjs` owns the edits now, and this workflow
+# proves the result resolves *before* creating the tag, so a broken lockfile can
+# no longer reach a tag at all.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One release train. Two pushes landing together must not race to claim the
+# same version number.
+concurrency:
+  group: release-train
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  # To start the release workflow by hand. A push made with GITHUB_TOKEN does
+  # not trigger workflows — that is what stops this workflow re-triggering
+  # itself, and it also means the tag push below cannot start `release.yml`.
+  actions: write
+
+jobs:
+  cut:
+    name: Cut a release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # The commit this workflow makes itself. Belt and braces: a GITHUB_TOKEN
+    # push raises no event, so this should never fire — but a loop that cuts a
+    # release per commit forever is not a thing to leave to one mechanism.
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Tags and full history: the version is derived from what happened
+          # since the last one.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: version-train
+
+      - run: npm ci
+
+      # Which version, and whether there is anything to release at all.
+      - name: Decide the next version
+        id: decide
+        run: |
+          set -euo pipefail
+          last=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
+
+          if [ -z "$last" ]; then
+            echo "No tag yet; releasing whatever is here."
+            range=""
+          else
+            echo "Last tag: $last"
+            range="${last}..HEAD"
+            if [ -z "$(git log --oneline "$range")" ]; then
+              echo "::notice::Nothing new since $last."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            # Documentation does not ship a binary. Judged on the files
+            # touched rather than on commit subjects, because a `docs:` commit
+            # can still change code and a `chore:` one often does.
+            changed=$(git diff --name-only "$range")
+            if [ -z "$(printf '%s\n' "$changed" | grep -vE '^docs/|\.md$' || true)" ]; then
+              echo "::notice::Only documentation changed since $last."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          bump=$(git log --format=%s ${range:+"$range"} | node scripts/version.mjs bump)
+          current=$(node scripts/version.mjs read)
+          next=$(node scripts/version.mjs next "$bump")
+          echo "$current -> $next ($bump)"
+          {
+            echo "skip=false"
+            echo "bump=$bump"
+            echo "version=$next"
+            echo "tag=v${next}-alpha"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Write the version
+        if: steps.decide.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+          node scripts/version.mjs set "${{ steps.decide.outputs.version }}"
+          # The lockfile is regenerated, never edited: this is the only tool
+          # that can also confirm the result still resolves.
+          cargo update --manifest-path src-tauri/Cargo.toml -p krakenless
+
+      # Everything that could make the tag unbuildable, checked before the tag
+      # exists. A bad tag is expensive: it has to be deleted and re-pushed, and
+      # anyone who fetched it in between has the wrong thing.
+      - name: Prove the tag would build
+        if: steps.decide.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+          node scripts/version.mjs check
+          npm run format:check
+          cargo metadata --manifest-path src-tauri/Cargo.toml --format-version 1 --locked > /dev/null
+
+      - name: Commit and tag
+        if: steps.decide.outputs.skip == 'false'
+        env:
+          TAG: ${{ steps.decide.outputs.tag }}
+          VERSION: ${{ steps.decide.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package.json package-lock.json src-tauri/Cargo.toml \
+                  src-tauri/Cargo.lock src-tauri/tauri.conf.json
+          git commit -m "chore(release): ${VERSION}-alpha"
+          git tag -a "$TAG" -m "$TAG"
+          git push origin HEAD:main
+          git push origin "$TAG"
+
+      # The tag push above raised no event, because it was made with
+      # GITHUB_TOKEN. So the build is started explicitly, on the tag's ref.
+      - name: Start the release build
+        if: steps.decide.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.decide.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh workflow run release.yml --ref "$TAG"
+          echo "::notice::Building $TAG. It will appear as a draft release to publish."
