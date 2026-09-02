@@ -50,7 +50,7 @@ import {
   type Workspace as TabWorkspace,
 } from './views/shell/tabs';
 import { HistoryView } from './views/history/HistoryView';
-import { UpdateBanner } from './views/update';
+import { UpdateDialog } from './views/update';
 import { WelcomeView } from './views/welcome';
 
 export const APP_NAME = 'Krakenless';
@@ -694,6 +694,27 @@ export default function App(): ReactNode {
   }, []);
 
   const active = activeTab(workspace);
+  const [homeSettings, setHomeSettings] = useState(false);
+
+  // Ctrl+, on the welcome screen. The repository panes answer it themselves,
+  // but only while one of them is on screen — without this the shortcut simply
+  // did nothing until a repository was open, which is the one moment a user is
+  // most likely to reach for it.
+  const onWelcome = active === undefined;
+  useEffect(() => {
+    if (!onWelcome) return;
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (resolveShortcut(event, { editable: isEditable(event.target) }) !== 'settings') {
+        return;
+      }
+      event.preventDefault();
+      setHomeSettings(true);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [onWelcome]);
   // Read from the home store because the offer is about the application, not
   // about a repository: it belongs above the tabs and shows on the welcome
   // screen too, where there is no repository store to read.
@@ -709,11 +730,21 @@ export default function App(): ReactNode {
         onClose={closeTab}
       />
 
-      <UpdateBanner enabled={autoUpdateCheck} />
+      <UpdateDialog enabled={autoUpdateCheck} />
 
       {active === undefined && (
         <StoreProvider store={home}>
-          <WelcomeView />
+          {/*
+            The same two states a repository tab has, on the screen that has no
+            repository: settings replace the view rather than floating over it,
+            so there is one place the app can be configured and it looks the
+            same wherever it was opened from.
+          */}
+          {homeSettings ? (
+            <SettingsView onClose={() => setHomeSettings(false)} />
+          ) : (
+            <WelcomeView onOpenSettings={() => setHomeSettings(true)} />
+          )}
         </StoreProvider>
       )}
 

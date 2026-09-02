@@ -140,11 +140,14 @@ jobs:
           gh release download "$TAG" --dir "$work" --pattern '*.sig'
           published=$(gh release view "$TAG" --json publishedAt --jq .publishedAt)
 
-          # Release notes, trimmed to what a one-line bar in the app can show.
-          # The full text is on the release page, which is where somebody who
-          # wants it will look.
-          notes=$(gh release view "$TAG" --json body --jq .body \
-                  | tr -d '\r' | grep -v '^[[:space:]]*$' | head -3)
+          # Release notes. Whole lines only, capped by size rather than by line
+          # count: the first version of this took `head -3` and cut the body
+          # mid-sentence, which is exactly what the user saw in the app. The
+          # dialog scrolls, so length was never the problem the truncation was
+          # solving — keeping the manifest small is, and 4 kB is already more
+          # than anybody reads in a dialog.
+          notes=$(gh release view "$TAG" --json body --jq .body | tr -d '\r' \
+                  | awk '{ total += length($0) + 1; if (total > 4000) exit; print }')
 
           # Named from the asset list rather than reconstructed, so a change to
           # the bundler's naming fails here instead of shipping a manifest whose

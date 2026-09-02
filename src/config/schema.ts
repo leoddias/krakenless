@@ -63,7 +63,11 @@ export interface AppConfig {
   /** Model passed to that program. Cheap by default: a subject line is a small job. */
   aiModel: string;
   /**
-   * Check GitHub for a newer Krakenless once per launch.
+   * Check GitHub for a newer Krakenless shortly after launch, then hourly.
+   *
+   * Hourly rather than once per launch because this application is left open
+   * for days at a time; a once-per-launch check never fires on the machine it
+   * matters most on (ADR-0038).
    *
    * On by default, and the third thing in this file that can put a request on
    * the wire (ADR-0036). It is one unauthenticated GET of a static JSON file
@@ -71,10 +75,10 @@ export interface AppConfig {
    * request at all when the version it names is the one already running. What
    * it costs the user is what any HTTPS request costs — this machine's address
    * and the fact that something asked. Turning it off makes the app issue no
-   * request; it does not merely hide the notice.
+   * request; it does not merely hide the answer.
    *
    * Downloading and installing is never automatic. The check produces a
-   * notice; a click produces an update.
+   * dialog; a click produces an update.
    */
   autoUpdateCheck: boolean;
   layout: LayoutConfig;

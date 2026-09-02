@@ -163,17 +163,18 @@ export function SettingsView({ onClose }: { onClose: () => void }): ReactNode {
           <span className={styles.label}>Check for a new version of Krakenless</span>
         </span>
         <span className={styles.hint}>
-          On by default. Once each time the app starts, it asks{' '}
+          On by default. Shortly after the app starts and once an hour after that, it asks{' '}
           <code>leoddias.github.io</code> for a small JSON file naming the newest release.
           There is no account, no identifier and no request body — what the request costs
           you is what any HTTPS request costs: your IP address, and the fact that
           something asked. If the file names the version you are already running, nothing
           else happens at all. Turning this off means the app makes no such request, not
-          that it hides the answer. Finding an update never installs one: you get a bar at
-          the top of the window with an Update button, and nothing is downloaded until you
-          press it. Whatever is downloaded is checked against a signature made by this
-          project's release key before it is allowed to run — without that, an
-          auto-updater would be a way to run any program that could reach you.
+          that it hides the answer; the button below still works whenever you press it.
+          Finding an update never installs one: a dialog asks, and Later is a real answer
+          — a version you turn down is not raised again until a newer one exists. Whatever
+          is downloaded is checked against a signature made by this project's release key
+          before it is allowed to run — without that, an auto-updater would be a way to
+          run any program that could reach you.
         </span>
         <span className={styles.hint}>
           <CheckForUpdates />

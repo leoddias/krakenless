@@ -895,3 +895,46 @@ from `main`, whose dispatch path resolves "the latest release" itself. From
 v0.1.11-alpha onward the tag carries the corrected step and no manual run is
 needed. Anyone changing `pages.yml` release behaviour must remember it lands
 one tag late.
+
+## ADR-0038 — The update check is hourly and asks in a dialog (amends ADR-0036)
+
+**Date:** 2026-09-02 · **Status:** accepted
+
+**Decision:** Two parts of ADR-0036 are replaced. The check no longer runs
+"once per launch": it runs about ten seconds after start and then once an hour
+for as long as the window is open, on a chained timeout rather than an interval
+so a slow check cannot stack a queue behind it. And an available update is no
+longer announced in a bar above the window — it opens a modal dialog with
+Update and Later, focus moved into it, Escape as Later, and the release notes
+in their own scrolling box.
+
+Three rules keep an hourly question from becoming nagging:
+
+1. **A declined version stays declined for the session.** Only a version newer
+   than the one turned down asks again, because that is the only case where the
+   answer might have changed.
+2. **An offer never replaces an offer already on screen**, so a tick landing
+   mid-install cannot swap the thing the user just agreed to.
+3. **Turning the setting off stops the requests**, not just the dialog. The
+   manual button in Settings keeps working, and now opens the same dialog
+   rather than printing a promise about the next launch.
+
+**Why:** the bar was wrong twice over, and the screenshot showed both at once.
+Release notes are Markdown of arbitrary length, so a fixed-height bar clipped
+them mid-sentence — made worse by the manifest itself sending `head -3` of the
+release body, which cut mid-sentence before the app ever saw it. And a strip of
+text at the top of a window is the thing users have trained themselves not to
+see; replacing the running application is a question, and a question gets a
+dialog. The cadence was the deeper error: this is a desktop application that
+stays open for days, so a once-per-launch check never fires on the machine it
+matters most on. It was chosen for being the cheapest thing to build, and
+cheapness is not a reason.
+
+**Consequences:** the app now makes up to 24 requests a day instead of one,
+each a GET of a small static file, which is nothing beside the git traffic it
+already makes — but the privacy note in Settings had to stop saying "once each
+time the app starts", and does. `plainNotes` strips the Markdown markers that
+read as noise in a plain text node; it is deliberately not a Markdown renderer,
+because a parser for text arriving over the network is a thing to own on
+purpose. The manifest now carries up to 4 kB of release notes in whole lines
+rather than three lines cut anywhere.

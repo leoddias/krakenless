@@ -1,26 +1,23 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { getVersion } from '@tauri-apps/api/app';
 import { checkForUpdate, installKind, type InstallKind } from '../../update/check';
-import styles from './UpdateBanner.module.css';
+import { offerUpdate } from '../../update/offers';
+import styles from './UpdateDialog.module.css';
 
-type Outcome =
-  | { state: 'idle' }
-  | { state: 'checking' }
-  | { state: 'current' }
-  | { state: 'found'; version: string };
+type Outcome = { state: 'idle' } | { state: 'checking' } | { state: 'current' };
 
 /**
  * The manual half of the updater: which version is running, how this copy was
  * installed, and a button that asks GitHub right now.
  *
- * Deliberately separate from the banner. The banner is the automatic path and
+ * Deliberately separate from the dialog. The dialog is the automatic path and
  * says nothing when there is nothing to say; this one answers a question the
  * user asked, so "you are up to date" is a result worth printing.
  *
- * Finding an update here does not install it — it lets the banner do that on
- * the next launch, or the user download it themselves. Two "Update" buttons in
- * two places, one of which sits behind a Settings screen the app is about to
- * restart out from under, is a worse experience than one.
+ * When it *does* find something it hands it to the dialog rather than growing a
+ * second Update button — one that would sit behind a Settings screen the app is
+ * about to restart out from under. So the successful case prints nothing here:
+ * the answer arrives as the dialog opening over the top.
  */
 export function CheckForUpdates(): ReactNode {
   const [version, setVersion] = useState<string | null>(null);
@@ -44,9 +41,8 @@ export function CheckForUpdates(): ReactNode {
   const check = async (): Promise<void> => {
     setOutcome({ state: 'checking' });
     const found = await checkForUpdate();
-    setOutcome(
-      found === null ? { state: 'current' } : { state: 'found', version: found.version },
-    );
+    setOutcome({ state: found === null ? 'current' : 'idle' });
+    if (found !== null) offerUpdate(found);
   };
 
   return (
@@ -59,7 +55,7 @@ export function CheckForUpdates(): ReactNode {
       </span>{' '}
       <button
         type="button"
-        className={styles.button}
+        className={styles.secondary}
         disabled={outcome.state === 'checking' || kind === 'unknown'}
         onClick={() => void check()}
       >
@@ -68,12 +64,6 @@ export function CheckForUpdates(): ReactNode {
       {outcome.state === 'current' && (
         <span role="status">
           Nothing newer was found. If you are offline, that is also what this says.
-        </span>
-      )}
-      {outcome.state === 'found' && (
-        <span role="status">
-          Krakenless {outcome.version} is available — it will be offered the next time you
-          start the app.
         </span>
       )}
     </>
