@@ -59,9 +59,12 @@
   exists as of 2026-09-02: both secrets are set on the repository, the public
   half is in `updater.rs` and `tauri.conf.json`, and two tests hold it in place
   — one that the copies agree, one that the shipping key verifies a fixture
-  signed by the real private half. **v0.1.10-alpha is built and signed** (draft,
-  all four installers plus a `.sig` for each updater payload); the manifests and
-  the swap are still unproven — see *Next up*.
+  signed by the real private half. **v0.1.10-alpha and v0.1.11-alpha are
+  published and signed**, and the manifests on Pages point at v0.1.11. The
+  published portable `.exe` and NSIS installer were both verified against the
+  key compiled into the app, using `verify_signature` itself — the same call
+  the Update button makes. **The swap is the one thing still unproven**: it
+  needs a human to run the 0.1.10 build and press Update.
 - **Test status now:** `npm test` 1878 passing (90 files), `cargo test` 97
   passing; oxlint (6 pre-existing warnings), prettier and clippy clean.
 - **Not built:** conflict *resolution* UI, interactive rebase. Both are v0.2.
@@ -94,7 +97,7 @@
    carrying the updater, and the *swap* cannot be proven by it alone — a v0.1.9
    binary has no updater in it to do the swapping.
 
-   **Steps a and a2 are done (2026-09-02).** The release is published, the
+   **Steps a through c are done (2026-09-02); only the desktop half is left.** The release is published, the
    Pages workflow was dispatched from `main`, and both manifests answer 200
    naming `0.1.10` with URLs that resolve (`_x64-setup.exe` 3.7 MB,
    `_x64_portable.exe` 14.4 MB). The landing page advertises 0.1.10-alpha.
@@ -107,15 +110,14 @@
    a2. ~~Dispatch Pages from `main` — this release only, because a `release`
       event runs the workflow from the tag's commit (ADR-0037). From
       v0.1.11-alpha it is unnecessary.~~ Done.
-   b. Run the v0.1.10-alpha portable `.exe`, open Settings → *Check for
-      updates*. Expect "nothing newer was found". That proves the manifest is
-      reachable, parseable and correctly compared — everything except the swap.
-   c. Tag v0.1.11-alpha — bump the four version files by hand and the fifth
-      with `cargo update -p krakenless` (see `docs/CONVENTIONS.md` § Cutting a
-      release; a search-and-replace on `Cargo.lock` is what failed
-      v0.1.10-alpha's first build). Publish it — no manual Pages run this time
-      — and go back to the still-running v0.1.10 portable. Expect the bar, then
-      Update, then a restarted app reporting 0.1.11.
+   b. **Run the v0.1.10-alpha portable `.exe`** from a folder you can write to
+      (not Program Files — there it classifies as `unknown` and refuses on
+      purpose). The check runs *once per launch*, so it must be started after
+      v0.1.11 was published for the bar to appear.
+   c. ~~Tag and publish v0.1.11-alpha.~~ Done, and the Pages run fired from
+      the `release` event with no manual dispatch, confirming ADR-0037's
+      "one tag late" reading. Expect the bar, then Update, then a restarted app
+      reporting 0.1.11 in Settings.
    d. Look in the folder for `krakenless.displaced-*.exe`, close and reopen the
       app, and confirm it is gone.
    e. Repeat (c) with the NSIS installer to exercise the plugin's path.
@@ -254,8 +256,27 @@ ADR-0037 corrects ADR-0036's claim that `releases/latest/download/` could not
 serve the manifest: these releases are drafts, not prereleases, so it could
 have. The manifest stays on Pages for reasons that survive the correction.
 
-**Not done:** the swap itself, which needs two published releases that both
-contain the updater. v0.1.10-alpha is the first.
+**Released the same day:** v0.1.10-alpha and v0.1.11-alpha, both published and
+signed, so the two builds needed to exercise the swap now exist. The
+v0.1.11-alpha Pages run fired from the `release` event without the manual
+dispatch v0.1.10-alpha needed — the tag carried the corrected step, exactly as
+ADR-0037 says it would.
+
+Verified against the live release rather than against fixtures: the published
+portable `.exe` and the published NSIS installer were downloaded and passed
+through `verify_signature` with `UPDATE_PUBLIC_KEY`, which is the same call the
+Update button makes. Both verify. A throwaway test module did that and was
+deleted; if it is ever wanted again it is four lines around
+`crate::updater::verify_signature`.
+
+One more process trap worth naming: `npm run format:check | tail` reports the
+exit code of `tail`, not of prettier, so a gate run through a pipe always looks
+green. That let an unformatted `tauri.conf.json` into the release commit before
+it was caught by checking `$?` properly. Any local gate run should test exit
+codes, not read output.
+
+**Not done:** the swap itself. Everything around it is now proven; what is left
+is running the 0.1.10 build on a Windows desktop and pressing Update.
 
 ### 2026-09-01 — the diff panel stops freezing on huge commits
 
