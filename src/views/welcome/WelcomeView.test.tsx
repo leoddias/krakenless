@@ -28,12 +28,14 @@ function configWith(recentRepos: RecentRepo[]): AppConfig {
   return { ...defaultConfig(), recentRepos };
 }
 
+const openSettings = vi.fn();
+
 function renderWelcome(recentRepos: RecentRepo[] = []): Store {
   const store = createStore();
   store.dispatch({ type: 'config/loaded', config: configWith(recentRepos) });
   render(
     <StoreProvider store={store}>
-      <WelcomeView />
+      <WelcomeView onOpenSettings={openSettings} />
     </StoreProvider>,
   );
   return store;
@@ -221,13 +223,21 @@ describe('WelcomeView error wording', () => {
     expect(alert).toHaveTextContent('Git said: error: object file is empty');
   });
 
+  it('offers settings before any repository is open', () => {
+    // The settings worth changing first — where git is, whether the app
+    // fetches on its own — used to be reachable only from inside a repository.
+    renderWelcome();
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    expect(openSettings).toHaveBeenCalledTimes(1);
+  });
+
   it('retries the picker from the error panel', async () => {
     pickFolder.mockResolvedValue('D:/repos/second-try');
     const store = createStore();
     store.dispatch({ type: 'config/loaded', config: configWith([]) });
     render(
       <StoreProvider store={store}>
-        <WelcomeView />
+        <WelcomeView onOpenSettings={openSettings} />
       </StoreProvider>,
     );
     act(() =>

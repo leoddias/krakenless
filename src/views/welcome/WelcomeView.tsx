@@ -4,16 +4,26 @@
  * Thin by design — it reads the store and calls the action layer, never the
  * git layer. Everything it can fail at (no git, wrong folder, a cancelled
  * picker) has its own honest wording in `messages.ts`.
+ *
+ * Settings are reachable from here, not only from inside a repository. The
+ * things a user most wants to set before starting — where git lives, whether
+ * the app fetches on its own, whether it checks for updates — are the ones
+ * that used to require opening some repository first just to reach the button.
  */
 
 import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { forgetRepo, openRepo } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
+import { SettingsIcon } from '../shell/icons';
 import { formatLastOpened, repoErrorMessage, repoName } from './messages';
 import styles from './WelcomeView.module.css';
 
-export function WelcomeView(): ReactNode {
+export function WelcomeView({
+  onOpenSettings,
+}: {
+  onOpenSettings: () => void;
+}): ReactNode {
   const store = useStore();
   const repo = useAppState((state) => state.repo);
   const recentRepos = useAppState((state) => state.config.recentRepos);
@@ -55,6 +65,18 @@ export function WelcomeView(): ReactNode {
 
   return (
     <main className={styles.welcome}>
+      <div className={styles.topBar}>
+        <button
+          type="button"
+          className={styles.settings}
+          title="Settings (Ctrl+,)"
+          onClick={onOpenSettings}
+        >
+          <SettingsIcon />
+          <span>Settings</span>
+        </button>
+      </div>
+
       <header className={styles.header}>
         <h1 className={styles.title}>Krakenless</h1>
         <p className={styles.tagline}>
