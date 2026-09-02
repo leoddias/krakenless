@@ -41,6 +41,30 @@
   readable through the API. Splitting a suspect step into named groups turns
   "it hung somewhere" into "it hung here" without needing logs.
 
+## Cutting a release
+
+The version lives in five files: `package.json`, `package-lock.json`,
+`src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` and `src-tauri/Cargo.lock`.
+The first four are edited directly. **`Cargo.lock` is not** — bump
+`src-tauri/Cargo.toml` and then run
+
+```
+cargo update --manifest-path src-tauri/Cargo.toml -p krakenless
+```
+
+A search-and-replace on `Cargo.lock` is how v0.1.10-alpha failed its first
+build: `version = "0.1.9"` matches `cargo-platform` long before it matches
+`krakenless`, so the edit renamed a dependency to a version that does not exist
+while keeping the old checksum. Nothing local notices, because a warm registry
+cache never re-resolves; CI resolves from scratch and dies on the first cargo
+command.
+
+Before tagging, prove the lock can be resolved the way CI will:
+
+```
+cargo metadata --manifest-path src-tauri/Cargo.toml --format-version 1 --locked
+```
+
 ## Release signing key
 
 The updater installs nothing it cannot verify (ADR-0036), so the release is
