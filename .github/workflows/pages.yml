@@ -3,15 +3,16 @@ name: Pages
 # The landing page is plain static files in `site/`, so there is nothing to
 # build — this workflow only uploads them.
 #
-# It deploys when a **release is published**, not when the Release workflow
-# succeeds. That workflow creates a *draft*, and a draft's assets have no
-# public download URLs at all: deploying then would ship a page whose every
-# download button 404s until a human got round to publishing. `release:
-# published` fires at the moment the links start working, which is the moment
-# the page should change.
+# It deploys when a release is published — but never on the `release` event
+# itself. That event runs the workflow from the *tag's* commit, and a Pages
+# deployment made from a tag ref reports success and never becomes the live
+# site (see `publish.yml`, which exists only to bounce that event onto `main`).
+#
+# So the triggers here are: a dispatch, which `publish.yml` sends after a
+# release is published and which resolves the latest release itself; and a push
+# that changes the page. A draft release is still never advertised — its assets
+# have no public download URLs at all, so the page would 404 on every button.
 on:
-  release:
-    types: [published]
   push:
     branches: [main]
     paths:
@@ -38,10 +39,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Which release the page should point at. On a release event that is the
-      # one just published; on a push to `site/` or a manual run it is whatever
-      # is currently the latest, so editing the page's prose never silently
-      # rolls its download links back to an older version.
+      # Which release the page should point at: whatever is currently the
+      # latest published one. `github.event.release.tag_name` is still honoured
+      # for a direct `release` run, but nothing sends one any more — the normal
+      # path is a dispatch from `publish.yml`, and asking GitHub which release
+      # is latest is exactly right for it. Editing the page's prose therefore
+      # never silently rolls its download links back to an older version.
       - name: Resolve the release to advertise
         id: release
         env:

@@ -81,9 +81,11 @@ exactly once, and is unit-tested — including against a fixture with
 above, commit as `chore(release): x.y.z-alpha`, tag `vx.y.z-alpha`, push the
 tag. The `push: tags` trigger on `release.yml` still works.
 
-**A change to `pages.yml` lands one tag late.** A `release` event runs the
-workflow from the *tag's* commit, not from `main`, so a fix to the manifest
-step only takes effect from the next tag onward (ADR-0037).
+**Publishing a release deploys the site by itself** — `publish.yml` catches the
+event and asks `pages.yml` to run on `main`. It has to be that way round: a
+Pages deployment made from a tag ref reports success and never goes live
+(ADR-0040). A consequence worth knowing is that a fix to `pages.yml` now takes
+effect on the next publish, not the next tag.
 
 **Check exit codes, not output.** `npm run format:check | tail` reports the
 exit code of `tail` and always looks green; that let an unformatted file into a

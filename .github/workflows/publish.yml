@@ -1,0 +1,39 @@
+name: Publish
+
+# Publishing a release has to update the site: the download links, and the
+# update manifests every installed copy of Krakenless polls. That is `pages.yml`
+# — but it cannot be triggered by the release event directly.
+#
+# A `release` event runs the workflow from the **tag's** commit, and a Pages
+# deployment made from a tag ref reports success, is recorded as the active
+# deployment, and never becomes the live site. Observed on 2026-09-02:
+# publishing v0.1.12-alpha and v0.1.13-alpha produced two green deployments
+# while the site kept serving content from the previous `main` deployment, and
+# an identical run dispatched from `main` published it immediately.
+#
+# So this workflow is the whole indirection: it runs on the tag, does nothing
+# but ask `pages.yml` to run on `main`, and the deployment happens where it
+# works. It also ends the "a pages.yml fix lands one tag late" problem in
+# ADR-0037, because `pages.yml` now always runs from the default branch.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+jobs:
+  site:
+    name: Deploy the site from main
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ask Pages to deploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh workflow run pages.yml --ref main --repo "$REPO"
+          echo "::notice::Pages deploy dispatched on main; it advertises whatever release is latest."

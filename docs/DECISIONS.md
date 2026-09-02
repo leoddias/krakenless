@@ -987,3 +987,40 @@ against. Contributors do not need the signing secrets: only `release.yml`
 touches them, and it runs from `main`. A fork's pull request cannot read them,
 which is correct and means a fork can never cut a release.
 
+## ADR-0040 — Pages deploys only from `main`; a published release bounces through a dispatch (supersedes the workaround in ADR-0037)
+
+**Date:** 2026-09-02 · **Status:** accepted
+
+**Decision:** `pages.yml` no longer listens for `release: published`. A new
+`publish.yml` listens for it instead and does one thing —
+`gh workflow run pages.yml --ref main` — so every Pages deployment is made from
+the default branch.
+
+**Why:** a Pages deployment made from a **tag** ref reports success, is recorded
+by GitHub as the active deployment, and never becomes the live site. This is
+not the environment protection rule ADR-0037 blamed; that was fixed, and the
+runs since then have all been green. Measured on 2026-09-02: publishing
+v0.1.12-alpha and v0.1.13-alpha produced two deployments, the second marked
+active and the first `inactive`, while the site kept serving the previous
+`main` deployment — `last-modified` stayed at that earlier deploy and the
+manifests still named 0.1.11. An identical run dispatched from `main` minutes
+later went live immediately, with a new `last-modified` and `age: 0`.
+
+The failure is silent in the worst way. The workflow is green, the deployment
+record is green and active, and the only symptom is that the site — including
+the update manifests every installed copy of Krakenless polls — is quietly
+stale. It had already been diagnosed once, in ADR-0036's session, and
+misattributed to the environment's ref policy.
+
+**Consequences:** publishing a release now updates the site on its own, which
+is what the release train needs to hold its promise that publishing the draft
+is the only manual step. The "a `pages.yml` fix lands one tag late" hazard from
+ADR-0037 is **gone**: `pages.yml` always runs from `main`, so a fix takes
+effect on the next publish rather than the next tag. Which release the page
+advertises is now always "the latest published one" as GitHub reports it,
+rather than the tag from the event; for a release just published these are the
+same, and when they differ — someone publishing an older release — advertising
+the latest is the better answer anyway. `publish.yml` needs only
+`actions: write`, and does no deployment itself, so it does not care which ref
+it runs from.
+
