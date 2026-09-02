@@ -856,3 +856,42 @@ release does not hold, for the same reason the download links are already
 checked. `updater.rs` is the only code in the project that writes an
 executable file, which puts it under the safety bar: its swap, rollback and
 sweep are unit-tested against real files on disk.
+
+## ADR-0037 — The update manifest stays on Pages, for the real reason (corrects ADR-0036)
+
+**Date:** 2026-09-02 · **Status:** accepted
+
+**Decision:** ADR-0036's first stated reason is wrong and is withdrawn. It
+claimed `releases/latest/download/` cannot serve the manifest "because every
+release is a prerelease". Every release in this repository has
+`prerelease=false`; they are *drafts* until published, and `v0.1.9-alpha` is
+marked `isLatest=true`. A manifest attached as a release asset and fetched from
+`releases/latest/download/` would in fact work.
+
+The manifest stays on GitHub Pages anyway, on grounds that survive the
+correction:
+
+1. **It can be changed without cutting a release.** Pulling a bad build means
+   editing one static file, not publishing a new version to every machine that
+   already downloaded the old one. A manifest that lives inside the release it
+   advertises cannot retract that release.
+2. **The URL does not depend on release naming or on which release GitHub
+   considers "latest"** — a rule that has draft, prerelease and publication
+   date wound into it, and that this project has already misread once.
+
+**Why this correction matters more than the conclusion:** the next person to
+touch the updater would have inherited a false fact about how GitHub serves
+releases and designed around it.
+
+**Consequences, and one operational hazard found the same day:** a `release`
+event runs the workflow **from the tag's commit**, not from the default branch.
+So a fix to `pages.yml` only takes effect from the *next* tag onward — the
+manifest generation for a release is frozen at whatever the tag contained. This
+bit v0.1.10-alpha: its tag carries a manifest step that looks for a
+`.nsis.zip`, an artefact Tauri 2 no longer produces, because it signs the NSIS
+and MSI installers directly with a `.sig` beside each. For that release the
+manifests are deployed by running the Pages workflow with `workflow_dispatch`
+from `main`, whose dispatch path resolves "the latest release" itself. From
+v0.1.11-alpha onward the tag carries the corrected step and no manual run is
+needed. Anyone changing `pages.yml` release behaviour must remember it lands
+one tag late.

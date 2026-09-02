@@ -59,7 +59,9 @@
   exists as of 2026-09-02: both secrets are set on the repository, the public
   half is in `updater.rs` and `tauri.conf.json`, and two tests hold it in place
   — one that the copies agree, one that the shipping key verifies a fixture
-  signed by the real private half. **Not yet run against a real release.**
+  signed by the real private half. **v0.1.10-alpha is built and signed** (draft,
+  all four installers plus a `.sig` for each updater payload); the manifests and
+  the swap are still unproven — see *Next up*.
 - **Test status now:** `npm test` 1878 passing (90 files), `cargo test` 97
   passing; oxlint (6 pre-existing warnings), prettier and clippy clean.
 - **Not built:** conflict *resolution* UI, interactive rebase. Both are v0.2.
@@ -91,15 +93,25 @@
 1. **Validate the update flow end to end.** v0.1.10-alpha is the first release
    carrying the updater, and the *swap* cannot be proven by it alone — a v0.1.9
    binary has no updater in it to do the swapping. So:
-   a. Publish the v0.1.10-alpha draft. Publishing is what deploys
-      `site/updates/windows-x86_64.json` and `…-portable.json`; confirm both
-      answer 200 and name `0.1.10`.
+   a. Publish the v0.1.10-alpha draft: `gh release edit v0.1.10-alpha
+      --draft=false`.
+   a2. **This release only:** then run the Pages workflow by hand —
+      `gh workflow run pages.yml --ref main`. A `release` event runs the
+      workflow from the *tag's* commit, and this tag predates the fix to the
+      manifest step (ADR-0037). The dispatch path resolves the latest release
+      itself, so it produces the right manifests. From v0.1.11-alpha this is
+      unnecessary. Then confirm both files answer 200 and name `0.1.10`:
+      `https://leoddias.github.io/krakenless/updates/windows-x86_64.json` and
+      `…-portable.json`.
    b. Run the v0.1.10-alpha portable `.exe`, open Settings → *Check for
       updates*. Expect "nothing newer was found". That proves the manifest is
       reachable, parseable and correctly compared — everything except the swap.
-   c. Tag v0.1.11-alpha (no code change needed beyond the version bump),
-      publish it, and go back to the still-running v0.1.10 portable. Expect the
-      bar, then Update, then a restarted app reporting 0.1.11.
+   c. Tag v0.1.11-alpha — bump the four version files by hand and the fifth
+      with `cargo update -p krakenless` (see `docs/CONVENTIONS.md` § Cutting a
+      release; a search-and-replace on `Cargo.lock` is what failed
+      v0.1.10-alpha's first build). Publish it — no manual Pages run this time
+      — and go back to the still-running v0.1.10 portable. Expect the bar, then
+      Update, then a restarted app reporting 0.1.11.
    d. Look in the folder for `krakenless.displaced-*.exe`, close and reopen the
       app, and confirm it is gone.
    e. Repeat (c) with the NSIS installer to exercise the plugin's path.
@@ -213,6 +225,30 @@ were set with `gh secret set`, reading from files so neither value passed
 through a command line. Signing was smoke-tested through the same two
 environment variables the workflow uses, and a fixture signed by that key is
 committed so a mistyped public key fails the suite instead of a release.
+
+**Two mistakes worth remembering, both caught by CI or by checking the real
+artefacts rather than by the local suite:**
+
+- The release version bump was done with a search-and-replace across
+  `Cargo.lock`, and `version = "0.1.9"` matches `cargo-platform` long before it
+  matches `krakenless`. The lock ended up naming a dependency version that does
+  not exist, with the old checksum. A warm registry cache never re-resolves, so
+  nothing local noticed; CI resolves from scratch and died on the first cargo
+  command. Fixed with `cargo update -p krakenless`, verified with
+  `cargo metadata --locked`, and written up in `docs/CONVENTIONS.md`
+  § Cutting a release. The tag was moved to the fixed commit — it had produced
+  no release object at all, so nothing published was invalidated.
+- The workflows were written expecting `.nsis.zip` updater artefacts. Tauri 2
+  signs the NSIS and MSI installers directly instead, so the manifest step
+  would have found nothing — and the signature-verification step, which looped
+  over globs, passed while silently checking almost nothing. Both corrected;
+  the verification step now names the payloads it expects, so a missing one is
+  as loud as an unsigned one. The corrected manifest was dry-run against the
+  real draft's assets and fed through the app's own parser.
+
+ADR-0037 corrects ADR-0036's claim that `releases/latest/download/` could not
+serve the manifest: these releases are drafts, not prereleases, so it could
+have. The manifest stays on Pages for reasons that survive the correction.
 
 **Not done:** the swap itself, which needs two published releases that both
 contain the updater. v0.1.10-alpha is the first.

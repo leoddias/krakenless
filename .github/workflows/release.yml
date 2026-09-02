@@ -141,23 +141,38 @@ jobs:
 
       # A payload whose signature did not make it into the release is a payload
       # every copy of the app will refuse, and it looks like a working release
-      # right up until somebody tries to update. So the pairing is asserted.
+      # right up until somebody tries to update.
+      #
+      # The payloads are *named*, not globbed. An earlier version of this step
+      # looped over `*.nsis.zip` and friends, and when Tauri stopped producing
+      # that shape the glob matched nothing, the loop skipped it, and the step
+      # passed while checking almost nothing. A missing payload has to be as
+      # loud as an unsigned one.
       - name: Verify every updater payload has its signature
         shell: bash
         run: |
           set -euo pipefail
-          missing=0
-          for payload in dist-release/*.nsis.zip dist-release/*.msi.zip \
-                         dist-release/*.app.tar.gz dist-release/*_portable.exe; do
-            [ -e "$payload" ] || continue
-            if [ -f "${payload}.sig" ]; then
-              echo "  ok: $(basename "$payload")"
+          version=$(node -p "require('./package.json').version")
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            expected=("Krakenless_${version}_x64-setup.exe" \
+                      "Krakenless_${version}_x64_en-US.msi" \
+                      "Krakenless_${version}_x64_portable.exe")
+          else
+            expected=("Krakenless.app.tar.gz")
+          fi
+          failed=0
+          for name in "${expected[@]}"; do
+            if [ ! -f "dist-release/$name" ]; then
+              echo "::error::$name is missing — the updater manifest names this file"
+              failed=1
+            elif [ ! -f "dist-release/$name.sig" ]; then
+              echo "::error::$name has no .sig beside it; every copy of the app would refuse it"
+              failed=1
             else
-              echo "::error::$(basename "$payload") has no .sig beside it"
-              missing=1
+              echo "  ok: $name"
             fi
           done
-          exit $missing
+          exit $failed
 
       # The failure this catches shipped twice before it was noticed: a binary
       # compiled without `tauri/custom-protocol` opens the dev server URL

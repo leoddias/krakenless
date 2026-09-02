@@ -180,8 +180,12 @@ jobs:
             echo "$out -> $asset"
           }
 
+          # The NSIS *installer*, not a zip around it. Tauri 2 signs the
+          # installer directly and the updater runs it as-is; the `.nsis.zip`
+          # wrapper belonged to an earlier shape of this plugin and no longer
+          # appears in the bundle at all.
           mkdir -p site/updates
-          manifest site/updates/windows-x86_64.json "$(pick '\.nsis\.zip$')" pub_date
+          manifest site/updates/windows-x86_64.json "$(pick '_x64-setup\.exe$')" pub_date
           manifest site/updates/windows-x86_64-portable.json \
                    "$(pick '_x64_portable\.exe$')" pubDate
           cat site/updates/*.json
