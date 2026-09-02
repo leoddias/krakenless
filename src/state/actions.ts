@@ -76,6 +76,7 @@ import type { FileDiff, Hunk } from '../git/types';
 import type { DiscardBackup, Store } from './store';
 
 /** Number of commits the history panel loads at once. */
+/** Commits a fresh config reads into the graph; Settings can raise it. */
 export const LOG_PAGE_SIZE = 200;
 
 function describe(error: unknown): { message: string; kind?: string } {
@@ -171,7 +172,11 @@ export async function refreshCommits(store: Store): Promise<void> {
   if (root === null) return;
   store.dispatch({ type: 'commits/loading' });
   try {
-    const commits = await readLog(root, { limit: LOG_PAGE_SIZE, allRefs: true });
+    // The user's limit, not the constant: `LOG_PAGE_SIZE` is only the default
+    // that lands in a fresh config, and a repository someone reads far back in
+    // is exactly the one where the default is wrong.
+    const limit = store.getState().config.historyLimit;
+    const commits = await readLog(root, { limit, allRefs: true });
     store.dispatch({ type: 'commits/loaded', commits });
   } catch (error) {
     store.dispatch({ type: 'commits/failed', ...describe(error) });

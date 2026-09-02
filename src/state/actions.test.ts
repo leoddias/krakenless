@@ -18,6 +18,7 @@ import {
   unstage,
 } from './actions';
 import { createStore, isBusy } from './store';
+import { defaultConfig } from '../config/schema';
 import { GitError } from '../git/errors';
 
 const openRepository = vi.hoisted(() => vi.fn());
@@ -489,6 +490,23 @@ describe('actions', () => {
     expect(store.getState().notice).toMatchObject({ tone: 'error' });
     expect(store.getState().notice?.message).toContain('git restore --source=');
     expect(isBusy(store.getState())).toBe(false);
+  });
+
+  it('reads as much history as the settings ask for', async () => {
+    const store = createStore();
+    store.dispatch({
+      type: 'config/loaded',
+      config: { ...defaultConfig(), historyLimit: 2_000 },
+    });
+    readLog.mockClear();
+    await openRepo(store, 'C:/repos/app');
+
+    // The constant is only what a fresh config starts at; a repository someone
+    // reads far back in is exactly the one where that default is wrong.
+    expect(readLog).toHaveBeenCalledWith(
+      REPO.root,
+      expect.objectContaining({ limit: 2_000 }),
+    );
   });
 
   it('refreshes the history after committing', async () => {

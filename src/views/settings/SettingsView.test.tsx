@@ -24,6 +24,17 @@ function renderSettings(store: Store = createStore()): {
   return { store, onClose };
 }
 
+/**
+ * Opens one section of the settings.
+ *
+ * The screen shows a section at a time now, so a test that reaches for a field
+ * has to say which page it is on — which doubles as the assertion that the rail
+ * navigates at all.
+ */
+function goTo(section: string): void {
+  fireEvent.click(screen.getByRole('button', { name: section }));
+}
+
 describe('SettingsView', () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -47,6 +58,8 @@ describe('SettingsView', () => {
 
     expect(screen.getByLabelText(/Editor command/)).toHaveValue('code -g');
     expect(screen.getByLabelText(/Merge tool/)).toHaveValue('vscode');
+
+    goTo('Appearance');
     expect(screen.getByRole('radio', { name: 'light' })).toBeChecked();
   });
 
@@ -77,6 +90,7 @@ describe('SettingsView', () => {
 
   it('shows where the settings file lives, for backups', async () => {
     renderSettings();
+    goTo('About');
     expect(
       await screen.findByText('C:/Users/x/AppData/Roaming/krakenless'),
     ).toBeInTheDocument();
@@ -91,6 +105,7 @@ describe('SettingsView', () => {
 
   it('opens the config folder in the file manager', async () => {
     renderSettings();
+    goTo('About');
     fireEvent.click(await screen.findByRole('button', { name: 'Open config folder' }));
     expect(revealFolder).toHaveBeenCalledWith('C:/Users/x/AppData/Roaming/krakenless');
   });
@@ -98,12 +113,14 @@ describe('SettingsView', () => {
   it('reports a file manager that refused to open', async () => {
     revealFolder.mockRejectedValue(new Error('no file manager'));
     renderSettings();
+    goTo('About');
     fireEvent.click(await screen.findByRole('button', { name: 'Open config folder' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('no file manager');
   });
 
   it('says what the app is and how it is funded', () => {
     renderSettings();
+    goTo('About');
     const about = screen.getByLabelText('About');
     expect(about).toHaveTextContent('no telemetry');
     expect(about).toHaveTextContent('AGPL-3.0');
@@ -117,6 +134,7 @@ describe('SettingsView', () => {
 
   it('offers author pictures switched off', () => {
     renderSettings();
+    goTo('Privacy & updates');
     expect(screen.getByRole('checkbox', { name: /author pictures/i })).not.toBeChecked();
   });
 
@@ -124,6 +142,7 @@ describe('SettingsView', () => {
     // The whole pitch is privacy: the copy has to name the host and the thing
     // it receives, not describe the feature and leave that out.
     renderSettings();
+    goTo('Privacy & updates');
     const field = screen
       .getByRole('checkbox', { name: /author pictures/i })
       .closest('label');
@@ -135,6 +154,7 @@ describe('SettingsView', () => {
 
   it('saves the choice to fetch pictures', async () => {
     const { store } = renderSettings();
+    goTo('Privacy & updates');
     fireEvent.click(screen.getByRole('checkbox', { name: /author pictures/i }));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
@@ -182,12 +202,57 @@ describe('SettingsView', () => {
 
   it('changes what About claims once pictures are on', () => {
     renderSettings();
+    goTo('About');
     expect(screen.getByLabelText('About')).not.toHaveTextContent('Gravatar');
 
+    goTo('Privacy & updates');
     fireEvent.click(screen.getByRole('checkbox', { name: /author pictures/i }));
+
+    // The draft is one answer behind every section, so About describes the
+    // switch that was just flipped on another page.
+    goTo('About');
     expect(screen.getByLabelText('About')).toHaveTextContent(
-      'plus Gravatar and GitHub for the author pictures you turned on above',
+      'plus Gravatar and GitHub for the author pictures you turned on',
     );
+  });
+
+  it('keeps one unsaved draft across the sections', async () => {
+    const { store } = renderSettings();
+    fireEvent.change(screen.getByLabelText(/Editor command/), {
+      target: { value: 'subl' },
+    });
+
+    goTo('Appearance');
+    fireEvent.click(screen.getByRole('radio', { name: 'light' }));
+
+    // One Save, wherever it is pressed: two sections' worth of changes land in
+    // the file together, and neither is quietly dropped by leaving its page.
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
+    expect(saveConfig.mock.calls[0]?.[0]).toMatchObject({
+      editorCommand: 'subl',
+      theme: 'light',
+    });
+    expect(store.getState().config.theme).toBe('light');
+  });
+
+  it('offers a commit count for the graph, and saves it', async () => {
+    const { store } = renderSettings();
+    const field = screen.getByLabelText(/Commits in the graph/);
+    expect(field).toHaveValue('200');
+
+    fireEvent.change(field, { target: { value: '2000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1));
+    expect(saveConfig.mock.calls[0]?.[0]).toMatchObject({ historyLimit: 2000 });
+    expect(store.getState().config.historyLimit).toBe(2000);
+  });
+
+  it('says what a bigger graph costs, rather than only offering it', () => {
+    renderSettings();
+    const field = screen.getByLabelText(/Commits in the graph/).closest('label');
+    expect(field).toHaveTextContent('row with a graph cell and an author badge');
   });
 
   it('drops the saved marker as soon as a field changes again', async () => {

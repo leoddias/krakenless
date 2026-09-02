@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  HISTORY_LIMIT_BOUNDS,
+  HISTORY_LIMIT_CHOICES,
   LAYOUT_BOUNDS,
+  asHistoryLimit,
   MAX_RECENT_REPOS,
   clampLayout,
   defaultConfig,
@@ -195,6 +198,41 @@ describe('autoFetchMinutes', () => {
     expect(parseConfig('{"autoFetchMinutes":"5"}').autoFetchMinutes).toBe(5);
     expect(parseConfig('{"autoFetchMinutes":null}').autoFetchMinutes).toBe(5);
     expect(parseConfig('{"autoFetchMinutes":[]}').autoFetchMinutes).toBe(5);
+  });
+});
+
+describe('historyLimit', () => {
+  it('defaults to a graph that is instant on any machine', () => {
+    expect(defaultConfig().historyLimit).toBe(200);
+    expect(parseConfig('{}').historyLimit).toBe(200);
+  });
+
+  it('keeps a bigger graph the user asked for', () => {
+    expect(parseConfig('{"historyLimit":2000}').historyLimit).toBe(2000);
+  });
+
+  it('clamps a hand edit rather than handing it to git', () => {
+    // The value becomes `--max-count`, so a fraction or a wild number is
+    // brought back inside the bounds here instead of on the command line.
+    expect(parseConfig('{"historyLimit":0}').historyLimit).toBe(HISTORY_LIMIT_BOUNDS.min);
+    expect(parseConfig('{"historyLimit":-40}').historyLimit).toBe(
+      HISTORY_LIMIT_BOUNDS.min,
+    );
+    expect(parseConfig('{"historyLimit":250.6}').historyLimit).toBe(251);
+    expect(parseConfig('{"historyLimit":1e9}').historyLimit).toBe(
+      HISTORY_LIMIT_BOUNDS.max,
+    );
+  });
+
+  it('falls back to the default for anything that is not a number', () => {
+    expect(parseConfig('{"historyLimit":"2000"}').historyLimit).toBe(200);
+    expect(parseConfig('{"historyLimit":null}').historyLimit).toBe(200);
+  });
+
+  it('offers only choices it will honour', () => {
+    for (const choice of HISTORY_LIMIT_CHOICES) {
+      expect(asHistoryLimit(choice)).toBe(choice);
+    }
   });
 });
 

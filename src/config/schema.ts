@@ -81,8 +81,28 @@ export interface AppConfig {
    * dialog; a click produces an update.
    */
   autoUpdateCheck: boolean;
+  /**
+   * Commits read into the graph when a repository is opened or refreshed.
+   *
+   * It is a cost, not a preference: `git log` is fast, but every commit read
+   * becomes a row, a graph cell and an author badge, and a repository with a
+   * hundred thousand commits will happily hand over all of them. The default
+   * is deliberately small enough to be instant on any machine; someone who
+   * routinely looks further back can raise it and pay for it knowingly.
+   */
+  historyLimit: number;
   layout: LayoutConfig;
 }
+
+/** What Settings offers for {@link AppConfig.historyLimit}. */
+export const HISTORY_LIMIT_CHOICES = [200, 500, 1_000, 2_000, 5_000] as const;
+
+/**
+ * Floor and ceiling for a hand-edited limit. The floor is what still shows a
+ * usable stretch of history; the ceiling is where the row count starts costing
+ * more than the answer is worth on an ordinary machine.
+ */
+export const HISTORY_LIMIT_BOUNDS = { min: 50, max: 20_000 } as const;
 
 /**
  * What Settings offers, in minutes. Hand-edited values outside this list are
@@ -137,6 +157,7 @@ export function defaultConfig(): AppConfig {
     remoteAvatars: false,
     autoUpdateCheck: true,
     autoFetchMinutes: 5,
+    historyLimit: 200,
     layout: { sidebarWidth: 264, detailWidth: 340, historyRatio: 0.62 },
   };
 }
@@ -197,6 +218,20 @@ export function asAutoFetchMinutes(value: unknown): number {
   return Math.min(
     Math.max(Math.round(value), AUTO_FETCH_BOUNDS.min),
     AUTO_FETCH_BOUNDS.max,
+  );
+}
+
+/**
+ * Reads the graph's commit count. Whole commits, inside the bounds — a
+ * fractional or wild hand edit becomes a `--max-count` argument, so it is
+ * clamped here rather than handed to git.
+ */
+export function asHistoryLimit(value: unknown): number {
+  const fallback = defaultConfig().historyLimit;
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.min(
+    Math.max(Math.round(value), HISTORY_LIMIT_BOUNDS.min),
+    HISTORY_LIMIT_BOUNDS.max,
   );
 }
 
@@ -309,6 +344,7 @@ export function parseConfig(text: string | null): AppConfig {
     autoUpdateCheck: readAutoUpdateCheck(raw),
     remoteAvatars: readRemoteAvatars(raw),
     autoFetchMinutes: asAutoFetchMinutes(raw['autoFetchMinutes']),
+    historyLimit: asHistoryLimit(raw['historyLimit']),
     layout: asLayout(raw['layout']),
   };
 }
