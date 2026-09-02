@@ -73,6 +73,12 @@ after 2 more weeks → proceed to v0.2. Else: keep as personal tool, stop invest
       right-click menu of Apply / Pop / Delete Stash.
 - [x] Clicking a file in the working-tree panel narrows the diff panel to it,
       switching back from a selected commit first, and marks the row.
+- [x] Auto-update on Windows, for the installers and the portable executable
+      alike (ADR-0036). The manifest is served from GitHub Pages, the binaries
+      from the release; nothing is installed without a minisign signature made
+      by the release key, which exists as of 2026-09-02 and is asserted by
+      `updater::tests::the_shipping_public_key_verifies_a_signature_from_the_release_key`.
+      First release carrying it: v0.1.10-alpha.
 - BYOK AI commit messages (Anthropic/OpenAI/Ollama; optional; `.env.example`)
 - Conflict resolution UI (ours/theirs per file → editor later)
 - Real product name (trademark-safe), wedge decision, donations push

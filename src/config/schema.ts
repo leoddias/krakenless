@@ -62,6 +62,21 @@ export interface AppConfig {
   aiCommand: string;
   /** Model passed to that program. Cheap by default: a subject line is a small job. */
   aiModel: string;
+  /**
+   * Check GitHub for a newer Krakenless once per launch.
+   *
+   * On by default, and the third thing in this file that can put a request on
+   * the wire (ADR-0036). It is one unauthenticated GET of a static JSON file
+   * on the project's own site: no identifier, no request body, and no second
+   * request at all when the version it names is the one already running. What
+   * it costs the user is what any HTTPS request costs — this machine's address
+   * and the fact that something asked. Turning it off makes the app issue no
+   * request; it does not merely hide the notice.
+   *
+   * Downloading and installing is never automatic. The check produces a
+   * notice; a click produces an update.
+   */
+  autoUpdateCheck: boolean;
   layout: LayoutConfig;
 }
 
@@ -116,6 +131,7 @@ export function defaultConfig(): AppConfig {
     aiModel: 'haiku',
     theme: 'dark',
     remoteAvatars: false,
+    autoUpdateCheck: true,
     autoFetchMinutes: 5,
     layout: { sidebarWidth: 264, detailWidth: 340, historyRatio: 0.62 },
   };
@@ -224,6 +240,21 @@ function readRemoteAvatars(raw: Record<string, unknown>): boolean {
   return raw['remoteAvatars'] === true;
 }
 
+/**
+ * Reads the update-check switch, which defaults to *on*.
+ *
+ * The opposite reading of {@link readRemoteAvatars}, and deliberately so.
+ * That setting is off unless the file says `true`, because the safe reading of
+ * a malformed privacy setting is the private one. Here the safe reading is the
+ * other way round: a user running an unattended alpha that has stopped
+ * checking for fixes is worse off than one who made a request they did not
+ * think about. So only an explicit `false` turns it off, and a hand-edited
+ * `"no"` or `0` leaves the app checking.
+ */
+function readAutoUpdateCheck(raw: Record<string, unknown>): boolean {
+  return raw['autoUpdateCheck'] !== false;
+}
+
 function asRecentRepos(value: unknown): RecentRepo[] {
   if (!Array.isArray(value)) return [];
   const seen = new Set<string>();
@@ -271,6 +302,7 @@ export function parseConfig(text: string | null): AppConfig {
       theme === 'light' || theme === 'system' || theme === 'dark'
         ? theme
         : defaults.theme,
+    autoUpdateCheck: readAutoUpdateCheck(raw),
     remoteAvatars: readRemoteAvatars(raw),
     autoFetchMinutes: asAutoFetchMinutes(raw['autoFetchMinutes']),
     layout: asLayout(raw['layout']),

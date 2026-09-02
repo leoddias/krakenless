@@ -275,3 +275,28 @@ describe('clampLayout', () => {
     ).toBe(defaults.sidebarWidth);
   });
 });
+
+describe('autoUpdateCheck', () => {
+  it('is on when the file says nothing', () => {
+    expect(parseConfig('{}').autoUpdateCheck).toBe(true);
+    expect(defaultConfig().autoUpdateCheck).toBe(true);
+  });
+
+  it('is off only when the file says false', () => {
+    expect(parseConfig('{"autoUpdateCheck":false}').autoUpdateCheck).toBe(false);
+  });
+
+  it.each([['"no"'], ['0'], ['null'], ['"false"']])(
+    'keeps checking for the hand-edited %s',
+    (value) => {
+      // The opposite of `remoteAvatars`, on purpose: an alpha that has quietly
+      // stopped looking for fixes is the worse failure here.
+      expect(parseConfig(`{"autoUpdateCheck":${value}}`).autoUpdateCheck).toBe(true);
+    },
+  );
+
+  it('survives a round trip through the file', () => {
+    const config = { ...defaultConfig(), autoUpdateCheck: false };
+    expect(parseConfig(serializeConfig(config)).autoUpdateCheck).toBe(false);
+  });
+});

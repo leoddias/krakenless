@@ -44,3 +44,22 @@ tauri = { version = "2.11.3", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
 notify = "8"
+
+# The updater. `minisign-verify` and `base64` are the portable path's half of
+# it: `tauri-plugin-updater` verifies what it downloads itself, but it only
+# downloads installers, so `updater.rs` repeats the same check against the same
+# key for the portable executable. `reqwest` is how it fetches those bytes.
+minisign-verify = "0.2"
+base64 = "0.22"
+# Pinned to the same major the updater plugin uses: two reqwest versions means
+# two TLS stacks compiled into the binary for no benefit. `system-proxy` is not
+# optional either — a machine behind a corporate proxy is exactly the machine
+# whose user cannot install software and is therefore running the portable
+# build.
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "system-proxy"] }
+
+# Desktop only: there is no self-updating app bundle to replace on a phone, and
+# the plugins do not build for those targets.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"

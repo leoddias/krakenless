@@ -53,8 +53,15 @@
   explicit reveal-in-chunks controls, a truncated hunk withholds its
   stage/discard buttons, and a stale in-flight diff can no longer land behind
   a newer selection. Not yet used by hand.
-- **Test status now:** `npm test` 1784 passing (87 files); lint/format/tsc
-  clean. Rust untouched since 0.1.7.
+- **The app can update itself on Windows** (2026-09-02, ADR-0036) — installers
+  through `tauri-plugin-updater`, the portable `.exe` through `updater.rs`,
+  which verifies a minisign signature and then swaps the running file. The signing key
+  exists as of 2026-09-02: both secrets are set on the repository, the public
+  half is in `updater.rs` and `tauri.conf.json`, and two tests hold it in place
+  — one that the copies agree, one that the shipping key verifies a fixture
+  signed by the real private half. **Not yet run against a real release.**
+- **Test status now:** `npm test` 1878 passing (90 files), `cargo test` 97
+  passing; oxlint (6 pre-existing warnings), prettier and clippy clean.
 - **Not built:** conflict *resolution* UI, interactive rebase. Both are v0.2.
 
 ## Released
@@ -81,32 +88,47 @@
 
 ## Next up (in order)
 
-1. **Use the diverged-branch flow by hand** (ADR-0035): make a repo diverge,
+1. **Validate the update flow end to end.** v0.1.10-alpha is the first release
+   carrying the updater, and the *swap* cannot be proven by it alone — a v0.1.9
+   binary has no updater in it to do the swapping. So:
+   a. Publish the v0.1.10-alpha draft. Publishing is what deploys
+      `site/updates/windows-x86_64.json` and `…-portable.json`; confirm both
+      answer 200 and name `0.1.10`.
+   b. Run the v0.1.10-alpha portable `.exe`, open Settings → *Check for
+      updates*. Expect "nothing newer was found". That proves the manifest is
+      reachable, parseable and correctly compared — everything except the swap.
+   c. Tag v0.1.11-alpha (no code change needed beyond the version bump),
+      publish it, and go back to the still-running v0.1.10 portable. Expect the
+      bar, then Update, then a restarted app reporting 0.1.11.
+   d. Look in the folder for `krakenless.displaced-*.exe`, close and reopen the
+      app, and confirm it is gone.
+   e. Repeat (c) with the NSIS installer to exercise the plugin's path.
+2. **Use the diverged-branch flow by hand** (ADR-0035): make a repo diverge,
    watch Push refuse with the reason, run "Pull (merge)" through its dialog —
    including a conflicted one. Also watch the background fetch tick (ADR-0034)
    report an arriving tag. Neither has been seen running, only asserted.
-2. **Use the 2026-08-27 batch by hand.** All of it is tested and none of it has
+3. **Use the 2026-08-27 batch by hand.** All of it is tested and none of it has
    been run: a push while switching tabs (ADR-0028 — the whole point is that the
    window stays alive), dragging a branch chip onto the checkout to merge
    (ADR-0026), a repository with a real `git worktree` so the WIP row and the
    toolbar picker have something to show (ADR-0027), and pushing a tag
    (ADR-0029). The worktree row and the picker are the two that have never been
    *seen*, only asserted.
-2. **Right-click a commit in the running app** — the context menu (ADR-less,
+4. **Right-click a commit in the running app** — the context menu (ADR-less,
    ROADMAP § v0.2) has tests behind it but has never been used by hand. Worth
    checking the menu and its submenu near the bottom edge of the list, where the
    clamping code runs.
-3. **Try the new editor on a real file** — it is the only code that writes to
+5. **Try the new editor on a real file** — it is the only code that writes to
    your disk, and it has not been used by hand yet. Consider a
    `safety-reviewer` pass over `src-tauri/src/worktree.rs` first.
-4. **Look at the panels not yet seen running**: the diff, the working tree and
+6. **Look at the panels not yet seen running**: the diff, the working tree and
    its commit box, settings, welcome — plus dragging each edge, and the toolbar
    at narrow widths.
-5. **The dogfood gate** (`docs/ROADMAP.md` § M5): use Krakenless as the only
+7. **The dogfood gate** (`docs/ROADMAP.md` § M5): use Krakenless as the only
    Git client for two weeks. Everything else in v0.1 is done, so this is the
    next real step and it produces the list that shapes v0.2.
-6. Fix whatever the gate surfaces, in the order it hurts.
-6. Then the validation checkpoint in `PLAN.md`: builds to 3–5 friends, and the
+8. Fix whatever the gate surfaces, in the order it hurts.
+9. Then the validation checkpoint in `PLAN.md`: builds to 3–5 friends, and the
    decision to invest in v0.2 or stop.
 
 ## Blockers / open questions
@@ -116,12 +138,84 @@
   `.github/workflows/linux.yml`, run on demand. Full findings and what was ruled
   out are in `docs/ROADMAP.md` § Backlog. Windows and macOS build and test green.
 
+- **The update swap has never run.** Signing, manifest parsing, version
+  comparison and the swap-and-rollback mechanics are all covered by tests,
+  including fixtures signed by the real release key — but no binary has yet
+  replaced another binary outside a temp directory. Proving it needs two
+  published releases that both contain the updater, and v0.1.10-alpha is the
+  first; see *Next up*.
+
+- **Losing `~/.krakenless/updater.key` ends auto-update for every existing
+  install.** It is not in any backup this repository knows about. Whatever
+  backup exists should be made deliberately.
+
+- **macOS has no update endpoint.** The configured endpoint template resolves
+  to `darwin-aarch64.json`, which `pages.yml` does not write, so the check 404s
+  and reports "no update" — correct for now, and the thing to revisit if macOS
+  ever becomes a shipped target.
+
 - None blocking. Two deliberate gaps, both documented in code comments:
   force-push is unreachable from the UI until the lease carries an explicit
   `<branch>:<oid>`, and pushing to a differently-named upstream is disabled
   until `buildPushCommand` emits a `<local>:<upstream>` refspec.
 
 ## Session log
+
+### 2026-09-02 — the app can replace itself
+
+Every install of an alpha is a machine that quietly stays on that alpha, and
+the portable `.exe` — the download for people who are not allowed to install
+software — is the copy least likely to ever be replaced by hand. So the
+updater covers both shapes of the Windows build, not just the installers.
+
+Three facts shaped the design (ADR-0036):
+
+- **Releases are drafts and prereleases**, so `releases/latest/download/`
+  cannot see them. The manifest is served from GitHub Pages instead, written by
+  `pages.yml`, which already fires on `release: published` — the exact moment a
+  release's assets acquire public URLs. A draft advertises nothing.
+- **`tauri-plugin-updater` only updates installers.** The portable path is
+  written here: download to memory, verify, write beside the current
+  executable, then two renames (Windows lets a running image be *renamed*, only
+  not deleted or overwritten), with the first undone if the second fails. The
+  displaced file is swept on the next launch.
+- **The binaries carry no Authenticode signature**, so the minisign signature is
+  not defence in depth — it is the only proof of provenance, and an updater
+  without it would be a channel for running arbitrary downloaded code. Both
+  paths verify against one key; a unit test fails if the copy in `updater.rs`
+  and the copy in `tauri.conf.json` ever differ.
+
+Installed and portable are told apart by a marker file shipped as a bundle
+resource, not by guessing from the path. An unmarked executable sitting in
+Program Files classifies as `unknown` and is left alone rather than
+self-replaced.
+
+Checking is on by default and is one unauthenticated GET of a static file;
+installing always needs a click. `autoUpdateCheck` defaults to *on*, the
+opposite of `remoteAvatars`, because the bad outcome here is an abandoned alpha
+rather than a leaked identifier — the reasoning is in the schema comment.
+
+**Files:** new `src-tauri/src/updater.rs` (+ fixtures under
+`src-tauri/tests/fixtures/`), new `src/update/` (version compare, manifest
+validation, check policy), new `src/views/update/` (the bar, the Settings
+button); `src/config/schema.ts`, `src/App.tsx`,
+`src/views/settings/SettingsView.tsx`, `src-tauri/{lib.rs,Cargo.toml,
+tauri.conf.json,capabilities/default.json}`, both release/pages workflows,
+`.gitattributes`, and the docs.
+
+**Tests:** `npm test` 1878 passing (90 files), `cargo test` 97 passing; clippy,
+prettier and tsc clean. The signature fixtures are the part worth keeping an
+eye on — they prove the verifier accepts real `tauri signer` output and
+rejects a single flipped byte.
+
+The key was generated at the end of the session and both repository secrets
+were set with `gh secret set`, reading from files so neither value passed
+through a command line. Signing was smoke-tested through the same two
+environment variables the workflow uses, and a fixture signed by that key is
+committed so a mistyped public key fails the suite instead of a release.
+
+**Not done:** the swap itself, which needs two published releases that both
+contain the updater. v0.1.10-alpha is the first.
 
 ### 2026-09-01 — the diff panel stops freezing on huge commits
 

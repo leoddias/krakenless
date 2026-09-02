@@ -785,3 +785,74 @@ conservative, which is the only safe direction. Every new stderr pattern
 ships with real-sample tests, including the negatives (a rejected tag push is
 not "non-fast-forward"; a refname echoing the divergence sentence is not
 "diverged").
+
+## ADR-0036 — Krakenless updates itself from its own GitHub releases, and never runs a binary it has not verified
+
+**Date:** 2026-09-02 · **Status:** accepted
+
+**Decision:** The app checks for a new version once per launch against a
+static JSON manifest on the project's GitHub Pages site, and offers — never
+performs — an update. Four rules bound it:
+
+1. **The manifest is on Pages; the binaries are on the release.** Pages
+   already deploys on `release: published`, which is the exact moment a
+   release's assets acquire public download URLs. A draft release therefore
+   advertises nothing. The alternative, `releases/latest/download/`, cannot
+   work at all while every release is a prerelease.
+2. **Nothing is executed without a valid minisign signature over its bytes.**
+   The shipped binaries carry no Authenticode signature, so this is not
+   defence in depth — it is the only proof of provenance there is. The
+   installed path gets this from `tauri-plugin-updater`; the portable path
+   verifies the same way, against the same public key, before the downloaded
+   file is allowed anywhere near the running executable.
+3. **Two manifests, not one.** `windows-x86_64.json` is the updater plugin's
+   own format; `windows-x86_64-portable.json` is this project's. Extending
+   the first with extra keys would stake the portable path on an undocumented
+   property of the plugin's deserializer.
+4. **Checking is a setting; installing is a question.** `autoUpdateCheck`
+   defaults to on and is one unauthenticated GET of a static file — no
+   identifier, no request body, no second request when the version matches.
+   Turning it off makes the app issue no request at all. Downloading and
+   installing always require a click.
+
+The portable executable updates itself by exploiting the one thing Windows
+permits against a running image: it can be *renamed*, only not deleted or
+overwritten. The new file is downloaded beside the current one, verified,
+checked for a PE header, and only then swapped in by two renames, with the
+first reversed if the second fails. The displaced file is deleted on the next
+launch.
+
+Installed builds are told apart from portable ones by a marker file shipped
+as a bundle resource. Installers copy resources next to the executable; a
+`krakenless.exe` copied out of `target/release` has no neighbours. When the
+marker is absent but the executable sits in a managed install location, the
+kind is `unknown` and self-replacement is refused rather than guessed.
+
+**Why:** Every install of an alpha is a machine that will silently stay on an
+alpha. The portable build makes that worse, not better: it is the download
+for people who cannot install software, so it is the one least likely to ever
+be replaced by hand, and leaving it out would have meant shipping an updater
+that skips the users who most need it. Rejected alternatives: querying the
+GitHub API from the app (rate-limited per IP, sends more metadata, and
+duplicates discovery logic the plugin already has for the installed case);
+attaching the manifest to the release itself (only works once releases stop
+being prereleases); a manual "Check for updates" button alone (honest, and in
+practice never clicked); shipping the updater for installers only (abandons
+the portable users); trusting the download because it came from
+`github.com` over TLS (transport security says the bytes arrived intact from
+whoever GitHub handed them over for, not that this project built them).
+
+**Consequences:** The privacy rule now reads "no network calls except git
+remotes, opt-in author pictures, and one update check that the user can turn
+off." The signing key becomes release infrastructure: losing it means no
+already-installed copy can ever be updated again, and leaking it means an
+attacker who can also serve the manifest can ship a signed binary. It lives
+only in GitHub Actions secrets, and the public key is compiled into the app,
+so moving to a new key requires a release users install by hand. The release
+workflow signs the portable executable separately — the bundler signs what it
+bundles, and the portable executable is not a bundle. The Pages workflow
+gains a second job: it must fail the deploy if a manifest names an asset the
+release does not hold, for the same reason the download links are already
+checked. `updater.rs` is the only code in the project that writes an
+executable file, which puts it under the safety bar: its swap, rollback and
+sweep are unit-tested against real files on disk.

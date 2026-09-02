@@ -72,7 +72,25 @@ jobs:
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --manifest-path src-tauri/Cargo.toml
 
+      # Without a signing key the bundler cannot produce the `.sig` files the
+      # updater needs, and `createUpdaterArtifacts` makes it fail rather than
+      # quietly skip them. Checked here anyway so the failure names the missing
+      # secret instead of surfacing as a bundler error twenty minutes in.
+      - name: Require the update signing key
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set. Without it the release"
+            echo "::error::ships binaries no installed copy of Krakenless will accept."
+            exit 1
+          fi
+
       - name: Build installers
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri -- build
 
       - name: Collect installers
@@ -81,8 +99,15 @@ jobs:
           mkdir -p dist-release
           # Only the installable artefacts; the bundle directory also holds
           # intermediate app directories that are useless to a downloader.
+          #
+          # `.nsis.zip`, `.msi.zip` and `.app.tar.gz` are the updater's payloads
+          # — what it downloads and hands to the installer — and each `.sig`
+          # beside them is the only proof the app has that this project built what
+          # it just downloaded. A release missing them is a release nobody can
+          # update to.
           find src-tauri/target/release/bundle \
-            \( -name '*.msi' -o -name '*.exe' -o -name '*.dmg' -o -name '*.app.tar.gz' \) \
+            \( -name '*.msi' -o -name '*.exe' -o -name '*.dmg' -o -name '*.app.tar.gz' \
+               -o -name '*.nsis.zip' -o -name '*.msi.zip' -o -name '*.sig' \) \
             -exec cp {} dist-release/ \;
           ls -la dist-release
 
@@ -97,6 +122,42 @@ jobs:
           version=$(node -p "require('./package.json').version")
           cp src-tauri/target/release/krakenless.exe "dist-release/Krakenless_${version}_x64_portable.exe"
           ls -la dist-release
+
+      # The bundler signs what it bundles, and this is not a bundle: it is the
+      # raw binary, copied out of the build directory. So it is signed here, by
+      # hand, with the same key, because `updater.rs` refuses to install
+      # anything it cannot verify and the portable build is the one that has no
+      # installer to fall back to.
+      - name: Sign the portable executable
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          npm run tauri -- signer sign "dist-release/Krakenless_${version}_x64_portable.exe"
+
+      # A payload whose signature did not make it into the release is a payload
+      # every copy of the app will refuse, and it looks like a working release
+      # right up until somebody tries to update. So the pairing is asserted.
+      - name: Verify every updater payload has its signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for payload in dist-release/*.nsis.zip dist-release/*.msi.zip \
+                         dist-release/*.app.tar.gz dist-release/*_portable.exe; do
+            [ -e "$payload" ] || continue
+            if [ -f "${payload}.sig" ]; then
+              echo "  ok: $(basename "$payload")"
+            else
+              echo "::error::$(basename "$payload") has no .sig beside it"
+              missing=1
+            fi
+          done
+          exit $missing
 
       # The failure this catches shipped twice before it was noticed: a binary
       # compiled without `tauri/custom-protocol` opens the dev server URL

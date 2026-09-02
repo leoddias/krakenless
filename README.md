@@ -196,6 +196,27 @@ Note ADR-0010 — the name is a development codename that references someone
 else's trademark. Publishing downloadable binaries under it is exactly the step
 that ADR says to take only after the rename.
 
+## Updating itself
+
+Krakenless checks once per launch whether a newer release exists, and offers
+it; it never installs one on its own. Both shapes of the Windows build are
+covered — the installers through `tauri-plugin-updater`, and the portable
+executable through code of this project's own, because a loose `.exe` has no
+installer to run (ADR-0036).
+
+What the check costs you is one unauthenticated GET of a static JSON file on
+`leoddias.github.io`: no account, no identifier, no request body, and no second
+request when the file names the version you are already running. The switch is
+in Settings, and turning it off means the app makes no such request rather than
+hiding the answer.
+
+Nothing is installed without a **minisign signature** made by the release key.
+The shipped binaries carry no Authenticode signature, so that is not belt and
+braces — it is the only statement that this project built what was
+downloaded. The key lives in the release workflow's secrets; see
+`docs/CONVENTIONS.md` § Release signing key. First release signed with it:
+v0.1.10-alpha, so a copy older than that has to be replaced by hand once.
+
 ## Landing page
 
 The site in [`site/`](site/) is plain static HTML with no build step, published

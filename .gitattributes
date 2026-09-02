@@ -9,3 +9,8 @@
 *.jpg binary
 *.woff binary
 *.woff2 binary
+
+# Signature fixtures. A byte changed by line-ending conversion is a byte the
+# signature no longer covers, so these are never touched — that is the whole
+# point of the test that reads them.
+src-tauri/tests/fixtures/** binary

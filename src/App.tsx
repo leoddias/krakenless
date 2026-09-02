@@ -49,6 +49,7 @@ import {
   type Workspace as TabWorkspace,
 } from './views/shell/tabs';
 import { HistoryView } from './views/history/HistoryView';
+import { UpdateBanner } from './views/update';
 import { WelcomeView } from './views/welcome';
 
 export const APP_NAME = 'Krakenless';
@@ -670,6 +671,10 @@ export default function App(): ReactNode {
   }, []);
 
   const active = activeTab(workspace);
+  // Read from the home store because the offer is about the application, not
+  // about a repository: it belongs above the tabs and shows on the welcome
+  // screen too, where there is no repository store to read.
+  const autoUpdateCheck = useStoreState(home, (state) => state.config.autoUpdateCheck);
 
   return (
     <div className="repo-layout">
@@ -680,6 +685,8 @@ export default function App(): ReactNode {
         onActivate={(id) => setWorkspace((current) => ({ ...current, activeId: id }))}
         onClose={closeTab}
       />
+
+      <UpdateBanner enabled={autoUpdateCheck} />
 
       {active === undefined && (
         <StoreProvider store={home}>

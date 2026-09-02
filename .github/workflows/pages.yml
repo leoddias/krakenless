@@ -96,6 +96,96 @@ jobs:
             exit 1
           fi
 
+      # The update manifests the app polls. They are served from here rather
+      # than from the release itself for one blunt reason: every release so far
+      # is a prerelease, and `releases/latest/download/` does not see those at
+      # all. This workflow also runs at exactly the right moment — a release's
+      # assets acquire public download URLs when it is published, which is the
+      # event above — so a draft release advertises nothing.
+      #
+      # Two files, not one. `windows-x86_64.json` is the shape
+      # `tauri-plugin-updater` parses; `windows-x86_64-portable.json` is this
+      # project's own, for the portable executable the plugin cannot update.
+      # Adding portable fields to the first would stake the portable path on the
+      # plugin's deserializer ignoring keys it does not know. See ADR-0036.
+      #
+      # Windows only for now: an endpoint that 404s is how the updater says
+      # "nothing here", which is the truth on macOS until it is a shipped
+      # target.
+      - name: Build the update manifests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d)
+          base="https://github.com/${{ github.repository }}/releases/download/${TAG}"
+
+          gh release view "$TAG" --json assets --jq '.assets[].name' | sort > "$work/assets.txt"
+          echo "Release holds:"; sed 's/^/  /' "$work/assets.txt"
+
+          # A release cut before the updater existed carries no signatures at
+          # all, and it has nothing to advertise: no copy of the app can update
+          # to it, and none is asking. Skipping is the truthful outcome, and it
+          # keeps `$TAG` — which on a `site/**` push is just "whatever is
+          # latest" — from failing a deploy that is only about the page.
+          # A release with *some* signatures and not the ones the manifests
+          # need is a different thing entirely, and `pick` below fails on it.
+          if ! grep -q '\.sig$' "$work/assets.txt"; then
+            echo "::notice::$TAG has no signatures; it predates the updater. No manifests written."
+            exit 0
+          fi
+
+          gh release download "$TAG" --dir "$work" --pattern '*.sig'
+          published=$(gh release view "$TAG" --json publishedAt --jq .publishedAt)
+
+          # Release notes, trimmed to what a one-line bar in the app can show.
+          # The full text is on the release page, which is where somebody who
+          # wants it will look.
+          notes=$(gh release view "$TAG" --json body --jq .body \
+                  | tr -d '\r' | grep -v '^[[:space:]]*$' | head -3)
+
+          # Named from the asset list rather than reconstructed, so a change to
+          # the bundler's naming fails here instead of shipping a manifest whose
+          # URL 404s.
+          pick() {
+            local found
+            found=$(grep -E "$1" "$work/assets.txt" | head -1 || true)
+            if [ -z "$found" ]; then
+              echo "::error::no release asset matches $1 — the app cannot update to $TAG" >&2
+              exit 1
+            fi
+            printf '%s' "$found"
+          }
+
+          manifest() {
+            local out="$1" asset="$2" date_key="$3"
+            if [ ! -f "$work/${asset}.sig" ]; then
+              echo "::error::${asset} has no signature in the release; without one every" >&2
+              echo "::error::copy of Krakenless will refuse the download." >&2
+              exit 1
+            fi
+            jq -n \
+              --arg version "$VERSION" \
+              --arg notes "$notes" \
+              --arg date "$published" \
+              --arg dateKey "$date_key" \
+              --arg url "$base/$asset" \
+              --arg signature "$(cat "$work/${asset}.sig")" \
+              '{version: $version, notes: $notes}
+               + {($dateKey): $date}
+               + {platforms: {"windows-x86_64": {signature: $signature, url: $url}}}' \
+              > "$out"
+            echo "$out -> $asset"
+          }
+
+          mkdir -p site/updates
+          manifest site/updates/windows-x86_64.json "$(pick '\.nsis\.zip$')" pub_date
+          manifest site/updates/windows-x86_64-portable.json \
+                   "$(pick '_x64_portable\.exe$')" pubDate
+          cat site/updates/*.json
+
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

@@ -41,6 +41,34 @@
   readable through the API. Splitting a suspect step into named groups turns
   "it hung somewhere" into "it hung here" without needing logs.
 
+## Release signing key
+
+The updater installs nothing it cannot verify (ADR-0036), so the release is
+signed with a minisign key that the app carries the public half of.
+
+**This is done.** The key was generated on 2026-09-02, the private half lives
+in `~/.krakenless/` on the maintainer's machine (with its password beside it)
+and in the repository secrets, and the public half is in the two places listed
+below. What follows is the procedure for *rotating* it — which is not a cheap
+thing to do, because a new key can only reach users through a build they
+install by hand:
+
+1. `npm run tauri signer generate -- -w <path outside this repo>`
+2. Store the **private** key somewhere you will still have it in a year.
+   Losing it means no already-installed copy of Krakenless can ever be updated
+   again — every user would have to download a new build by hand.
+3. Add repository secrets `TAURI_SIGNING_PRIVATE_KEY` (the file's contents) and
+   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (empty is fine if the key has none;
+   the secret must exist either way).
+4. Put the **public** key in two places, which a unit test asserts are equal:
+   `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`, and
+   `UPDATE_PUBLIC_KEY` in `src-tauri/src/updater.rs`.
+
+The private key never touches this repository or a log. `updater.rs` also
+carries a fixture signed by the real key, so a truncated or mistyped public key
+fails the suite rather than shipping a release nobody can install. The release workflow refuses to build without it rather than shipping
+binaries no installed copy will accept.
+
 ## Commits
 
 - Conventional Commits: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`,

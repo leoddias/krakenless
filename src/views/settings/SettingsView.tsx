@@ -3,6 +3,7 @@ import { revealFolder } from '../../config/launch';
 import { saveConfig, configFolder } from '../../config/store';
 import { AUTO_FETCH_CHOICES, type AppConfig } from '../../config/schema';
 import { useAppState, useStore } from '../../state/hooks';
+import { CheckForUpdates } from '../update';
 import styles from './SettingsView.module.css';
 
 /**
@@ -153,6 +154,33 @@ export function SettingsView({ onClose }: { onClose: () => void }): ReactNode {
       </label>
 
       <label className={styles.field}>
+        <span className={styles.checkbox}>
+          <input
+            type="checkbox"
+            checked={draft.autoUpdateCheck}
+            onChange={(event) => update('autoUpdateCheck', event.target.checked)}
+          />
+          <span className={styles.label}>Check for a new version of Krakenless</span>
+        </span>
+        <span className={styles.hint}>
+          On by default. Once each time the app starts, it asks{' '}
+          <code>leoddias.github.io</code> for a small JSON file naming the newest release.
+          There is no account, no identifier and no request body — what the request costs
+          you is what any HTTPS request costs: your IP address, and the fact that
+          something asked. If the file names the version you are already running, nothing
+          else happens at all. Turning this off means the app makes no such request, not
+          that it hides the answer. Finding an update never installs one: you get a bar at
+          the top of the window with an Update button, and nothing is downloaded until you
+          press it. Whatever is downloaded is checked against a signature made by this
+          project's release key before it is allowed to run — without that, an
+          auto-updater would be a way to run any program that could reach you.
+        </span>
+        <span className={styles.hint}>
+          <CheckForUpdates />
+        </span>
+      </label>
+
+      <label className={styles.field}>
         <span className={styles.label}>Fetch in the background</span>
         <select
           className={styles.input}
@@ -210,6 +238,7 @@ export function SettingsView({ onClose }: { onClose: () => void }): ReactNode {
           A fast, private Git client. No account, no telemetry, no subscription — it runs
           your own <code>git</code>, and the only thing it ever contacts is your git
           remotes
+          {draft.autoUpdateCheck ? ', its own release page once per launch' : ''}
           {draft.remoteAvatars
             ? ', plus Gravatar and GitHub for the author pictures you turned on above'
             : ''}

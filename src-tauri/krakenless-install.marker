@@ -1,0 +1,4 @@
+This file exists only so the application can tell an installed copy from a
+portable one. Installers place bundle resources next to the executable; a
+krakenless.exe copied out of a build directory has no neighbours. See
+src-tauri/src/updater.rs and ADR-0036.
