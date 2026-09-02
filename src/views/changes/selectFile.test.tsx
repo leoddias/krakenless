@@ -4,7 +4,7 @@
  * Both panels are rendered together here on purpose: the whole point of the
  * behaviour is that pressing something in one changes what the other shows, and
  * a test that only asserted on the store would pass while the diff below stayed
- * on "All files".
+ * on the file it had fallen back to.
  */
 
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
@@ -112,7 +112,9 @@ afterEach(cleanup);
 describe('clicking a file in the working-tree panel', () => {
   it('narrows the diff to that file', () => {
     renderPanels();
-    expect(shownDiffs()).toEqual(['src/a.ts', 'src/b.ts']);
+    // The diff panel opens on the first file rather than on all of them, so
+    // "narrowing" here is really "moving": one body, before and after.
+    expect(shownDiffs()).toEqual(['src/a.ts']);
     fireEvent.click(fileRow('src/b.ts'));
     expect(shownDiffs()).toEqual(['src/b.ts']);
   });

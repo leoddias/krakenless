@@ -5,6 +5,13 @@
  * conflicted, mode-only, pure rename, empty new file — gets a sentence saying
  * what it is. A blank area would read as "no changes", and a user who trusts
  * that reading can stage or discard something they never actually saw.
+ *
+ * One file is on screen at a time. It used to mount every file's diff when no
+ * path was selected, which is the state every commit click lands in — so
+ * walking the history of a repository where commits touch hundreds of files
+ * meant building hundreds of file blocks per arrow key, and the window locked
+ * up between commits. The list on the left is the navigation; the body is
+ * whichever file it points at, and nothing else exists in the DOM.
  */
 
 import { memo, useCallback, useMemo, useState, type ReactNode } from 'react';
@@ -29,7 +36,6 @@ import {
   LINE_MARKERS,
 } from './labels';
 import {
-  FILE_LINE_BUDGET,
   planFiles,
   REVEAL_CHUNK,
   sliceHunks,
@@ -76,6 +82,7 @@ export function DiffView(): ReactNode {
   const [reveals, setReveals] = useState<Reveals | null>(null);
 
   const files = diff.state === 'ready' ? diff.value : NO_FILES;
+
   const revealed = reveals !== null && reveals.for === files ? reveals.map : NO_REVEALS;
   // The whole point of the plan is that this is the only place the full diff
   // is traversed — once per diff or reveal, not once per render of every row.
@@ -97,6 +104,18 @@ export function DiffView(): ReactNode {
     store.dispatch({ type: 'selection/path', path });
   };
 
+  /**
+   * The file the body draws.
+   *
+   * Selecting a commit clears the path, so the ordinary state is "no file
+   * picked" — and a panel that answers that with nothing would make every
+   * commit in the history take two clicks to read. The first file stands in
+   * until the user picks another. It is derived rather than dispatched: the
+   * store keeps meaning "the user has chosen nothing", which is what lets the
+   * next commit fall back to *its* first file instead of inheriting this one.
+   */
+  const activePath = selectedPath ?? plans[0]?.file.newPath ?? null;
+
   return (
     <section className={styles.panel} aria-label="Diff">
       {diff.state === 'idle' && (
@@ -117,9 +136,10 @@ export function DiffView(): ReactNode {
 
       {diff.state === 'ready' && diff.value.length > 0 && (
         <div className={styles.body}>
-          <FileList plans={plans} selectedPath={selectedPath} onSelect={selectPath} />
+          <FileList plans={plans} activePath={activePath} onSelect={selectPath} />
           <FileDiffs
             plans={plans}
+            activePath={activePath}
             selectedPath={selectedPath}
             editable={editable}
             editing={editing}
@@ -174,32 +194,31 @@ function Notice({
 
 const FileList = memo(function FileList({
   plans,
-  selectedPath,
+  activePath,
   onSelect,
 }: {
   plans: FilePlan[];
-  selectedPath: string | null;
+  /** The file the body is showing — which is what the list marks as current. */
+  activePath: string | null;
   onSelect: (path: string | null) => void;
 }): ReactNode {
   return (
     <nav className={styles.files} aria-label="Changed files">
+      {/*
+        A count, not a control. "All files" used to be the first row here, and
+        choosing it mounted every file's diff at once — the thing that made
+        walking the history of a large commit unusable.
+      */}
+      <p className={styles.fileCount}>
+        {plans.length === 1 ? '1 changed file' : `${plans.length} changed files`}
+      </p>
       <ul className={styles.fileList}>
-        <li>
-          <button
-            type="button"
-            className={styles.fileButton}
-            aria-current={selectedPath === null ? 'true' : undefined}
-            onClick={() => onSelect(null)}
-          >
-            <span className={styles.filePath}>All files ({plans.length})</span>
-          </button>
-        </li>
         {plans.map(({ file, key, added, deleted }) => (
           <li key={key}>
             <button
               type="button"
               className={styles.fileButton}
-              aria-current={selectedPath === file.newPath ? 'true' : undefined}
+              aria-current={activePath === file.newPath ? 'true' : undefined}
               onClick={() => onSelect(file.newPath)}
             >
               <span className={styles.filePath}>{displayPath(file)}</span>
@@ -224,6 +243,7 @@ const FileList = memo(function FileList({
 
 function FileDiffs({
   plans,
+  activePath,
   selectedPath,
   editable,
   editing,
@@ -232,6 +252,9 @@ function FileDiffs({
   untracked,
 }: {
   plans: FilePlan[];
+  /** The file to draw: the selected one, or the first when none was picked. */
+  activePath: string | null;
+  /** What the user actually chose; `null` when they chose nothing. */
   selectedPath: string | null;
   editable: boolean;
   editing: string | null;
@@ -240,10 +263,9 @@ function FileDiffs({
   /** True when the selected path is a file git does not track yet. */
   untracked: boolean;
 }): ReactNode {
-  const shown =
-    selectedPath === null
-      ? plans
-      : plans.filter((plan) => plan.file.newPath === selectedPath);
+  // The same path can appear twice — the worktree and the staged diff are
+  // concatenated — and both belong on screen when it is the file being read.
+  const shown = plans.filter((plan) => plan.file.newPath === activePath);
 
   if (shown.length === 0) {
     return (
@@ -334,15 +356,12 @@ const FileDiffBlock = memo(function FileDiffBlock({
           {hidden > 0 && (
             <div className={styles.fileNote}>
               {/*
-                Two different reasons a file starts collapsed, told apart
-                honestly: its own size, or the panel's overall budget — a
-                100-line file collapsed by the budget must not be called large.
+                Only its own size can collapse a file now. The panel-wide budget
+                that used to be the other reason went with the all-files body.
               */}
               {visible > 0
                 ? `${hidden.toLocaleString('en-US')} more lines are not rendered yet.`
-                : total > FILE_LINE_BUDGET
-                  ? `This diff is large (${total.toLocaleString('en-US')} lines), so it is not rendered yet.`
-                  : `${total.toLocaleString('en-US')} lines are not rendered yet, to keep this panel fast.`}{' '}
+                : `This diff is large (${total.toLocaleString('en-US')} lines), so it is not rendered yet.`}{' '}
               <button
                 type="button"
                 className={styles.hunkAction}

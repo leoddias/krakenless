@@ -12,6 +12,13 @@
  * the pointer leaves the 5px hit area, which needs window-level listeners
  * either way, and mouse events behave identically in every environment this
  * runs in.
+ *
+ * A move is reported at most once per frame. A mouse fires movements faster
+ * than the screen can show them — several per frame on a high-polling-rate
+ * device — and each one used to become its own React render of the whole
+ * window. The last position in a frame is the only one worth drawing, so the
+ * rest are dropped rather than queued: a drag that renders behind the pointer
+ * only falls further behind.
  */
 
 import {
@@ -80,10 +87,30 @@ export function Splitter({
       const origin = vertical ? event.clientX : event.clientY;
       onDragStart();
 
+      // The newest position seen this frame, and the frame that will report it.
+      let latest = 0;
+      let frame: number | null = null;
+
+      const report = (): void => {
+        frame = null;
+        onDrag(latest);
+      };
+
       const move = (moved: MouseEvent): void => {
-        onDrag((vertical ? moved.clientX : moved.clientY) - origin);
+        latest = (vertical ? moved.clientX : moved.clientY) - origin;
+        // Already waiting on a frame: overwrite the position, do not queue a
+        // second render for a pixel that will never be seen on its own.
+        if (frame === null) frame = requestAnimationFrame(report);
       };
       const end = (): void => {
+        // The drag ends on the last position the pointer reached, whether or
+        // not its frame has run — otherwise a release between frames leaves
+        // the panel a few pixels from where the user let go.
+        if (frame !== null) {
+          cancelAnimationFrame(frame);
+          frame = null;
+          onDrag(latest);
+        }
         stop.current?.();
         onDragEnd();
       };
@@ -91,6 +118,8 @@ export function Splitter({
       stop.current = () => {
         window.removeEventListener('mousemove', move);
         window.removeEventListener('mouseup', end);
+        if (frame !== null) cancelAnimationFrame(frame);
+        frame = null;
         // Text selection is suppressed for the duration of the drag only:
         // dragging across a commit list otherwise selects every row it crosses.
         document.body.style.removeProperty('user-select');

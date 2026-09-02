@@ -53,6 +53,16 @@
   border-right: 1px solid var(--border);
 }
 
+.fileCount {
+  margin: 0;
+  padding: 0.3rem 0.6rem;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--faint);
+  font-size: 0.6875rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .fileList {
   list-style: none;
   margin: 0;

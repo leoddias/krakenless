@@ -1,12 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DiffLine, FileDiff, Hunk } from '../../git/types';
-import {
-  FILE_LINE_BUDGET,
-  PANEL_LINE_BUDGET,
-  planFiles,
-  planKey,
-  sliceHunks,
-} from './renderPlan';
+import { FILE_LINE_BUDGET, planFiles, planKey, sliceHunks } from './renderPlan';
 
 function lines(count: number, kind: DiffLine['kind'] = 'context'): DiffLine[] {
   return Array.from({ length: count }, (_, i) => ({
@@ -78,14 +72,14 @@ describe('planFiles', () => {
     expect(plan).toMatchObject({ added: 1, deleted: 0 });
   });
 
-  it('collapses the tail of a diff once the panel budget is spent', () => {
-    // Each file fits its own budget; together they pass the panel's. The DOM
-    // cost of many small files is the same as one huge file.
-    const many = Array.from({ length: 30 }, (_, i) => file(`f${i}.ts`, [hunk(100)]));
+  it('plans each file on its own size, however many there are', () => {
+    // There used to be a whole-panel budget here, from when every file's diff
+    // was mounted at once. The panel draws one file now, so a file's neighbours
+    // are none of its business — the fiftieth small file is as readable as the
+    // first, without a click.
+    const many = Array.from({ length: 50 }, (_, i) => file(`f${i}.ts`, [hunk(100)]));
     const plans = planFiles(many, NONE);
-    const shown = plans.filter((p) => p.visible > 0);
-    expect(shown.length).toBe(PANEL_LINE_BUDGET / 100);
-    expect(plans.at(-1)?.visible).toBe(0);
+    expect(plans.every((p) => p.visible === 100)).toBe(true);
   });
 
   it('always honors an explicit reveal, budget or not', () => {

@@ -276,6 +276,34 @@
   outline-offset: -1px;
 }
 
+/* An icon button that also says what it does. Same height and same quiet as
+   `.icon-button`, so the two sit in one row without one looking louder. */
+.labelled-button {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  height: 28px;
+  padding: 0 0.5rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.75rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.labelled-button:hover {
+  background: var(--surface-hover);
+  color: var(--fg-strong);
+}
+
+.labelled-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
 /* --- workspace ------------------------------------------------------------- */
 
 .repo-panels {

@@ -29,6 +29,7 @@ import { DialogHost, type ConfirmDialog } from '../history/CommitActions';
 import { FetchIcon, PullIcon, PushIcon, SpinnerIcon } from '../shell/icons';
 import styles from './RemoteBar.module.css';
 import {
+  BUSY_REASON,
   candidateRemotes,
   divergence,
   fetchBlock,
@@ -42,6 +43,9 @@ import {
 } from './remotes';
 
 type ActionKind = 'fetch' | 'pull' | 'pull-merge' | 'push' | 'publish';
+
+/** The running line, which a blocked button points at while it is on screen. */
+const PROGRESS_ID = 'remote-progress';
 
 interface Outcome {
   kind: ActionKind;
@@ -263,42 +267,122 @@ export function RemoteBar(): ReactNode {
     },
   ];
 
-  const blocked = actions.filter((action) => action.reason !== null);
+  /**
+   * The reasons to draw, and which line each button points at.
+   *
+   * Every gate answers "something else is running" before it answers anything
+   * else, so while one command is in flight all three actions carry the *same*
+   * sentence — and the strip used to print it once per button. One line per
+   * distinct sentence; the buttons that share it share its id.
+   */
+  const reasonLines: { id: string; text: string }[] = [];
+  const reasonIds = new Map<string, string>();
+  for (const action of actions) {
+    if (action.reason === null) continue;
+    const shared = reasonLines.find((line) => line.text === action.reason);
+    if (shared !== undefined) {
+      reasonIds.set(action.id, shared.id);
+      continue;
+    }
+    const id = `${action.id}-reason`;
+    reasonLines.push({ id, text: action.reason });
+    reasonIds.set(action.id, id);
+  }
+
+  // While *this* toolbar is the thing that is busy, "another git operation is
+  // already running" is a worse way of saying "Pushing…", which is on screen
+  // right below it. The progress line speaks for the buttons instead.
+  const showReasons = running === null;
+  const describe = (action: ToolbarAction): string | null =>
+    action.reason === null
+      ? null
+      : showReasons
+        ? (reasonIds.get(action.id) ?? null)
+        : PROGRESS_ID;
+
+  const strip =
+    (showReasons && reasonLines.length > 0) ||
+    running !== null ||
+    (outcome !== null && outcomeApplies) ? (
+      <div className={styles.messages}>
+        {showReasons &&
+          reasonLines.map((line) => (
+            <p
+              key={line.id}
+              id={line.id}
+              // A wait is not a failure. Only the reasons the user has to do
+              // something about are drawn in the danger colour.
+              className={line.text === BUSY_REASON ? styles.waiting : styles.reason}
+            >
+              {line.text}
+            </p>
+          ))}
+
+        {running !== null && (
+          <p className={styles.progress} id={PROGRESS_ID} role="status">
+            {RUNNING_LABEL[running]}
+          </p>
+        )}
+
+        {running === null && outcome !== null && outcomeApplies && (
+          <p
+            className={outcome.ok ? styles.success : styles.failure}
+            role={outcome.ok ? 'status' : 'alert'}
+          >
+            {outcome.ok
+              ? SUCCESS_LABEL[outcome.kind]
+              : `${FAILURE_LABEL[outcome.kind]} Krakenless is showing what git reported; read that message before trying again.`}
+          </p>
+        )}
+      </div>
+    ) : null;
 
   return (
     <section className={styles.bar} aria-label="Remote">
       <div className={styles.row}>
-        <div className={styles.actions}>
-          {actions.map((action) => (
-            <Action key={action.id} {...action} />
-          ))}
+        {/*
+          The buttons and the words about them are one column, so a reason or an
+          outcome is centred under the control it is about instead of running
+          along the left edge of the bar, where it reads as being about the
+          repository name it happens to sit under.
+        */}
+        <div className={styles.column}>
+          <div className={styles.actions}>
+            {actions.map((action) => (
+              <Action key={action.id} {...action} reasonId={describe(action)} />
+            ))}
 
-          {/*
-            Shown for a single candidate too: the remote set here is
-            reconstructed from the branch list, so a repository can have remotes
-            Krakenless has never seen. Publishing to a silent default would push
-            a new branch to a remote the user was never offered.
-          */}
-          {publishing && remotes.length > 0 && (
-            <div className={styles.remotePicker}>
-              <label className={styles.remoteLabel} htmlFor="remote-target">
-                Publish to
-              </label>
-              <select
-                id="remote-target"
-                className={styles.select}
-                value={publishRemote ?? ''}
-                disabled={busy}
-                onChange={(event) => setChoice({ repoRoot, remote: event.target.value })}
-              >
-                {remotes.map((remote) => (
-                  <option key={remote} value={remote}>
-                    {remote}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
+            {/*
+              Shown for a single candidate too: the remote set here is
+              reconstructed from the branch list, so a repository can have
+              remotes Krakenless has never seen. Publishing to a silent default
+              would push a new branch to a remote the user was never offered.
+            */}
+            {publishing && remotes.length > 0 && (
+              <div className={styles.remotePicker}>
+                <label className={styles.remoteLabel} htmlFor="remote-target">
+                  Publish to
+                </label>
+                <select
+                  id="remote-target"
+                  className={styles.select}
+                  value={publishRemote ?? ''}
+                  disabled={busy}
+                  onChange={(event) =>
+                    setChoice({ repoRoot, remote: event.target.value })
+                  }
+                >
+                  {remotes.map((remote) => (
+                    <option key={remote} value={remote}>
+                      {remote}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+
+          {strip}
         </div>
 
         <div className={styles.tracking}>
@@ -306,35 +390,6 @@ export function RemoteBar(): ReactNode {
           <span className={styles.detail}>{summary.detail}</span>
         </div>
       </div>
-
-      {(blocked.length > 0 ||
-        running !== null ||
-        (outcome !== null && outcomeApplies)) && (
-        <div className={styles.messages}>
-          {blocked.map((action) => (
-            <p key={action.id} id={`${action.id}-reason`} className={styles.reason}>
-              {action.reason}
-            </p>
-          ))}
-
-          {running !== null && (
-            <p className={styles.progress} role="status">
-              {RUNNING_LABEL[running]}
-            </p>
-          )}
-
-          {running === null && outcome !== null && outcomeApplies && (
-            <p
-              className={outcome.ok ? styles.success : styles.failure}
-              role={outcome.ok ? 'status' : 'alert'}
-            >
-              {outcome.ok
-                ? SUCCESS_LABEL[outcome.kind]
-                : `${FAILURE_LABEL[outcome.kind]} Krakenless is showing what git reported; read that message before trying again.`}
-            </p>
-          )}
-        </div>
-      )}
 
       {dialog !== null && (
         <DialogHost dialog={dialog} onClose={() => setDialog(null)} busy={busy} />
@@ -374,11 +429,20 @@ interface ToolbarAction {
 /**
  * The button itself. An enabled button is described by its hint, which is read
  * out but not drawn — the toolbar has no room for a sentence per control. A
- * blocked one points at the reason rendered in the strip below the toolbar,
- * where it is visible to everyone.
+ * blocked one points at the line in the strip below the toolbar that explains
+ * it, which several buttons may share: `reasonId` is that line, chosen by the
+ * toolbar, because the strip prints one copy of a sentence however many
+ * buttons it refuses.
  */
-function Action({ id, label, icon, reason, hint, onClick }: ToolbarAction): ReactNode {
-  const reasonId = `${id}-reason`;
+function Action({
+  id,
+  label,
+  icon,
+  reason,
+  hint,
+  reasonId,
+  onClick,
+}: ToolbarAction & { reasonId: string | null }): ReactNode {
   const hintId = `${id}-hint`;
 
   return (
@@ -387,7 +451,7 @@ function Action({ id, label, icon, reason, hint, onClick }: ToolbarAction): Reac
         type="button"
         className={styles.button}
         disabled={reason !== null}
-        aria-describedby={reason !== null ? reasonId : hintId}
+        aria-describedby={reasonId ?? hintId}
         onClick={onClick}
       >
         {icon}

@@ -129,11 +129,27 @@ export function FileIcon(props: IconProps): ReactNode {
   );
 }
 
+/**
+ * A gear: six teeth around a hub.
+ *
+ * It used to be a circle with eight spokes radiating past it, which is a sun,
+ * an asterisk or a brightness control depending on who is looking — anything
+ * but the thing every application puts its settings behind.
+ *
+ * The geometry is what makes a gear survive 16 pixels. Six teeth rather than
+ * eight or ten, so the notch between two of them stays wider than the stroke
+ * that draws it and does not fill in; a lighter stroke than the rest of the set
+ * for the same reason. The outline is one closed path — tooth top, flank, root,
+ * flank — so the teeth are part of the rim instead of spokes stuck onto it.
+ */
 export function SettingsIcon(props: IconProps): ReactNode {
   return (
     <Svg {...props}>
-      <circle cx="8" cy="8" r="2.25" />
-      <path d="M8 1.75v1.6M8 12.65v1.6M14.25 8h-1.6M3.35 8h-1.6M12.42 3.58l-1.13 1.13M4.71 11.29l-1.13 1.13M12.42 12.42l-1.13-1.13M4.71 4.71 3.58 3.58" />
+      <path
+        strokeWidth="1.3"
+        d="M14.82 6.92 A6.9 6.9 0 0 1 14.82 9.08 L12.25 9.14 A4.4 4.4 0 0 1 11.11 11.11 L12.34 13.36 A6.9 6.9 0 0 1 10.47 14.44 L9.14 12.25 A4.4 4.4 0 0 1 6.86 12.25 L5.53 14.44 A6.9 6.9 0 0 1 3.66 13.36 L4.89 11.11 A4.4 4.4 0 0 1 3.75 9.14 L1.18 9.08 A6.9 6.9 0 0 1 1.18 6.92 L3.75 6.86 A4.4 4.4 0 0 1 4.89 4.89 L3.66 2.64 A6.9 6.9 0 0 1 5.53 1.56 L6.86 3.75 A4.4 4.4 0 0 1 9.14 3.75 L10.47 1.56 A6.9 6.9 0 0 1 12.34 2.64 L11.11 4.89 A4.4 4.4 0 0 1 12.25 6.86 L14.82 6.92 Z"
+      />
+      <circle cx="8" cy="8" r="2.1" strokeWidth="1.3" />
     </Svg>
   );
 }

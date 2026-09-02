@@ -23,6 +23,11 @@ function renderSplitter(overrides: Partial<SplitterProps> = {}) {
   };
 }
 
+/** Waits for the frame a move was queued into. */
+function frame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
 describe('Splitter', () => {
   it('describes itself as a separator with its current size', () => {
     const { handle } = renderSplitter();
@@ -37,32 +42,69 @@ describe('Splitter', () => {
     expect(handle).toHaveAttribute('tabindex', '0');
   });
 
-  it('reports the travel since the drag began, not since the last move', () => {
+  it('reports the travel since the drag began, not since the last move', async () => {
     const { props, handle } = renderSplitter();
     fireEvent.mouseDown(handle, { clientX: 100, button: 0 });
     expect(props.onDragStart).toHaveBeenCalledTimes(1);
 
     fireEvent.mouseMove(window, { clientX: 130 });
+    await frame();
     fireEvent.mouseMove(window, { clientX: 160 });
+    await frame();
 
     expect(props.onDrag).toHaveBeenNthCalledWith(1, 30);
     expect(props.onDrag).toHaveBeenNthCalledWith(2, 60);
   });
 
-  it('measures a horizontal edge along the other axis', () => {
+  it('reports once per frame, however many moves arrive in it', async () => {
+    // A mouse outruns the screen. Rendering the window once per movement is
+    // what made dragging an edge crawl; only the last position of a frame can
+    // be seen, so the ones before it are dropped rather than queued.
+    const { props, handle } = renderSplitter();
+    fireEvent.mouseDown(handle, { clientX: 100, button: 0 });
+
+    for (const clientX of [110, 120, 130, 140, 150]) {
+      fireEvent.mouseMove(window, { clientX });
+    }
+    expect(props.onDrag).not.toHaveBeenCalled();
+
+    await frame();
+    expect(props.onDrag).toHaveBeenCalledTimes(1);
+    expect(props.onDrag).toHaveBeenCalledWith(50);
+  });
+
+  it('lands on the last position even when the button is released first', async () => {
+    // Otherwise a release between frames drops the movement that was still
+    // pending, and the panel settles a few pixels from where the user let go.
+    const { props, handle } = renderSplitter();
+    fireEvent.mouseDown(handle, { clientX: 100, button: 0 });
+    fireEvent.mouseMove(window, { clientX: 175 });
+    fireEvent.mouseUp(window);
+
+    expect(props.onDrag).toHaveBeenCalledWith(75);
+    expect(props.onDragEnd).toHaveBeenCalledTimes(1);
+
+    // And the cancelled frame does not report it a second time.
+    await frame();
+    expect(props.onDrag).toHaveBeenCalledTimes(1);
+  });
+
+  it('measures a horizontal edge along the other axis', async () => {
     const { props, handle } = renderSplitter({ orientation: 'horizontal' });
     fireEvent.mouseDown(handle, { clientY: 50, button: 0 });
     fireEvent.mouseMove(window, { clientY: 90, clientX: 400 });
+    await frame();
     expect(props.onDrag).toHaveBeenCalledWith(40);
   });
 
-  it('stops tracking once the button is released', () => {
+  it('stops tracking once the button is released', async () => {
     const { props, handle } = renderSplitter();
     fireEvent.mouseDown(handle, { clientX: 100, button: 0 });
     fireEvent.mouseUp(window);
     expect(props.onDragEnd).toHaveBeenCalledTimes(1);
 
     fireEvent.mouseMove(window, { clientX: 400 });
+    await frame();
     expect(props.onDrag).not.toHaveBeenCalled();
   });
 
@@ -83,7 +125,7 @@ describe('Splitter', () => {
     expect(props.onDrag).not.toHaveBeenCalled();
   });
 
-  it('leaves nothing listening when it unmounts mid-drag', () => {
+  it('leaves nothing listening when it unmounts mid-drag', async () => {
     // A repository closed while an edge is being dragged must not leave a
     // window listener holding the unmounted component's callbacks, nor a page
     // the user can no longer select text on.
@@ -92,6 +134,7 @@ describe('Splitter', () => {
     unmount();
 
     fireEvent.mouseMove(window, { clientX: 400 });
+    await frame();
     expect(props.onDrag).not.toHaveBeenCalled();
     expect(document.body.style.userSelect).toBe('');
   });

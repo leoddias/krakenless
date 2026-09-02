@@ -24,10 +24,14 @@ import {
   removeBranch,
   removeStash,
   restoreStash,
+  selectCommit,
   switchTo,
 } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
 import { isBusy } from '../../state/store';
+import { buildStashMenu } from '../history/commitMenu';
+import { copyText } from '../shell/clipboard';
+import { ContextMenu, type MenuSection } from '../shell/ContextMenu';
 import {
   BranchIcon,
   ChevronDownIcon,
@@ -462,6 +466,7 @@ export function RefsView(): ReactNode {
 
         <StashesSection
           busy={locked}
+          selectedOid={selectedOid}
           onAsk={(entry, kind) => {
             if (root === null) return;
             clearMessages();
@@ -726,7 +731,12 @@ function BranchButton({
       <span aria-hidden="true" className={styles.marker}>
         {branch.current ? '●' : '○'}
       </span>
-      {branch.name}
+      {/* Clipped at the front for the reason the remote rows are: a bare text
+          node cannot be ellipsised at all, and `feature/…` prefixes are what
+          long local names share. */}
+      <span className={`${styles.nameText} ${styles.nameTail}`}>
+        <bdi>{branch.name}</bdi>
+      </span>
       {branch.current && <span className={styles.srOnly}> (current branch)</span>}
     </button>
   );
@@ -765,11 +775,20 @@ function RemoteRow({
 
   return (
     <li className={styles.row}>
-      <span className={styles.name} title={trackingSummary(branch)}>
+      {/*
+        The tooltip carries the whole name because the row usually cannot: what
+        tells two remote branches apart is the tail (`origin/chore/…`), so the
+        text is clipped at the *front* and the full name is one hover away.
+        `trackingSummary` alone used to be the tooltip, which on a
+        remote-tracking branch is always the useless "No upstream branch".
+      */}
+      <span className={styles.name} title={`${branch.name} — ${trackingSummary(branch)}`}>
         <span aria-hidden="true" className={styles.marker}>
           ○
         </span>
-        <span className={styles.nameText}>{branch.name}</span>
+        <span className={`${styles.nameText} ${styles.nameTail}`}>
+          <bdi>{branch.name}</bdi>
+        </span>
       </span>
       <Divergence branch={branch} />
       {local === null ? (
@@ -1011,17 +1030,82 @@ function DeleteConfirmation({
 
 // --- stashes ----------------------------------------------------------------
 
+/** The stash whose context menu is open, and where the pointer opened it. */
+interface StashMenuTarget {
+  entry: StashEntry;
+  x: number;
+  y: number;
+}
+
+/**
+ * The stash list.
+ *
+ * Two rules shape the rows. A stash is *opened* before it is acted on: the row
+ * is a button that selects the stash commit, so the diff panel shows what is
+ * inside it — applying or popping a stash whose contents nobody has seen is how
+ * work gets overwritten by a surprise. And the actions live on a context menu
+ * rather than on buttons that fade in under the pointer: those sat on top of
+ * the message, they were invisible until the row was hovered, and `Drop` was a
+ * few pixels from `Pop`. The menu is the one the history panel opens on a stash
+ * row, built by `buildStashMenu`, so the two cannot drift into offering
+ * different things.
+ */
 function StashesSection({
   busy,
+  selectedOid,
   onAsk,
 }: {
   busy: boolean;
+  selectedOid: string | null;
   onAsk: (entry: StashEntry, kind: StashActionKind) => void;
 }): ReactNode {
+  const store = useStore();
   const stashes = useAppState((state) => state.stashes);
+  const status = useAppState((state) => state.status);
   const now = new Date();
   const [open, setOpen] = useState(true);
+  const [menu, setMenu] = useState<StashMenuTarget | null>(null);
   const bodyId = useId();
+
+  const sectionsFor = (entry: StashEntry): MenuSection[] => {
+    const offers = buildStashMenu(entry, {
+      busy,
+      hasConflicts: status.state === 'ready' && status.value.hasConflicts,
+    }).map((section) =>
+      section.map((item) => {
+        const action = item.action;
+        return {
+          id: item.id,
+          label: item.label,
+          disabled: item.disabled,
+          ...(action === undefined
+            ? {}
+            : {
+                onSelect: (): void => {
+                  // Neither branch acts on its own: a stash action opens the
+                  // question this panel already asks, and the reason the user
+                  // agrees to is what the git layer validates.
+                  if (action.kind === 'stash') onAsk(action.entry, action.op);
+                  else if (action.kind === 'copy') void copyText(action.text);
+                },
+              }),
+        };
+      }),
+    );
+    // First, because it is what a click on the row already does and the menu is
+    // where a user looks to find out that it does it.
+    return [
+      [
+        {
+          id: 'stash-show',
+          label: 'Show changes',
+          disabled: null,
+          onSelect: () => void selectCommit(store, entry.oid),
+        },
+      ],
+      ...offers,
+    ];
+  };
 
   return (
     <section className={styles.section} aria-label="Stashes">
@@ -1059,7 +1143,22 @@ function StashesSection({
             <ul className={styles.list}>
               {stashes.value.map((entry) => (
                 <li key={entry.ref} className={styles.stashRow}>
-                  <div className={styles.stashText}>
+                  <button
+                    type="button"
+                    className={`${styles.stashButton} ${
+                      selectedOid === entry.oid ? styles.stashSelected : ''
+                    }`}
+                    aria-current={selectedOid === entry.oid ? 'true' : undefined}
+                    // The whole message, because the row shows one clipped line
+                    // of it. The context-menu key fires the same handler as a
+                    // right-click, so the actions are reachable from here too.
+                    title={`${stashLabel(entry)}\n\nShow what ${entry.ref} changed. Right-click for apply, pop and delete.`}
+                    onClick={() => void selectCommit(store, entry.oid)}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      setMenu({ entry, x: event.clientX, y: event.clientY });
+                    }}
+                  >
                     <span className={styles.stashMessage}>{stashLabel(entry)}</span>
                     <span className={styles.stashMeta}>
                       <span className={styles.stashRef}>{entry.ref}</span>
@@ -1068,41 +1167,22 @@ function StashesSection({
                         {formatRelativeDate(entry.date, now)}
                       </time>
                     </span>
-                  </div>
-                  <div className={styles.rowActions}>
-                    <button
-                      type="button"
-                      className={styles.button}
-                      disabled={busy}
-                      title={`Apply ${entry.ref} and keep it in the list`}
-                      onClick={() => onAsk(entry, 'apply')}
-                    >
-                      Apply
-                    </button>
-                    <button
-                      type="button"
-                      className={styles.button}
-                      disabled={busy}
-                      title={`Apply ${entry.ref} and remove it from the list`}
-                      onClick={() => onAsk(entry, 'pop')}
-                    >
-                      Pop
-                    </button>
-                    <button
-                      type="button"
-                      className={`${styles.button} ${styles.danger}`}
-                      disabled={busy}
-                      title={`Remove ${entry.ref} without applying it`}
-                      onClick={() => onAsk(entry, 'drop')}
-                    >
-                      Drop
-                    </button>
-                  </div>
+                  </button>
                 </li>
               ))}
             </ul>
           ))}
       </div>
+
+      {menu !== null && (
+        <ContextMenu
+          sections={sectionsFor(menu.entry)}
+          x={menu.x}
+          y={menu.y}
+          label={`Actions for stash ${menu.entry.ref}`}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </section>
   );
 }

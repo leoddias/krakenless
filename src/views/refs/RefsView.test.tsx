@@ -8,6 +8,7 @@ import {
   removeBranch,
   removeStash,
   restoreStash,
+  selectCommit,
   switchTo,
 } from '../../state/actions';
 import { StoreProvider } from '../../state/hooks';
@@ -22,6 +23,7 @@ vi.mock('../../state/actions', () => ({
   removeBranch: vi.fn(),
   restoreStash: vi.fn(),
   removeStash: vi.fn(),
+  selectCommit: vi.fn(),
 }));
 
 const refreshBranchesMock = vi.mocked(refreshBranches);
@@ -31,6 +33,7 @@ const createMock = vi.mocked(createAndSwitch);
 const removeBranchMock = vi.mocked(removeBranch);
 const restoreStashMock = vi.mocked(restoreStash);
 const removeStashMock = vi.mocked(removeStash);
+const selectCommitMock = vi.mocked(selectCommit);
 
 function branch(overrides: Partial<Branch> & { name: string }): Branch {
   return {
@@ -241,7 +244,7 @@ describe('collapsing the sections', () => {
     for (const name of ['Branches', 'Local', 'Remote', 'Stashes']) {
       expect(header(name)).toHaveAttribute('aria-expanded', 'true');
     }
-    expect(screen.getByRole('button', { name: /feature\/x/ })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'feature/x' })).toBeVisible();
     expect(screen.getByText('WIP on main: parser')).toBeVisible();
   });
 
@@ -250,13 +253,13 @@ describe('collapsing the sections', () => {
     await click(header('Branches'));
 
     expect(header('Branches')).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.queryByRole('button', { name: /feature\/x/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'feature/x' })).not.toBeInTheDocument();
     // The stash list is a separate section and is left alone.
     expect(screen.getByText('WIP on main: parser')).toBeVisible();
 
     await click(header('Branches'));
     expect(header('Branches')).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.getByRole('button', { name: /feature\/x/ })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'feature/x' })).toBeVisible();
   });
 
   it('keeps the count on a collapsed header, so the section still says how much it holds', async () => {
@@ -270,7 +273,7 @@ describe('collapsing the sections', () => {
     renderLoaded();
     await click(header('Local'));
 
-    expect(screen.queryByRole('button', { name: /feature\/x/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'feature/x' })).not.toBeInTheDocument();
     expect(within(region('Remote branches')).getByText('origin/main')).toBeVisible();
   });
 });
@@ -279,7 +282,7 @@ describe('branch list', () => {
   it('separates local from remote branches', () => {
     renderLoaded();
     const local = within(region('Local branches'));
-    expect(local.getByRole('button', { name: /feature\/x/ })).toBeInTheDocument();
+    expect(local.getByRole('button', { name: 'feature/x' })).toBeInTheDocument();
     expect(local.queryByText('origin/main')).not.toBeInTheDocument();
     expect(
       within(region('Remote branches')).getByText('origin/main'),
@@ -306,7 +309,7 @@ describe('branch list', () => {
 
   it('switches on click', async () => {
     const store = renderLoaded();
-    await click(screen.getByRole('button', { name: /feature\/x/ }));
+    await click(screen.getByRole('button', { name: 'feature/x' }));
     expect(switchToMock).toHaveBeenCalledWith(store, 'feature/x');
   });
 
@@ -322,7 +325,7 @@ describe('branch list', () => {
       });
       return false;
     });
-    await click(screen.getByRole('button', { name: /feature\/x/ }));
+    await click(screen.getByRole('button', { name: 'feature/x' }));
 
     const alert = screen.getByRole('alert');
     expect(alert).toHaveTextContent('Could not switch to "feature/x"');
@@ -332,13 +335,13 @@ describe('branch list', () => {
 
   it('says nothing extra when the switch worked', async () => {
     renderLoaded();
-    await click(screen.getByRole('button', { name: /feature\/x/ }));
+    await click(screen.getByRole('button', { name: 'feature/x' }));
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('reaches the branch with the keyboard', () => {
     renderLoaded();
-    const target = screen.getByRole('button', { name: /feature\/x/ });
+    const target = screen.getByRole('button', { name: 'feature/x' });
     act(() => target.focus());
     expect(document.activeElement).toBe(target);
     // jsdom does not synthesise the native Enter/Space activation of a button,
@@ -401,14 +404,30 @@ describe('branch list', () => {
       store.dispatch({ type: 'busy', busy: true });
     });
     // Opening and closing a section is not a git command, so those headers
-    // stay live while one runs.
+    // stay live while one runs — and neither is looking inside a stash, which
+    // is why the stash rows are excluded here and asserted below instead.
+    const stashRows = new Set(within(region('Stashes')).getAllByRole('button'));
     const actions = screen
       .getAllByRole('button')
-      .filter((button) => !button.hasAttribute('aria-expanded'));
+      .filter((button) => !button.hasAttribute('aria-expanded'))
+      .filter((button) => !stashRows.has(button));
     for (const button of actions) {
       expect(button).toBeDisabled();
     }
     expect(screen.getByLabelText('New branch')).toBeDisabled();
+  });
+
+  it('still lets a stash be read while a git command is in flight', async () => {
+    const store = renderRefs((prepared) => {
+      openRepo(prepared);
+      prepared.dispatch({ type: 'stashes/loaded', stashes: STASHES });
+      prepared.dispatch({ type: 'busy', busy: true });
+    });
+    // Selecting a stash runs no command against the repository, and a user
+    // waiting on a push should not also be stopped from reading one.
+    const row = screen.getByText('WIP on main: parser').closest('button');
+    await click(row as HTMLElement);
+    expect(selectCommitMock).toHaveBeenCalledWith(store, 'b'.repeat(40));
   });
 });
 
@@ -777,6 +796,19 @@ describe('stash list', () => {
     return screen.getByText(message).closest('li') as HTMLElement;
   }
 
+  /** The row's own control — the one that opens the stash and its menu. */
+  function stashButton(message: string): HTMLElement {
+    return within(stashRow(message)).getByRole('button');
+  }
+
+  /** Right-click the row, then choose an item from the menu that opens. */
+  async function chooseStashAction(message: string, item: string): Promise<void> {
+    await act(async () => {
+      fireEvent.contextMenu(stashButton(message));
+    });
+    await click(screen.getByRole('menuitem', { name: item }));
+  }
+
   it('shows the message, the branch and a relative date', () => {
     renderLoaded();
     const row = within(stashRow('WIP on main: parser'));
@@ -785,26 +817,61 @@ describe('stash list', () => {
     expect(row.getByTitle('2026-08-19T10:00:00Z')).toBeInTheDocument();
   });
 
-  it('distinguishes apply from pop', () => {
+  it('keeps its actions on a context menu, not on the row', () => {
     renderLoaded();
-    const row = within(stashRow('WIP on main: parser'));
-    expect(row.getByRole('button', { name: 'Apply' })).toHaveAttribute(
-      'title',
-      'Apply stash@{0} and keep it in the list',
+    // Nothing destructive sits a few pixels from the message: the row's only
+    // control opens the stash.
+    expect(within(stashRow('WIP on main: parser')).getAllByRole('button')).toHaveLength(
+      1,
     );
-    expect(row.getByRole('button', { name: 'Pop' })).toHaveAttribute(
-      'title',
-      'Apply stash@{0} and remove it from the list',
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
+  it('offers show, apply, pop and delete on the right-click menu', async () => {
+    renderLoaded();
+    await act(async () => {
+      fireEvent.contextMenu(stashButton('WIP on main: parser'));
+    });
+    const menu = within(
+      screen.getByRole('menu', { name: 'Actions for stash stash@{0}' }),
     );
+    for (const item of ['Show changes', 'Apply Stash', 'Pop Stash', 'Delete Stash']) {
+      expect(menu.getByRole('menuitem', { name: item })).toBeInTheDocument();
+    }
+  });
+
+  it('shows what a stash changed when its row is clicked', async () => {
+    const store = renderLoaded();
+    await click(stashButton('WIP on feature/x: layout'));
+    // The oid the row was drawn from, so the diff panel cannot end up showing
+    // another entry that has since taken that `stash@{n}`.
+    expect(selectCommitMock).toHaveBeenCalledWith(store, 'c'.repeat(40));
+  });
+
+  it('carries the whole message in the row tooltip', () => {
+    renderLoaded();
+    // The row draws one clipped line of it; a stash cannot be judged from
+    // "On main: Auto stash before checking ou…".
+    expect(stashButton('WIP on main: parser')).toHaveAttribute(
+      'title',
+      expect.stringContaining('WIP on main: parser'),
+    );
+  });
+
+  it('refuses to act while a git command is running', async () => {
+    const store = renderLoaded();
+    act(() => store.dispatch({ type: 'busy', busy: true }));
+    await act(async () => {
+      fireEvent.contextMenu(stashButton('WIP on main: parser'));
+    });
+    await click(screen.getByRole('menuitem', { name: 'Pop Stash' }));
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(restoreStashMock).not.toHaveBeenCalled();
   });
 
   it('applies the entry it was rendered from, oid included', async () => {
     const store = renderLoaded();
-    await click(
-      within(stashRow('WIP on feature/x: layout')).getByRole('button', {
-        name: 'Apply',
-      }),
-    );
+    await chooseStashAction('WIP on feature/x: layout', 'Apply Stash');
     await click(screen.getByRole('button', { name: 'Apply stash' }));
     expect(restoreStashMock).toHaveBeenCalledWith(
       store,
@@ -816,11 +883,7 @@ describe('stash list', () => {
 
   it('pops with the oid, so a shifted list cannot be popped by position', async () => {
     const store = renderLoaded();
-    await click(
-      within(stashRow('WIP on feature/x: layout')).getByRole('button', {
-        name: 'Pop',
-      }),
-    );
+    await chooseStashAction('WIP on feature/x: layout', 'Pop Stash');
     await click(screen.getByRole('button', { name: 'Pop stash' }));
     expect(restoreStashMock).toHaveBeenCalledWith(
       store,
@@ -832,11 +895,7 @@ describe('stash list', () => {
 
   it('drops with the oid and the question the user answered', async () => {
     const store = renderLoaded();
-    await click(
-      within(stashRow('WIP on main: parser')).getByRole('button', {
-        name: 'Drop',
-      }),
-    );
+    await chooseStashAction('WIP on main: parser', 'Delete Stash');
     await click(screen.getByRole('button', { name: 'Drop stash' }));
     expect(removeStashMock).toHaveBeenCalledWith(
       store,
@@ -847,11 +906,7 @@ describe('stash list', () => {
 
   it('does not touch a stash until the question is answered', async () => {
     renderLoaded();
-    await click(
-      within(stashRow('WIP on main: parser')).getByRole('button', {
-        name: 'Drop',
-      }),
-    );
+    await chooseStashAction('WIP on main: parser', 'Delete Stash');
     expect(dialog()).toHaveTextContent('Drop stash "WIP on main: parser"');
     expect(removeStashMock).not.toHaveBeenCalled();
     fireEvent.keyDown(dialog(), { key: 'Escape' });
@@ -860,11 +915,7 @@ describe('stash list', () => {
 
   it('shows the recovery command after a drop, naming the oid', async () => {
     renderLoaded();
-    await click(
-      within(stashRow('WIP on main: parser')).getByRole('button', {
-        name: 'Drop',
-      }),
-    );
+    await chooseStashAction('WIP on main: parser', 'Delete Stash');
     await click(screen.getByRole('button', { name: 'Drop stash' }));
     expect(screen.getByRole('status')).toHaveTextContent(
       `git stash apply ${'b'.repeat(40)}`,
@@ -883,11 +934,7 @@ describe('stash list', () => {
       });
       return false;
     });
-    await click(
-      within(stashRow('WIP on main: parser')).getByRole('button', {
-        name: 'Drop',
-      }),
-    );
+    await chooseStashAction('WIP on main: parser', 'Delete Stash');
     await click(screen.getByRole('button', { name: 'Drop stash' }));
 
     expect(removeStashMock).toHaveBeenCalledTimes(1);
@@ -907,9 +954,7 @@ describe('stash list', () => {
       });
       return false;
     });
-    await click(
-      within(stashRow('WIP on main: parser')).getByRole('button', { name: 'Pop' }),
-    );
+    await chooseStashAction('WIP on main: parser', 'Pop Stash');
     await click(screen.getByRole('button', { name: 'Pop stash' }));
 
     const alert = screen.getByRole('alert');
@@ -923,13 +968,11 @@ describe('stash list', () => {
 
   it('keeps the recovery command on screen through later clicks', async () => {
     renderLoaded();
-    await click(
-      within(stashRow('WIP on main: parser')).getByRole('button', { name: 'Drop' }),
-    );
+    await chooseStashAction('WIP on main: parser', 'Delete Stash');
     await click(screen.getByRole('button', { name: 'Drop stash' }));
     expect(screen.getByRole('status')).toHaveTextContent('git stash apply');
 
-    await click(screen.getByRole('button', { name: /feature\/x/ }));
+    await click(screen.getByRole('button', { name: 'feature/x' }));
     expect(screen.getByRole('status')).toHaveTextContent(
       `git stash apply ${'b'.repeat(40)}`,
     );
@@ -937,9 +980,7 @@ describe('stash list', () => {
 
   it('names the repository the dropped stash lives in', async () => {
     renderLoaded();
-    await click(
-      within(stashRow('WIP on main: parser')).getByRole('button', { name: 'Drop' }),
-    );
+    await chooseStashAction('WIP on main: parser', 'Delete Stash');
     await click(screen.getByRole('button', { name: 'Drop stash' }));
     expect(screen.getByRole('status')).toHaveTextContent('/repo');
   });
@@ -947,18 +988,14 @@ describe('stash list', () => {
   it('shows one question at a time', async () => {
     renderLoaded();
     await click(screen.getByTitle('Delete feature/x'));
-    await click(
-      within(stashRow('WIP on main: parser')).getByRole('button', { name: 'Drop' }),
-    );
+    await chooseStashAction('WIP on main: parser', 'Delete Stash');
     expect(screen.getAllByRole('alertdialog')).toHaveLength(1);
     expect(dialog()).toHaveTextContent('Drop stash "WIP on main: parser"');
   });
 
   it('drops the stash question when the open repository changes', async () => {
     const store = renderLoaded();
-    await click(
-      within(stashRow('WIP on main: parser')).getByRole('button', { name: 'Drop' }),
-    );
+    await chooseStashAction('WIP on main: parser', 'Delete Stash');
     act(() =>
       store.dispatch({
         type: 'repo/opened',
@@ -971,22 +1008,14 @@ describe('stash list', () => {
 
   it('says which side of pop happened', async () => {
     renderLoaded();
-    await click(
-      within(stashRow('WIP on main: parser')).getByRole('button', {
-        name: 'Pop',
-      }),
-    );
+    await chooseStashAction('WIP on main: parser', 'Pop Stash');
     await click(screen.getByRole('button', { name: 'Pop stash' }));
     expect(screen.getByRole('status')).toHaveTextContent('it is no longer in the list');
   });
 
   it('says an applied stash is still there', async () => {
     renderLoaded();
-    await click(
-      within(stashRow('WIP on main: parser')).getByRole('button', {
-        name: 'Apply',
-      }),
-    );
+    await chooseStashAction('WIP on main: parser', 'Apply Stash');
     await click(screen.getByRole('button', { name: 'Apply stash' }));
     expect(screen.getByRole('status')).toHaveTextContent('it is still in the list');
   });

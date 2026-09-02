@@ -244,17 +244,30 @@
 
 /* Row actions stay out of the way until the row is under the pointer or the
    keyboard. Faded rather than hidden: `visibility` would take them out of the
-   tab order, which is the only way a keyboard reaches them. */
-.row .button,
-.stashRow .button {
+   tab order, which is the only way a keyboard reaches them. Stash rows have no
+   such buttons — their actions are on a context menu. */
+.row .button {
   opacity: 0;
 }
 
 .row:hover .button,
-.stashRow:hover .button,
-.row:focus-within .button,
-.stashRow:focus-within .button {
+.row:focus-within .button {
   opacity: 1;
+}
+
+/* The dimming `.button:disabled` applies is written at the same specificity as
+   the rule above and later in the file, so a disabled row button *won* — and
+   the moment a push started, every Delete in the branch list faded in at half
+   strength, filling the sidebar with destructive buttons at exactly the moment
+   none of them could be clicked. Said at row level, where it wins: still
+   hidden, still dimmed once the row is actually under the pointer. */
+.row .button:disabled {
+  opacity: 0;
+}
+
+.row:hover .button:disabled,
+.row:focus-within .button:disabled {
+  opacity: 0.5;
 }
 
 /* --- branch rows ----------------------------------------------------------- */
@@ -287,6 +300,16 @@
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* Clipped at the *front*, not the back: `origin/chore/…` is the half every row
+   shares, and the tail is what identifies the branch. The box is laid out
+   right-to-left so the ellipsis lands on the left; the `<bdi>` inside keeps the
+   name itself reading left-to-right, and `text-align: left` keeps a short name
+   flush against the marker instead of drifting to the right edge. */
+.nameTail {
+  direction: rtl;
+  text-align: left;
 }
 
 .name:focus-visible {
@@ -386,22 +409,47 @@
 /* --- stash rows ------------------------------------------------------------ */
 
 .stashRow {
-  align-items: flex-start;
-  padding-top: 0.2rem;
-  padding-bottom: 0.2rem;
+  align-items: stretch;
+  padding: 0 0.5rem 0 0.75rem;
 }
 
-.stashText {
+/* The whole row is the control that opens the stash, so it carries the row's
+   padding rather than sitting inside it. */
+.stashButton {
   display: flex;
   flex-direction: column;
   gap: 0.05rem;
   flex: 1 1 auto;
   min-width: 0;
+  padding: 0.2rem;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
+.stashButton:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.stashSelected {
+  color: var(--accent);
+}
+
+/* One line, clipped. A stash message is a whole sentence git wrote — "On main:
+   Auto stash before checking out …" — and letting it wrap turned every row into
+   a paragraph and the list into something no one could scan. The full text is
+   in the row's tooltip. */
 .stashMessage {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  max-width: 100%;
   font-size: 0.8125rem;
-  overflow-wrap: anywhere;
 }
 
 .stashMeta {
@@ -414,12 +462,6 @@
 
 .stashRef {
   font-family: var(--font-mono);
-}
-
-.rowActions {
-  display: flex;
-  flex: none;
-  gap: 0.25rem;
 }
 
 /* --- controls -------------------------------------------------------------- */

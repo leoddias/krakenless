@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useRef,
@@ -251,14 +252,21 @@ function Toolbar({
         >
           <RefreshIcon />
         </button>
+        {/*
+          Labelled, unlike its neighbour: Refresh repeats a keyboard shortcut
+          people already know from every other app, while settings is where a
+          user goes looking when they do not know what they are looking for —
+          a bare glyph makes that a guess. The accessible name comes from the
+          visible word now, so there is no second copy to drift from it.
+        */}
         <button
           type="button"
-          className="icon-button"
-          aria-label="Settings"
+          className="labelled-button"
           title="Settings"
           onClick={onOpenSettings}
         >
           <SettingsIcon />
+          <span>Settings</span>
         </button>
       </div>
     </header>
@@ -476,6 +484,21 @@ function RepoPane({
   );
 }
 
+/**
+ * The panels, wrapped so a layout change cannot re-render them.
+ *
+ * Each of these takes no props and reads the store itself, so `memo` makes a
+ * re-render of the grid free for them: they update when their own data changes
+ * and at no other time. Without it, every mouse-move of a splitter rebuilt the
+ * entire commit list, the diff and the working tree — a few hundred rows and
+ * their graph cells per frame — and the drag crawled while the layout it was
+ * changing was three numbers.
+ */
+const Refs = memo(RefsView);
+const History = memo(HistoryView);
+const Diff = memo(DiffView);
+const Changes = memo(ChangesView);
+
 /** The three panels and the edges the user can drag. */
 function PanelGrid(): ReactNode {
   const { layout, beginDrag, setLayout, endDrag, startRef } = useLayout();
@@ -506,7 +529,7 @@ function PanelGrid(): ReactNode {
         aria-label="Branches and stashes"
         tabIndex={-1}
       >
-        <RefsView />
+        <Refs />
       </section>
 
       <Splitter
@@ -537,7 +560,7 @@ function PanelGrid(): ReactNode {
           tabIndex={-1}
           style={{ flexGrow: layout.historyRatio }}
         >
-          <HistoryView />
+          <History />
         </section>
 
         <Splitter
@@ -568,7 +591,7 @@ function PanelGrid(): ReactNode {
           tabIndex={-1}
           style={{ flexGrow: 1 - layout.historyRatio }}
         >
-          <DiffView />
+          <Diff />
         </section>
       </div>
 
@@ -596,7 +619,7 @@ function PanelGrid(): ReactNode {
       />
 
       <section className="repo-panels__changes" aria-label="Working tree" tabIndex={-1}>
-        <ChangesView />
+        <Changes />
       </section>
     </div>
   );

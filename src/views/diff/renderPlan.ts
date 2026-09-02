@@ -8,6 +8,12 @@
  * a budget and puts everything beyond it behind an explicit control that says
  * exactly how many lines it is holding back.
  *
+ * The panel now renders one file at a time (the list is the navigation, the
+ * body is the file you picked), so the budget is per file. There used to be a
+ * whole-panel budget on top of it, for when every file's diff was mounted at
+ * once; with one body on screen it could only do harm — it was spent walking
+ * files nobody was looking at, and collapsed the small file that was.
+ *
  * Pure functions, so the thresholds and the arithmetic are unit-testable
  * without rendering anything.
  */
@@ -20,13 +26,6 @@ import type { FileDiff, Hunk } from '../../git/types';
  * enough that a generated file does not take the panel down with it.
  */
 export const FILE_LINE_BUDGET = 400;
-
-/**
- * Total lines the panel renders by default across all files. Once the sum of
- * auto-expanded files passes this, the rest start collapsed even when small:
- * five hundred ten-line files are the same DOM as one five-thousand-line file.
- */
-export const PANEL_LINE_BUDGET = 2_000;
 
 /** How many more lines one click on "Show more" reveals. */
 export const REVEAL_CHUNK = 1_000;
@@ -55,13 +54,14 @@ export function planKey(file: FileDiff): string {
  * file key. A revealed file is always honored in full, budget or not: the
  * budget exists to protect the user from an accidental mountain, not to
  * overrule a deliberate click.
+ *
+ * Every file is planned, not just the one on screen: the list beside the body
+ * shows each file's added and deleted counts, and those come from here.
  */
 export function planFiles(
   files: readonly FileDiff[],
   revealed: ReadonlyMap<string, number>,
 ): FilePlan[] {
-  let remaining = PANEL_LINE_BUDGET;
-
   return files.map((file) => {
     let total = 0;
     let added = 0;
@@ -76,15 +76,12 @@ export function planFiles(
 
     const key = planKey(file);
     const asked = revealed.get(key);
-    let visible: number;
-    if (asked !== undefined) {
-      visible = Math.min(total, asked);
-    } else if (total <= FILE_LINE_BUDGET && total <= remaining) {
-      visible = total;
-    } else {
-      visible = 0;
-    }
-    remaining -= visible;
+    const visible =
+      asked !== undefined
+        ? Math.min(total, asked)
+        : total <= FILE_LINE_BUDGET
+          ? total
+          : 0;
 
     return { file, key, total, added, deleted, visible };
   });

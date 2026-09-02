@@ -301,10 +301,46 @@ describe('DiffView file selection', () => {
     fileDiff({ oldPath: 'src/b.ts', newPath: 'src/b.ts', kind: 'added', binary: true }),
   ];
 
-  it('shows every file while no path is selected', () => {
+  it('shows the first file, and only that one, while no path is selected', () => {
+    // Every commit click lands in this state. Mounting all of them here is what
+    // made walking a history of large commits lock the window up.
     renderView((store) => store.dispatch({ type: 'diff/loaded', files }));
     expect(screen.getByRole('article', { name: 'src/a.ts' })).toBeInTheDocument();
+    expect(screen.queryByRole('article', { name: 'src/b.ts' })).not.toBeInTheDocument();
+  });
+
+  it('marks the file it fell back to, so the list is not lying', () => {
+    renderView((store) => store.dispatch({ type: 'diff/loaded', files }));
+    const list = within(screen.getByRole('navigation', { name: 'Changed files' }));
+    expect(list.getByRole('button', { name: /src\/a\.ts/ })).toHaveAttribute(
+      'aria-current',
+      'true',
+    );
+  });
+
+  it('falls back per diff instead of carrying the last file over', () => {
+    const store = renderView((s) => s.dispatch({ type: 'diff/loaded', files }));
+    fireEvent.click(screen.getByRole('button', { name: /src\/b\.ts/ }));
     expect(screen.getByRole('article', { name: 'src/b.ts' })).toBeInTheDocument();
+
+    // Another commit: the selection is cleared with it, so the new diff opens
+    // on its own first file rather than on "src/b.ts is not in this diff".
+    act(() => {
+      store.dispatch({ type: 'selection/commit', oid: 'f'.repeat(40) });
+      store.dispatch({
+        type: 'diff/loaded',
+        files: [
+          fileDiff({ oldPath: 'src/c.ts', newPath: 'src/c.ts', hunks: [sampleHunk] }),
+        ],
+      });
+    });
+    expect(screen.getByRole('article', { name: 'src/c.ts' })).toBeInTheDocument();
+  });
+
+  it('lists how many files changed, without offering to render them all', () => {
+    renderView((store) => store.dispatch({ type: 'diff/loaded', files }));
+    expect(screen.getByText('2 changed files')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /All files/ })).toBeNull();
   });
 
   it('selects a file through the store and narrows the body to it', () => {
@@ -317,20 +353,17 @@ describe('DiffView file selection', () => {
     expect(screen.queryByRole('article', { name: 'src/a.ts' })).not.toBeInTheDocument();
   });
 
-  it('goes back to all files and marks the active entry', () => {
+  it('moves the body when another file is picked', () => {
     const store = renderView((s) => {
       s.dispatch({ type: 'diff/loaded', files });
       s.dispatch({ type: 'selection/path', path: 'src/b.ts' });
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /All files/ }));
+    fireEvent.click(screen.getByRole('button', { name: /src\/a\.ts/ }));
 
-    expect(store.getState().selection.path).toBeNull();
-    expect(screen.getByRole('button', { name: /All files/ })).toHaveAttribute(
-      'aria-current',
-      'true',
-    );
+    expect(store.getState().selection.path).toBe('src/a.ts');
     expect(screen.getByRole('article', { name: 'src/a.ts' })).toBeInTheDocument();
+    expect(screen.queryByRole('article', { name: 'src/b.ts' })).not.toBeInTheDocument();
   });
 
   it('says so when the selected path is not part of the diff', () => {
@@ -564,7 +597,7 @@ describe('DiffView — large diffs stay responsive', () => {
     expect(lineRows().length).toBe(2_000);
   });
 
-  it('leaves small files fully rendered next to a collapsed big one', () => {
+  it('leaves a small file fully rendered even after a huge one', () => {
     renderView((store) =>
       store.dispatch({
         type: 'diff/loaded',
@@ -574,7 +607,9 @@ describe('DiffView — large diffs stay responsive', () => {
         ],
       }),
     );
-    // The small neighbour renders in full; only the big one is collapsed.
+    // Its neighbour being enormous is not its problem: each file is planned on
+    // its own size, and only the file on screen is built.
+    fireEvent.click(screen.getByRole('button', { name: /src\/a\.ts/ }));
     expect(lineRows().length).toBe(sampleHunk.lines.length);
   });
 
@@ -626,7 +661,7 @@ describe('DiffView — large diffs stay responsive', () => {
 });
 
 describe('DiffView — collapse reasons stay honest', () => {
-  it('does not call a small file large when the panel budget collapsed it', () => {
+  it('renders a small file whatever the diff around it looks like', () => {
     const hunk100: Hunk = {
       header: '@@ -1,100 +1,100 @@',
       oldStart: 1,
@@ -649,9 +684,11 @@ describe('DiffView — collapse reasons stay honest', () => {
       }),
     );
 
-    // The 21st file fits the per-file budget but not the panel's.
-    expect(screen.getByText(/to keep this panel fast/)).toBeInTheDocument();
-    expect(screen.queryByText(/This diff is large \(100 lines\)/)).toBeNull();
+    // A 100-line file is a 100-line file, whether it is the first of twenty-one
+    // or the only one. Nothing is held back, and nothing calls it large.
+    expect(lineRows().length).toBe(100);
+    expect(screen.queryByText(/This diff is large/)).toBeNull();
+    expect(screen.queryByText(/not rendered yet/)).toBeNull();
   });
 });
 

@@ -221,6 +221,17 @@ export interface Gate {
 }
 
 /**
+ * The one refusal that is not a problem: something else is mid-flight and this
+ * will be clickable again in a moment.
+ *
+ * Named rather than repeated as a literal because the toolbar styles it
+ * differently — every other reason is something the user has to act on, and
+ * drawing "wait a second" in the same alarm red as "your branch has diverged"
+ * teaches people to ignore the red.
+ */
+export const BUSY_REASON = 'Another git operation is already running.';
+
+/**
  * Why an action cannot run right now, or `null` when it can.
  *
  * These strings are rendered next to the disabled button, not hidden in a
@@ -230,7 +241,7 @@ export interface Gate {
  */
 export function fetchBlock(gate: Gate): string | null {
   if (!gate.repoOpen) return 'No repository is open.';
-  if (gate.busy) return 'Another git operation is already running.';
+  if (gate.busy) return BUSY_REASON;
   return null;
 }
 
@@ -389,7 +400,7 @@ export function pushIntent(gate: Gate): PushIntent | null {
 
 function sharedBlock(gate: Gate): string | null {
   if (!gate.repoOpen) return 'No repository is open.';
-  if (gate.busy) return 'Another git operation is already running.';
+  if (gate.busy) return BUSY_REASON;
   if (gate.statusState === 'loading') {
     return 'Waiting for the branch status — Krakenless will not act on an unread repository.';
   }

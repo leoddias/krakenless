@@ -98,7 +98,9 @@ describe('RemoteBar — panel states', () => {
     expect(button('Fetch')).toBeDisabled();
     expect(button('Pull')).toBeDisabled();
     expect(button('Push')).toBeDisabled();
-    expect(screen.getAllByText('No repository is open.').length).toBe(3);
+    // One line, not one per button: the three actions are refused for the same
+    // reason, and three copies of it is what the strip used to print.
+    expect(screen.getAllByText('No repository is open.')).toHaveLength(1);
   });
 
   it('shows a loading state without inventing counts', () => {
@@ -109,7 +111,7 @@ describe('RemoteBar — panel states', () => {
     expect(screen.getByText('Reading branch status…')).toBeInTheDocument();
     expect(button('Pull')).toBeDisabled();
     expect(button('Push')).toBeDisabled();
-    expect(screen.getAllByText(/Waiting for the branch status/).length).toBe(2);
+    expect(screen.getAllByText(/Waiting for the branch status/)).toHaveLength(1);
     expect(screen.queryByText(/ahead/)).not.toBeInTheDocument();
   });
 
@@ -122,7 +124,7 @@ describe('RemoteBar — panel states', () => {
     expect(screen.getByText(/git exploded/)).toBeInTheDocument();
     expect(button('Pull')).toBeDisabled();
     expect(button('Push')).toBeDisabled();
-    expect(screen.getAllByText(/status could not be read/).length).toBe(2);
+    expect(screen.getAllByText(/status could not be read/)).toHaveLength(1);
     // Fetch is read-only, so a failed status read does not block it.
     expect(button('Fetch')).toBeEnabled();
   });
@@ -290,7 +292,7 @@ describe('RemoteBar — refusals', () => {
     renderReady({ upstream: 'origin/main', hasConflicts: true });
     expect(button('Pull')).toBeDisabled();
     expect(button('Push')).toBeDisabled();
-    expect(screen.getAllByText(/A merge is in progress/).length).toBe(2);
+    expect(screen.getAllByText(/A merge is in progress/)).toHaveLength(1);
     expect(button('Fetch')).toBeEnabled();
   });
 
@@ -310,9 +312,58 @@ describe('RemoteBar — refusals', () => {
     expect(button('Fetch')).toBeDisabled();
     expect(button('Pull')).toBeDisabled();
     expect(button('Push')).toBeDisabled();
-    expect(screen.getAllByText(/Another git operation is already running/).length).toBe(
-      3,
+    expect(screen.getAllByText(/Another git operation is already running/)).toHaveLength(
+      1,
     );
+  });
+
+  it('points every button it refuses at the one line that explains them', () => {
+    renderBar();
+    const line = screen.getByText('No repository is open.');
+    for (const label of ['Fetch', 'Pull', 'Push']) {
+      // A shared sentence is drawn once, so the buttons sharing it have to
+      // share its id — a disabled control whose description points at nothing
+      // is announced as a button with no reason at all.
+      expect(button(label)).toHaveAttribute('aria-describedby', line.id);
+    }
+  });
+
+  it('does not repeat "something else is running" over its own progress line', async () => {
+    let finish = (): void => {};
+    pushMock.mockImplementation(
+      async () =>
+        await new Promise<boolean>((resolve) => {
+          finish = () => resolve(true);
+        }),
+    );
+    const store = renderReady({ upstream: 'origin/main', ahead: 1 });
+    await act(async () => {
+      fireEvent.click(button('Push'));
+      store.dispatch({ type: 'busy', busy: true });
+    });
+
+    // "Pushing…" already says why nothing else can run, and it says it better.
+    expect(screen.queryByText(/Another git operation is already running/)).toBeNull();
+    expect(screen.getByText('Pushing…')).toBeInTheDocument();
+    expect(button('Fetch')).toHaveAttribute(
+      'aria-describedby',
+      screen.getByText('Pushing…').id,
+    );
+
+    await act(async () => {
+      store.dispatch({ type: 'busy', busy: false });
+      finish();
+    });
+  });
+
+  it('draws a wait in a different colour from a refusal', () => {
+    const store = renderReady({ upstream: 'origin/main', ahead: 1 });
+    act(() => store.dispatch({ type: 'busy', busy: true }));
+    // Not the danger class the real refusals use: this one clears itself in a
+    // moment, and red that means "wait" is red the user learns to ignore.
+    const waiting = screen.getByText(/Another git operation is already running/);
+    expect(waiting.className).toMatch(/waiting/);
+    expect(waiting.className).not.toMatch(/reason/);
   });
 
   it('refuses to push a branch whose upstream has a different name', () => {

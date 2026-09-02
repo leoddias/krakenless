@@ -20,6 +20,16 @@
   min-width: 0;
 }
 
+/* The buttons and the strip of words about them. Centred as one block, so the
+   reason a button is disabled sits under that button rather than at the left
+   edge of the bar. */
+.column {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+}
+
 .actions {
   display: flex;
   align-items: stretch;
@@ -114,22 +124,29 @@
 .messages {
   display: flex;
   flex-wrap: wrap;
+  justify-content: center;
   gap: 0.25rem 1rem;
+  /* Wide enough to read, capped so a long refusal cannot push the toolbar
+     buttons off centre or the tracking summary off the bar. */
+  max-width: min(72ch, 100%);
   min-width: 0;
   padding-bottom: 0.15rem;
+  text-align: center;
 }
 
 .progress,
 .success,
 .failure,
-.reason {
+.reason,
+.waiting {
   margin: 0;
   font-size: 0.6875rem;
   line-height: 1.4;
 }
 
 .progress,
-.success {
+.success,
+.waiting {
   color: var(--muted);
 }
 
