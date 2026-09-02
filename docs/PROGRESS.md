@@ -92,17 +92,21 @@
 
 1. **Validate the update flow end to end.** v0.1.10-alpha is the first release
    carrying the updater, and the *swap* cannot be proven by it alone — a v0.1.9
-   binary has no updater in it to do the swapping. So:
-   a. Publish the v0.1.10-alpha draft: `gh release edit v0.1.10-alpha
-      --draft=false`.
-   a2. **This release only:** then run the Pages workflow by hand —
-      `gh workflow run pages.yml --ref main`. A `release` event runs the
-      workflow from the *tag's* commit, and this tag predates the fix to the
-      manifest step (ADR-0037). The dispatch path resolves the latest release
-      itself, so it produces the right manifests. From v0.1.11-alpha this is
-      unnecessary. Then confirm both files answer 200 and name `0.1.10`:
-      `https://leoddias.github.io/krakenless/updates/windows-x86_64.json` and
-      `…-portable.json`.
+   binary has no updater in it to do the swapping.
+
+   **Steps a and a2 are done (2026-09-02).** The release is published, the
+   Pages workflow was dispatched from `main`, and both manifests answer 200
+   naming `0.1.10` with URLs that resolve (`_x64-setup.exe` 3.7 MB,
+   `_x64_portable.exe` 14.4 MB). The landing page advertises 0.1.10-alpha.
+   The release-event Pages run failed first, exactly as ADR-0037 predicts —
+   `no release asset matches \.nsis\.zip$` from the tag's stale copy of the
+   step — which is the intended loud failure rather than a broken manifest.
+   What remains is b through e, all of which need a human at a Windows
+   desktop:
+   a. ~~Publish the draft.~~ Done.
+   a2. ~~Dispatch Pages from `main` — this release only, because a `release`
+      event runs the workflow from the tag's commit (ADR-0037). From
+      v0.1.11-alpha it is unnecessary.~~ Done.
    b. Run the v0.1.10-alpha portable `.exe`, open Settings → *Check for
       updates*. Expect "nothing newer was found". That proves the manifest is
       reachable, parseable and correctly compared — everything except the swap.
