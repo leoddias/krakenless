@@ -176,6 +176,22 @@ describe('rebaseOnto', () => {
     ).resolves.toBe('autostash-conflicted');
   });
 
+  it('recognises the older wording git wraps across three lines', async () => {
+    // What GitHub's Windows runner prints. Matching only the modern sentence
+    // is a warning that never fires for half the gits in the world.
+    respond(
+      { stdout: 'main\n' },
+      {
+        stderr:
+          'Created autostash: f35954d\nRebasing (1/1)Your local changes are stashed, however applying them\nresulted in conflicts.  You can either resolve the conflicts\nand then discard the stash with "git stash drop".\nSuccessfully rebased and updated refs/heads/main.\n',
+      },
+    );
+
+    await expect(
+      rebaseOnto('C:/repo', 'main', OID, userConfirmed(OK.reason)),
+    ).resolves.toBe('autostash-conflicted');
+  });
+
   it('reports an ordinary rebase as rebased', async () => {
     respond(
       { stdout: 'main\n' },

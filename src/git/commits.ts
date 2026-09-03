@@ -143,14 +143,32 @@ export type RebaseOutcome =
   | 'autostash-conflicted';
 
 /**
- * git's own words when re-applying the autostash conflicts.
+ * git's own words when re-applying the autostash conflicts, in both wordings.
  *
  * Matched rather than inferred from the status: git exits **0** in this case,
  * so nothing else distinguishes it from a clean rebase at the moment it
  * happens, and a status read afterwards cannot tell these conflict markers from
  * ones that were already there.
+ *
+ * Two sentences, because git changed its mind about this one. Newer versions
+ * say "Applying autostash resulted in conflicts."; older ones say "Your local
+ * changes are stashed, however applying them resulted in conflicts." — wrapped
+ * across lines, which is why whitespace is collapsed before the match. The
+ * second wording is what GitHub's Windows runner produced, and matching only
+ * the first is a warning that never fires on the git half the world is running.
  */
-const AUTOSTASH_CONFLICT = /Applying autostash resulted in conflicts/i;
+const AUTOSTASH_CONFLICT = /applying (?:autostash|them) resulted in conflicts/i;
+
+/**
+ * True when git reported that it could not put the autostash back.
+ *
+ * Exported so the integration test can assert against the real binary's output
+ * instead of a string this file also owns — a test that repeated the regex
+ * would pass on a git whose wording this function does not recognise.
+ */
+export function autostashConflicted(output: string): boolean {
+  return AUTOSTASH_CONFLICT.test(output.replace(/\s+/g, ' '));
+}
 
 /**
  * Replays `branch` onto `rev`. `branch` is the name the user was shown; the
@@ -170,7 +188,8 @@ export async function rebaseOnto(
   const gate = approve(confirmation);
   await assertOnBranch(repo, branch);
   const output = await runGit(repo, buildRebaseCommand(rev), gate);
-  return AUTOSTASH_CONFLICT.test(`${output.stdout}\n${output.stderr}`)
+  // Both streams: git reports this on stderr while exiting 0.
+  return autostashConflicted(`${output.stdout}\n${output.stderr}`)
     ? 'autostash-conflicted'
     : 'rebased';
 }

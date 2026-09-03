@@ -17,6 +17,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { buildRebaseCommand } from './commands/history';
+import { autostashConflicted } from './commits';
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 
@@ -92,9 +93,10 @@ describe('rebase --autostash against real git', () => {
     git(['add', 'untouched.txt']);
     write('untouched.txt', 'work in progress, edited\n');
 
-    const { code } = run(buildRebaseCommand('main').args);
+    const { code, output } = run(buildRebaseCommand('main').args);
 
     expect(code).toBe(0);
+    expect(autostashConflicted(output)).toBe(false);
     expect(read('untouched.txt')).toBe('work in progress, edited\n');
     expect(read('shared.txt')).toBe('base\nupstream\n');
     // The replayed commit is on top of upstream, and the autostash is gone
@@ -127,7 +129,9 @@ describe('rebase --autostash against real git', () => {
     const { code, output } = run(buildRebaseCommand('main').args);
 
     expect(code).toBe(0);
-    expect(output).toMatch(/Applying autostash resulted in conflicts/);
+    // The app's own detector, not a copy of its regex: this git's wording is
+    // whatever this git says, and the point is that Krakenless recognises it.
+    expect(autostashConflicted(output)).toBe(true);
     // Both halves of the promise the notice makes: the work is still in a
     // stash, and the working tree is the one holding the conflict.
     expect(git(['stash', 'list'])).toMatch(/autostash/);
