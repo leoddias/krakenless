@@ -86,6 +86,16 @@ after 2 more weeks → proceed to v0.2. Else: keep as personal tool, stop invest
 
 ## Backlog (ideas parking lot — not scheduled)
 
+**Delete should move the file to the OS trash, not remove it.** ADR-0041 ships
+a real delete with a confirmation that says what it costs; the recoverable form
+the safety bar asks for is the platform trash (`SHFileOperation` on Windows,
+`NSFileManager` on macOS, `gio trash` elsewhere, or the `trash` crate). It
+changes `worktree_delete` and the wording of one dialog, nothing else.
+
+**Conflicted rows have no context menu.** The file menu is wired into the
+staged and unstaged lists only, so a right-click on an unmerged path still
+opens the webview's own menu.
+
 **A tag that exists locally and points elsewhere on the remote diverges
 silently forever.** Detecting it needs `git ls-remote --tags` (a network read
 per check); the fetch flags in ADR-0034 deliberately never move a local tag.

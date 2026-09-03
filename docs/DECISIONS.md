@@ -1024,3 +1024,86 @@ the latest is the better answer anyway. `publish.yml` needs only
 `actions: write`, and does no deployment itself, so it does not care which ref
 it runs from.
 
+
+## ADR-0041 — A right-click on a working-tree file offers discard, delete, reveal and copy; delete removes the file for good and says so
+
+**Date:** 2026-09-03 · **Status:** accepted
+
+**Decision:** the file rows in the changes panel answer a right-click with a
+context menu: **Discard changes**, **Delete from disk**, **Reveal in file
+manager**, **Copy path**, **Copy full path**. It acts on the whole selection
+when the clicked row is inside it and on that row alone otherwise. Discard goes
+through the existing confirmation and the existing stash — the menu is not a
+second route to the same write. Delete is a new capability: `worktree_delete`
+in `src-tauri/src/worktree.rs`, guarded by the same `resolve` the editor's write
+uses, one file per call and never recursive. Reveal is `reveal_path` in
+`external.rs`, which selects the file rather than opening its folder.
+
+**Why:** every one of these was a trip to a terminal or to Explorer from a panel
+that already knows the path. Discard was reachable only through a row button
+that appears on hover, which is why the first thing anyone tries — right-click —
+did nothing but open the webview's own menu (see the report that started this:
+a user right-clicking a modified file got Chrome's "Save as / Print").
+
+**The part that needed deciding is delete.** It breaks the promise the rest of
+this app makes. Discard, reset, branch -D, even a rebase all leave a route back
+through the reflog or a stash; a file removed from disk has none, and an
+*untracked* file removed from disk has never existed anywhere else. Three
+options were on the table: refuse to offer it at all, move the file to the OS
+trash, or delete it and say plainly what that costs. The trash is the recoverable
+form the safety bar asks for, and it is the right answer — it needs a
+platform-specific shell call (`SHFileOperation` / `NSFileManager` / `gio trash`)
+or a crate, and that is a change of its own. Until then the menu deletes, and
+the confirmation says, in the user's words rather than git's: these files are
+removed from disk, Krakenless keeps no stash of them, the committed version of a
+tracked file survives and any change since the last commit does not, and an
+untracked file exists nowhere else. Untracked paths are counted separately in the
+dialog for exactly that reason.
+
+**Consequences:** `src/fs/**` and `worktree.rs` now delete as well as read and
+write, which widens what ADR-0022 opened — read that ADR before touching either.
+The menu model lives in `src/views/changes/fileMenu.ts`, pure and tested, in the
+shape `commitMenu.ts` established: every item that cannot run stays on the menu,
+disabled, carrying its reason. Nothing in the menu bypasses a confirmation that
+the equivalent button already asks for, and nothing that writes is offered while
+another git command is running. Moving delete to the OS trash later changes only
+`worktree_delete` and the wording of one dialog. Backlog: the trash, and the same
+menu on conflicted rows, which today have no menu at all.
+
+## ADR-0042 — A rebase always carries `--autostash`; a dirty working tree stops being a refusal
+
+**Date:** 2026-09-03 · **Status:** accepted
+
+**Decision:** `buildRebaseCommand` emits `git rebase --autostash <onto>`,
+unconditionally. The commit menu no longer disables "Rebase <branch> onto this
+commit" over a dirty working tree — `dirtyBlock` is gone — and the confirmation
+gains a sentence, only when there is something to stash, saying the uncommitted
+changes are put aside and brought back. `rebaseOnto` returns an outcome rather
+than `void`, and the one outcome that matters is `autostash-conflicted`.
+
+**Why:** git refuses to rebase over uncommitted changes, and the app relayed
+that refusal as a greyed-out item reading "Commit or stash them first" — which
+sent the user to a terminal to run the command git will run for them. That is
+the shape of answer this project exists to avoid. `--autostash` is git's own
+solution, it has been in git since 2.9, it is recoverable throughout (the work
+is in a stash entry the whole time), and on a clean tree it creates nothing.
+
+**The trap, and why the return type changed.** When re-applying the autostash
+conflicts, git prints `Applying autostash resulted in conflicts` **on stderr**
+and **exits 0**. Nothing else distinguishes it from a clean rebase: the branch
+really was rebased, the command really succeeded, and the working tree is
+quietly full of conflict markers with the user's work sitting in a stash nobody
+mentioned. So the outcome is read from git's output — matched, because a status
+read afterwards cannot tell these markers from ones that were already there —
+and reported as a warning notice naming the stash and both ways out.
+`src/git/rebase.integration.test.ts` runs all of this against the real binary,
+including the exit-0 case, so a change in git's wording is caught here rather
+than in someone's repository.
+
+**Consequences:** the only remaining reason the rebase item is disabled is a
+detached HEAD, an unread branch, a busy runner or unresolved conflicts — every
+one of them a state where the operation genuinely has no meaning. The
+confirmation string is still the token the git layer records, so the autostash
+sentence is conditional: it has to be true of the command that runs. Cherry-pick
+and revert are untouched — git has no `--autostash` for them — and `git merge`
+does support one, which is a separate decision nobody has needed yet.

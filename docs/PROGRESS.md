@@ -20,7 +20,22 @@
   repos, history with the commit graph and ref decorations, working-tree panel
   (stage/unstage/discard/commit), diff viewer, remote bar, branches + stashes,
   conflict banner, settings, keyboard shortcuts, fs-watch refresh.
-- **Test status:** `npm test` 1489 passing (67 files), `cargo test` 66 passing;
+- **Working-tree file rows answer a right-click** (2026-09-03, ADR-0041):
+  discard, delete from disk, reveal in the file manager, copy path / full path,
+  acting on the selection when the clicked row is in it. Delete is the first
+  thing Krakenless does with no route back — its confirmation counts untracked
+  paths separately, and moving it to the OS trash is in the backlog.
+- **Discard no longer stops halfway on a tracked file under an ignored
+  directory** (2026-09-03): `--include-untracked` was on the tracked stash
+  phase, where it makes git stage the pathspec and refuse the ignored path
+  *after* the stash exists. The two flags are now mutually exclusive.
+- **A rebase stashes for you** (2026-09-03, ADR-0042): every rebase carries
+  `--autostash`, so a dirty working tree no longer greys the menu item out.
+  When git cannot re-apply the stash it says so on stderr and still exits 0 —
+  that case is read from the output and reported as a warning, because
+  otherwise a "successful" rebase leaves conflict markers and a stash nobody
+  mentioned.
+- **Test status:** `npm test` 2079 passing (96 files), `cargo test` 103 passing;
   oxlint, prettier and clippy clean. `cargo fmt` is *not* clean and never has
   been — see `docs/ROADMAP.md` § Backlog.
 - **Git no longer runs on the UI thread** (ADR-0028). Every git command used to
@@ -178,6 +193,60 @@
   until `buildPushCommand` emits a `<local>:<upstream>` refspec.
 
 ## Session log
+
+### 2026-09-03 (later) — a rebase no longer sends you to a terminal
+
+The commit menu greyed out "Rebase main onto this commit" over a dirty working
+tree and explained that git will not rebase over uncommitted changes: commit or
+stash them first. Correct, and useless — the user is being told to run by hand
+the command git would run for them. Every rebase now carries `--autostash`
+(ADR-0042).
+
+The part worth remembering: when git cannot put the autostash back, it prints
+`Applying autostash resulted in conflicts` **on stderr** and **exits 0**. The
+branch was rebased, the command succeeded, and the working tree is full of
+conflict markers with the user's work in a stash they were never told about.
+`rebaseOnto` returns an outcome read from git's output for exactly that case,
+and `rebaseBranchOnto` turns it into a warning naming the stash. Checked against
+the real binary in `src/git/rebase.integration.test.ts`, exit code included.
+
+### 2026-09-03 — the discard that stopped halfway, and a menu on the file rows
+
+Two things, both from one screenshot of the app in real use.
+
+**The discard bug.** `git stash push --keep-index --include-untracked -- <path>`
+exits 1 *after* writing the stash when the path is tracked but sits under a
+directory the `.gitignore` covers — a file committed once with `add -f` and
+ignored since, which is what `project.inlang/cache/**` is in the repository this
+was reported from. `--include-untracked` makes git stage the pathspec itself,
+that step refuses the ignored directory, and the discard ends half done: the
+stash exists, the worktree edit is still on disk, and the UI correctly reports
+"failed partway" for a stash it cannot undo. The flag was never needed on the
+tracked phase — the untracked phase is the one that carries it — so the two are
+now mutually exclusive by construction (`buildDiscardCommand`). Reproduced
+against git 2.39 before the fix and covered by an integration test that builds
+the ignored-but-tracked repository, discards, and then runs the recovery command
+the UI displays.
+
+**The context menu** (ADR-0041). Right-clicking a file row used to open the
+webview's own menu — Save as, Print. It now opens: Discard changes, Delete from
+disk, Reveal in file manager, Copy path, Copy full path. It acts on the whole
+selection when the clicked row is inside it and on that row alone otherwise.
+Discard goes through the existing confirmation and stash; the menu is not a
+second route to any write.
+
+Delete is new, and it is the only thing this app does that cannot be undone.
+Two Rust commands back the menu: `worktree_delete` (the editor's `resolve`
+guards, one file per call, never recursive — it refuses `.git` in any casing, a
+symlink, a directory and anything resolving outside the repository) and
+`reveal_path` (Explorer wants `/select,<path>` as one argument with backslashes;
+two arguments or forward slashes open the user's Documents folder and say
+nothing). The confirmation counts untracked paths separately, because those are
+the ones that exist nowhere else in the world. Moving the delete to the OS trash
+is the recoverable form the safety bar wants and is in the backlog; ADR-0041
+records why it is not in this change.
+
+Neither change has been used by hand in the running app yet.
 
 ### 2026-09-02 — the app can replace itself
 
