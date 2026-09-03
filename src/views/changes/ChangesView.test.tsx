@@ -88,6 +88,30 @@ function setEntries(store: Store, entries: StatusEntry[]): void {
   act(() => store.dispatch({ type: 'status/loaded', status: statusOf(entries) }));
 }
 
+/** Four unstaged files, so a range has an inside and two outsides. */
+function fourUnstaged(): Store {
+  return renderWithEntries([
+    entry({ path: 'a.ts', worktree: 'modified' }),
+    entry({ path: 'b.ts', worktree: 'modified' }),
+    entry({ path: 'c.ts', worktree: 'modified' }),
+    entry({ path: 'd.ts', worktree: 'modified' }),
+  ]);
+}
+
+/** Clicks a file name in a section, with optional modifier keys. */
+function clickPath(
+  sectionName: string,
+  path: string,
+  modifiers: { shiftKey?: boolean; ctrlKey?: boolean } = {},
+): void {
+  const button = within(section(sectionName)).getByRole('button', {
+    name: new RegExp(`^${path}$`),
+  });
+  act(() => {
+    fireEvent.click(button, modifiers);
+  });
+}
+
 function section(name: string): HTMLElement {
   return screen.getByRole('region', { name });
 }
@@ -947,5 +971,116 @@ describe('the AI Commit button', () => {
 
     await screen.findByRole('alert');
     expect(box).toHaveValue('my own message');
+  });
+});
+
+describe('selecting several files at once', () => {
+  it('offers no selection action for a single file — the row already has one', () => {
+    fourUnstaged();
+    clickPath('Unstaged', 'b.ts');
+    expect(
+      within(section('Unstaged')).queryByRole('button', { name: /selected$/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('shift-click selects the range and stages exactly it', async () => {
+    const store = fourUnstaged();
+
+    clickPath('Unstaged', 'b.ts');
+    clickPath('Unstaged', 'd.ts', { shiftKey: true });
+
+    const action = within(section('Unstaged')).getByRole('button', {
+      name: 'Stage 3 selected',
+    });
+    await act(async () => {
+      fireEvent.click(action);
+    });
+
+    expect(stageMock).toHaveBeenCalledWith(store, ['b.ts', 'c.ts', 'd.ts']);
+  });
+
+  it('stages in list order, whatever order the files were clicked in', async () => {
+    const store = fourUnstaged();
+
+    clickPath('Unstaged', 'd.ts');
+    clickPath('Unstaged', 'a.ts', { ctrlKey: true });
+    clickPath('Unstaged', 'c.ts', { ctrlKey: true });
+
+    await act(async () => {
+      fireEvent.click(
+        within(section('Unstaged')).getByRole('button', { name: 'Stage 3 selected' }),
+      );
+    });
+
+    expect(stageMock).toHaveBeenCalledWith(store, ['a.ts', 'c.ts', 'd.ts']);
+  });
+
+  it('extends the same range on a second shift-click rather than starting a new one', () => {
+    fourUnstaged();
+
+    clickPath('Unstaged', 'a.ts');
+    clickPath('Unstaged', 'd.ts', { shiftKey: true });
+    clickPath('Unstaged', 'b.ts', { shiftKey: true });
+
+    expect(
+      within(section('Unstaged')).getByRole('button', { name: 'Stage 2 selected' }),
+    ).toBeInTheDocument();
+  });
+
+  it('ctrl-click removes a file from the selection', () => {
+    fourUnstaged();
+
+    clickPath('Unstaged', 'a.ts');
+    clickPath('Unstaged', 'c.ts', { shiftKey: true });
+    clickPath('Unstaged', 'b.ts', { ctrlKey: true });
+
+    expect(
+      within(section('Unstaged')).getByRole('button', { name: 'Stage 2 selected' }),
+    ).toBeInTheDocument();
+  });
+
+  it('unstages a selection from the staged list, with its own verb', async () => {
+    const store = renderWithEntries([
+      entry({ path: 'a.ts', index: 'added' }),
+      entry({ path: 'b.ts', index: 'added' }),
+      entry({ path: 'c.ts', index: 'added' }),
+    ]);
+
+    clickPath('Staged', 'a.ts');
+    clickPath('Staged', 'c.ts', { shiftKey: true });
+
+    await act(async () => {
+      fireEvent.click(
+        within(section('Staged')).getByRole('button', { name: 'Unstage 3 selected' }),
+      );
+    });
+
+    expect(unstageMock).toHaveBeenCalledWith(store, ['a.ts', 'b.ts', 'c.ts']);
+  });
+
+  it('drops a selection whose files have left the list', () => {
+    const store = fourUnstaged();
+    clickPath('Unstaged', 'a.ts');
+    clickPath('Unstaged', 'c.ts', { shiftKey: true });
+
+    // b.ts and c.ts get staged from somewhere else; the selection must not
+    // keep holding rows nobody can see.
+    setEntries(store, [
+      entry({ path: 'a.ts', worktree: 'modified' }),
+      entry({ path: 'd.ts', worktree: 'modified' }),
+    ]);
+
+    expect(
+      within(section('Unstaged')).queryByRole('button', { name: /selected$/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('still narrows the diff to the row that was clicked', () => {
+    const store = fourUnstaged();
+
+    clickPath('Unstaged', 'b.ts');
+    clickPath('Unstaged', 'd.ts', { shiftKey: true });
+
+    expect(store.getState().selection.path).toBe('d.ts');
   });
 });

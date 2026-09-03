@@ -30,6 +30,13 @@ import { useAppState, useStore } from '../../state/hooks';
 import { isBusy } from '../../state/store';
 import type { Loadable } from '../../state/store';
 import { OperationPanel } from './OperationPanel';
+import {
+  EMPTY_SELECTION,
+  nextSelection,
+  pruneSelection,
+  selectedInOrder,
+  type Selection,
+} from './multiSelect';
 import styles from './ChangesView.module.css';
 import {
   conflictDescription,
@@ -344,6 +351,7 @@ function ChangeLists({
         side="worktree"
         emptyText="No unstaged changes."
         bulkLabel="Stage all"
+        selectionLabel="Stage"
         busy={busy}
         onBulk={onStage}
         secondaryBulk={{
@@ -365,6 +373,7 @@ function ChangeLists({
         side="index"
         emptyText="Nothing staged yet."
         bulkLabel="Unstage all"
+        selectionLabel="Unstage"
         busy={busy}
         onBulk={onUnstage}
         rowActions={(entry) => [
@@ -532,6 +541,7 @@ function FileSection({
   side,
   emptyText,
   bulkLabel,
+  selectionLabel,
   secondaryBulk,
   busy,
   onBulk,
@@ -544,6 +554,8 @@ function FileSection({
   side: 'index' | 'worktree';
   emptyText: string;
   bulkLabel: string;
+  /** Verb for the action on a multi-file selection: "Stage", "Unstage". */
+  selectionLabel: string;
   secondaryBulk?: { label: string; danger?: boolean; run: (paths: string[]) => void };
   busy: boolean;
   onBulk: (paths: string[]) => void;
@@ -554,6 +566,16 @@ function FileSection({
 }): ReactNode {
   const paths = pathsOfAll(entries);
   const label = `${title} (${entries.length})`;
+
+  const [selection, setSelection] = useState<Selection>(EMPTY_SELECTION);
+  // Pruned on the way out rather than in an effect: the list changes under the
+  // selection constantly — staging moves a file to the other section — and a
+  // selection holding rows nobody can see must never reach a bulk action.
+  // `pruneSelection` returns the same object when nothing changed, so this is
+  // free on the ordinary render.
+  const live = pruneSelection(paths, selection);
+  const chosen = selectedInOrder(paths, live);
+  const multiple = chosen.length > 1;
 
   return (
     <section className={styles.section} aria-label={title}>
@@ -568,6 +590,22 @@ function FileSection({
           >
             {bulkLabel}
           </button>
+          {/* Only once there are two: with one file selected the row's own
+              button is right there, and a second control saying the same thing
+              is clutter. */}
+          {multiple && (
+            <button
+              type="button"
+              className={styles.button}
+              disabled={busy}
+              onClick={() => {
+                onBulk(chosen);
+                setSelection(EMPTY_SELECTION);
+              }}
+            >
+              {`${selectionLabel} ${String(chosen.length)} selected`}
+            </button>
+          )}
           {secondaryBulk !== undefined && (
             <button
               type="button"
@@ -589,7 +627,7 @@ function FileSection({
             <li
               key={entry.path}
               className={
-                entry.path === selectedPath
+                live.paths.has(entry.path) || entry.path === selectedPath
                   ? `${styles.row} ${styles.rowSelected}`
                   : styles.row
               }
@@ -604,8 +642,20 @@ function FileSection({
                 type="button"
                 className={styles.path}
                 aria-current={entry.path === selectedPath ? 'true' : undefined}
-                title={`Show the diff for ${entry.path}`}
-                onClick={() => onShowDiff(entry.path)}
+                title={`Show the diff for ${entry.path}. Shift-click to select a range; Ctrl or Cmd click to add one.`}
+                onClick={(event) => {
+                  setSelection(
+                    nextSelection(paths, live, {
+                      path: entry.path,
+                      shift: event.shiftKey,
+                      toggle: event.ctrlKey || event.metaKey,
+                    }),
+                  );
+                  // The diff follows the row that was clicked, whatever the
+                  // modifiers did to the selection: it is the one the user
+                  // just pointed at.
+                  onShowDiff(entry.path);
+                }}
               >
                 {displayPath(entry)}
               </button>
