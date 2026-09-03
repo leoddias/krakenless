@@ -172,9 +172,16 @@ describe('remoteAvatars', () => {
 });
 
 describe('autoFetchMinutes', () => {
+  it('keeps a value already saved, rather than moving it to the new default', () => {
+    // Changing the default must not reach back into configs that already
+    // answered the question.
+    expect(parseConfig('{"autoFetchMinutes":5}').autoFetchMinutes).toBe(5);
+    expect(parseConfig('{"autoFetchMinutes":30}').autoFetchMinutes).toBe(30);
+  });
+
   it('defaults to five minutes', () => {
-    expect(defaultConfig().autoFetchMinutes).toBe(5);
-    expect(parseConfig('{}').autoFetchMinutes).toBe(5);
+    expect(defaultConfig().autoFetchMinutes).toBe(1);
+    expect(parseConfig('{}').autoFetchMinutes).toBe(1);
   });
 
   it('keeps a value the user chose', () => {
@@ -195,9 +202,9 @@ describe('autoFetchMinutes', () => {
   });
 
   it('falls back to the default for anything that is not a number', () => {
-    expect(parseConfig('{"autoFetchMinutes":"5"}').autoFetchMinutes).toBe(5);
-    expect(parseConfig('{"autoFetchMinutes":null}').autoFetchMinutes).toBe(5);
-    expect(parseConfig('{"autoFetchMinutes":[]}').autoFetchMinutes).toBe(5);
+    expect(parseConfig('{"autoFetchMinutes":"5"}').autoFetchMinutes).toBe(1);
+    expect(parseConfig('{"autoFetchMinutes":null}').autoFetchMinutes).toBe(1);
+    expect(parseConfig('{"autoFetchMinutes":[]}').autoFetchMinutes).toBe(1);
   });
 });
 

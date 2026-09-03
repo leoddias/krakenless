@@ -44,6 +44,12 @@ export interface AppConfig {
    * the branch list is only ever as fresh as the last manual fetch. It talks
    * to the git remotes and nothing else (ADR-0025), which is the one network
    * destination this app has always had.
+   *
+   * One minute by default, which is also the floor. A fetch moves
+   * remote-tracking refs and nothing else — no working-tree file, no local
+   * branch, no HEAD — so the cost of running it often is a small request to a
+   * remote the user already talks to, and the cost of running it rarely is
+   * looking at a branch list that quietly stopped being true.
    */
   autoFetchMinutes: number;
   /**
@@ -156,7 +162,7 @@ export function defaultConfig(): AppConfig {
     theme: 'dark',
     remoteAvatars: false,
     autoUpdateCheck: true,
-    autoFetchMinutes: 5,
+    autoFetchMinutes: 1,
     historyLimit: 200,
     layout: { sidebarWidth: 264, detailWidth: 340, historyRatio: 0.62 },
   };
@@ -212,7 +218,7 @@ export function clampLayout(layout: LayoutConfig): LayoutConfig {
  * nothing in the UI can produce and that nobody wants the consequences of.
  */
 export function asAutoFetchMinutes(value: unknown): number {
-  const fallback = 5;
+  const fallback = 1;
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
   if (value <= 0) return 0;
   return Math.min(

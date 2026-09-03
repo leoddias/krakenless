@@ -163,10 +163,10 @@ describe('SettingsView', () => {
     expect(store.getState().config.remoteAvatars).toBe(true);
   });
 
-  it('offers the background fetch schedule, five minutes by default', () => {
+  it('offers the background fetch schedule, one minute by default', () => {
     renderSettings();
     const field = screen.getByLabelText(/Fetch in the background/);
-    expect(field).toHaveValue('5');
+    expect(field).toHaveValue('1');
     expect(screen.getByRole('option', { name: 'Off' })).toBeInTheDocument();
   });
 
