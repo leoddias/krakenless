@@ -68,6 +68,34 @@ function assertCount(name: string, value: number, minimum: number): number {
 }
 
 /**
+ * The whole message of HEAD, exactly as it was written.
+ *
+ * `%B` is the raw body — subject, blank line, body, trailers — rather than
+ * `%s` plus `%b` glued back together, because that seam is a guess: a message
+ * whose second line is not blank does not survive the round trip, and this
+ * text is what an amend rewrites history with. Nothing is quoted or escaped in
+ * the output, so there is nothing to parse; the caller trims the newline git
+ * adds after the format and hands the rest to the user.
+ *
+ * `--no-show-signature` keeps `log.showSignature` from putting a gpg report in
+ * front of it, and there is no revision argument at all: HEAD is where an
+ * amend lands, and naming it is one more string that could be wrong.
+ */
+export function buildHeadMessageCommand(): GitCommand {
+  return {
+    args: [
+      'log',
+      '-1',
+      '--no-color',
+      '--no-show-signature',
+      '--encoding=UTF-8',
+      '--format=%B',
+      '--',
+    ],
+  };
+}
+
+/**
  * Builds the `git log` invocation the parser expects.
  *
  * Hardening that is not optional here:

@@ -1,4 +1,8 @@
-import { buildLogCommand, type LogOptions } from './commands/log';
+import {
+  buildHeadMessageCommand,
+  buildLogCommand,
+  type LogOptions,
+} from './commands/log';
 import { GitError } from './errors';
 import { parseLog } from './parsers/log';
 import { runGit } from './runner';
@@ -22,6 +26,27 @@ function meansNoCommitsYet(error: unknown): boolean {
   if (!(error instanceof GitError)) return false;
   if (error.kind !== 'command-failed') return false;
   return /does not have any commits yet/i.test(error.stderr);
+}
+
+/**
+ * The message of the commit at HEAD, or `null` when there is no commit yet.
+ *
+ * Read rather than reassembled from the loaded log: amending replaces the
+ * message wholesale, so a message that came back subtly different — a body
+ * separated by something other than a blank line, say — would be a rewrite the
+ * user never asked for. Only the newline git prints after the format is
+ * removed; everything the author typed is left alone.
+ */
+export async function readHeadMessage(repo: string): Promise<string | null> {
+  try {
+    const output = await runGit(repo, buildHeadMessageCommand());
+    return output.stdout.replace(/\n+$/, '');
+  } catch (error) {
+    // An unborn branch has no message, which is not a failure to report: the
+    // amend checkbox is already unavailable there.
+    if (meansNoCommitsYet(error)) return null;
+    throw error;
+  }
 }
 
 /**

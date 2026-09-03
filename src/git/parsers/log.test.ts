@@ -3,11 +3,12 @@ import {
   LOG_FIELD_COUNT,
   LOG_FORMAT,
   LOG_SEPARATOR,
+  buildHeadMessageCommand,
   buildLogCommand,
 } from '../commands/log';
 import { isDestructive } from '../destructive';
 import { GitError } from '../errors';
-import { readLog } from '../log';
+import { readHeadMessage, readLog } from '../log';
 import { parseDecorations, parseLog } from './log';
 
 const invoke = vi.hoisted(() => vi.fn());
@@ -387,6 +388,75 @@ describe('parseDecorations', () => {
 
   it('ignores grafted, replaced and notes decorations', () => {
     expect(parseDecorations('grafted, replaced, refs/notes/commits')).toEqual([]);
+  });
+});
+
+describe('buildHeadMessageCommand', () => {
+  it('asks for the raw message of one commit and nothing else', () => {
+    expect(buildHeadMessageCommand().args).toEqual([
+      'log',
+      '-1',
+      '--no-color',
+      '--no-show-signature',
+      '--encoding=UTF-8',
+      '--format=%B',
+      '--',
+    ]);
+  });
+
+  it('reads the raw body, not a subject and a body glued back together', () => {
+    // `%s` + `%b` cannot reproduce a message whose second line is not blank,
+    // and this text is what an amend rewrites history with.
+    expect(buildHeadMessageCommand().args).toContain('--format=%B');
+  });
+
+  it('is never treated as a destructive command', () => {
+    expect(isDestructive(buildHeadMessageCommand().args)).toBe(false);
+    expect(buildHeadMessageCommand().destructive).toBeUndefined();
+  });
+});
+
+describe('readHeadMessage', () => {
+  beforeEach(() => {
+    invoke.mockReset();
+  });
+
+  function stdout(text: string, code = 0, stderr = ''): void {
+    invoke.mockResolvedValue({
+      stdout: text,
+      stderr,
+      code,
+      timed_out: false,
+      stdout_lossy: false,
+    });
+  }
+
+  it('returns the message with only the newline git added removed', () => {
+    stdout('feat: a thing\n\nA body that explains it.\n\n');
+    return expect(readHeadMessage('C:/repo')).resolves.toBe(
+      'feat: a thing\n\nA body that explains it.',
+    );
+  });
+
+  it('keeps the shape of a message whose second line is not blank', async () => {
+    // The case that a subject-plus-body reassembly loses.
+    stdout('one\ntwo\nthree\n');
+    await expect(readHeadMessage('C:/repo')).resolves.toBe('one\ntwo\nthree');
+  });
+
+  it("keeps interior blank lines, which are the author's paragraphs", async () => {
+    stdout('subject\n\nfirst\n\nsecond\n');
+    await expect(readHeadMessage('C:/repo')).resolves.toBe('subject\n\nfirst\n\nsecond');
+  });
+
+  it('says there is no message on an unborn branch instead of failing', async () => {
+    stdout('', 128, "fatal: your current branch 'main' does not have any commits yet");
+    await expect(readHeadMessage('C:/repo')).resolves.toBeNull();
+  });
+
+  it('still fails for anything else git refuses', async () => {
+    stdout('', 128, 'fatal: not a git repository');
+    await expect(readHeadMessage('C:/repo')).rejects.toBeInstanceOf(GitError);
   });
 });
 
