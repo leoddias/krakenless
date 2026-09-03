@@ -38,6 +38,7 @@ import {
   resetTo,
   revertCommit,
   type MergeOutcome,
+  type RebaseOutcome,
   type ResetMode,
 } from '../git/commits';
 import {
@@ -904,6 +905,14 @@ export async function revertCommitOnHead(store: Store, oid: string): Promise<boo
  * has moved off it since — the confirmation the user gave was about that
  * branch and no other.
  */
+/**
+ * Replays `branch` onto `oid`, stashing uncommitted work around it.
+ *
+ * The one outcome that must never pass in silence is an autostash git could not
+ * re-apply: the rebase succeeded, so nothing looks wrong, while the working
+ * tree holds conflict markers and the user's changes sit in a stash they were
+ * never told about. It is reported as a warning naming both.
+ */
 export async function rebaseBranchOnto(
   store: Store,
   branch: string,
@@ -912,9 +921,23 @@ export async function rebaseBranchOnto(
 ): Promise<boolean> {
   const root = currentRoot(store);
   if (root === null) return false;
-  return operate(store, () =>
-    rebaseOnto(root, branch, oid, userConfirmed(confirmationReason)),
-  );
+
+  let outcome: RebaseOutcome | null = null;
+  const ran = await operate(store, async () => {
+    outcome = await rebaseOnto(root, branch, oid, userConfirmed(confirmationReason));
+  });
+  if (!ran) return false;
+
+  if (outcome === 'autostash-conflicted') {
+    store.dispatch({
+      type: 'notice',
+      notice: {
+        tone: 'warning',
+        message: `${branch} was rebased, but your stashed changes did not come back cleanly: the working tree has conflict markers and the changes are still in the stash git named "autostash". Resolve the files, then drop that stash — or reset them and pop it again.`,
+      },
+    });
+  }
+  return true;
 }
 
 /**

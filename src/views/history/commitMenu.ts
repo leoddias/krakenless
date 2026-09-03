@@ -26,7 +26,12 @@ export type CommitAction =
   | { kind: 'revert' }
   | { kind: 'merge'; branch: string; ref: string; label: string }
   | { kind: 'push-tag'; remote: string; tag: string }
-  | { kind: 'rebase'; branch: string }
+  | {
+      kind: 'rebase';
+      branch: string;
+      /** True when the replay will have to stash uncommitted work first. */
+      autostash: boolean;
+    }
   | { kind: 'reset'; branch: string; mode: ResetMode }
   | { kind: 'copy'; text: string; what: string }
   /** Only ever produced by {@link buildStashMenu}. */
@@ -58,9 +63,10 @@ export interface CommitMenuContext {
   hasConflicts: boolean;
   /**
    * Tracked files changed in the index or the working tree — what git calls a
-   * dirty work tree. Only the operations git refuses over one consult it; see
-   * {@link hasTrackedChanges}. `false` while the status is unread, which costs
-   * nothing: every such item is already disabled for an unknown branch.
+   * dirty work tree; see {@link hasTrackedChanges}. It no longer blocks
+   * anything: the rebase stashes them itself. It decides whether the question
+   * mentions that stash, so `false` while the status is unread costs the user
+   * only a sentence they did not need.
    */
   hasLocalChanges: boolean;
   remotes: Loadable<Remote[]>;
@@ -93,19 +99,6 @@ function branchBlock(context: CommitMenuContext, verb: string): string | null {
     return `HEAD is detached: you are not on a branch, so there is nothing to ${verb}.`;
   }
   return null;
-}
-
-/**
- * Why an operation that replays commits over the working tree cannot run.
- *
- * git refuses these outright with "cannot rebase: You have unstaged changes",
- * and the app used to relay that as an error notice *after* the user had
- * confirmed a rewrite of their branch. Answering before the question is asked
- * is the same refusal, minus the false start.
- */
-function dirtyBlock(context: CommitMenuContext, verb: string): string | null {
-  if (!context.hasLocalChanges) return null;
-  return `The working tree has uncommitted changes, and git will not ${verb} over them. Commit or stash them first.`;
 }
 
 /**
@@ -274,7 +267,10 @@ function pushTagItems(context: CommitMenuContext): CommitMenuItem[] {
 /** The whole menu for one commit, grouped into the sections it is drawn in. */
 export function buildCommitMenu(context: CommitMenuContext): CommitMenuSection[] {
   const shared = blocked(context);
-  const rebaseBlock = branchBlock(context, 'rebase') ?? dirtyBlock(context, 'rebase');
+  // A dirty working tree is no longer a refusal: the rebase carries
+  // `--autostash`, so git puts the changes aside and brings them back itself.
+  // The question says so before it runs.
+  const rebaseBlock = branchBlock(context, 'rebase');
   const resetBlock = branchBlock(context, 'reset');
   const branch = typeof context.branch === 'string' ? context.branch : null;
   const link = linkTarget(context);
@@ -327,7 +323,15 @@ export function buildCommitMenu(context: CommitMenuContext): CommitMenuSection[]
         id: 'rebase',
         label: `Rebase ${branch ?? 'this branch'} onto this commit`,
         disabled: rebaseBlock,
-        ...(branch === null ? {} : { action: { kind: 'rebase' as const, branch } }),
+        ...(branch === null
+          ? {}
+          : {
+              action: {
+                kind: 'rebase' as const,
+                branch,
+                autostash: context.hasLocalChanges,
+              },
+            }),
       },
       {
         id: 'reset',
@@ -409,8 +413,22 @@ export function resetQuestion(branch: string, mode: ResetMode, commit: Commit): 
   }
 }
 
-export function rebaseQuestion(branch: string, commit: Commit): string {
-  return `Replay ${branch} onto ${commitLabel(commit)}. Every commit on ${branch} that is not already there is rewritten with a new id, so anyone who has pulled this branch will have to reconcile it.`;
+/**
+ * The rebase question, including what happens to uncommitted work.
+ *
+ * The autostash sentence appears only when there is something to stash. Saying
+ * it on a clean tree would describe a stash that is never created, and the
+ * reason string is also the confirmation the git layer records — it has to be
+ * true of the command that actually runs.
+ */
+export function rebaseQuestion(
+  branch: string,
+  commit: Commit,
+  options: { autostash: boolean } = { autostash: false },
+): string {
+  const rewrite = `Replay ${branch} onto ${commitLabel(commit)}. Every commit on ${branch} that is not already there is rewritten with a new id, so anyone who has pulled this branch will have to reconcile it.`;
+  if (!options.autostash) return rewrite;
+  return `${rewrite} Your uncommitted changes are stashed before the replay and brought back after it; if they do not come back cleanly they stay in a stash, and Krakenless says so.`;
 }
 
 // --- the stash menu ---------------------------------------------------------

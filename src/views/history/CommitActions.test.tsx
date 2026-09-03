@@ -426,7 +426,55 @@ describe('the destructive items', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Rebase' }));
     });
-    expect(ran('rebase', OID)).toBe(true);
+    expect(ran('rebase', '--autostash', OID)).toBe(true);
+  });
+
+  it('rebases over uncommitted changes instead of refusing, and says it will stash', async () => {
+    // git will not rebase over a dirty tree; --autostash is its own answer to
+    // that, so the item is offered and the question says what happens.
+    const dirty = status({
+      entries: [
+        { path: 'a.ts', index: 'unmodified', worktree: 'modified', conflicted: false },
+      ],
+    });
+    renderHistory({ status: dirty });
+    invoke.mockResolvedValue(raw('main\n'));
+    openMenu();
+
+    const item = screen.getByRole('menuitem', { name: /Rebase main onto this commit/ });
+    expect(item.getAttribute('aria-disabled')).toBeNull();
+    fireEvent.click(item);
+    expect(screen.getByRole('dialog').textContent).toMatch(/stashed before the replay/);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Rebase' }));
+    });
+    expect(ran('rebase', '--autostash', OID)).toBe(true);
+  });
+
+  it('warns when the stashed changes did not come back cleanly', async () => {
+    // git exits 0 here. Without this notice the rebase reads as a success while
+    // the working tree holds conflict markers and the work sits in a stash the
+    // user was never told about.
+    const store = renderHistory();
+    invoke.mockImplementation(async (_name: string, payload: { args: string[] }) =>
+      payload.args[0] === 'rebase'
+        ? raw(
+            'Applying autostash resulted in conflicts.\nYour changes are safe in the stash.\nSuccessfully rebased and updated refs/heads/main.\n',
+          )
+        : raw('main\n'),
+    );
+    openMenu();
+    fireEvent.click(
+      screen.getByRole('menuitem', { name: /Rebase main onto this commit/ }),
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Rebase' }));
+    });
+
+    const notice = store.getState().notice;
+    expect(notice?.tone).toBe('warning');
+    expect(notice?.message).toMatch(/still in the stash/);
   });
 
   it('offers neither rebase nor reset on a detached HEAD, and says why', () => {

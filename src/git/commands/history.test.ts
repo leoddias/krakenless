@@ -87,7 +87,9 @@ describe('buildRevertCommand', () => {
 
 describe('buildRebaseCommand', () => {
   it('replays the current branch onto the given commit', () => {
-    expect(buildRebaseCommand(OID).args).toEqual(['rebase', OID]);
+    // --autostash is not optional: without it git refuses over a dirty tree,
+    // and the user is sent to a terminal to stash by hand.
+    expect(buildRebaseCommand(OID).args).toEqual(['rebase', '--autostash', OID]);
   });
 
   it('is destructive both by flag and by argument inspection', () => {

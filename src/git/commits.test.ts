@@ -156,7 +156,35 @@ describe('rebaseOnto', () => {
     respond({ stdout: 'main\n' }, {});
     await rebaseOnto('C:/repo', 'main', OID, userConfirmed(OK.reason));
     expect(argsOf(0)).toEqual(['symbolic-ref', '--quiet', '--short', 'HEAD']);
-    expect(argsOf(1)).toEqual(['rebase', OID]);
+    expect(argsOf(1)).toEqual(['rebase', '--autostash', OID]);
+  });
+
+  it('reports an autostash git could not put back, which it exits 0 for', async () => {
+    // The worst shape a rebase can end in: git says "Successfully rebased",
+    // exits 0, and leaves conflict markers in files the user never touched in
+    // the replay, with their work in a stash nobody mentioned.
+    respond(
+      { stdout: 'main\n' },
+      {
+        stdout:
+          'Applying autostash resulted in conflicts.\nYour changes are safe in the stash.\nSuccessfully rebased and updated refs/heads/main.\n',
+      },
+    );
+
+    await expect(
+      rebaseOnto('C:/repo', 'main', OID, userConfirmed(OK.reason)),
+    ).resolves.toBe('autostash-conflicted');
+  });
+
+  it('reports an ordinary rebase as rebased', async () => {
+    respond(
+      { stdout: 'main\n' },
+      { stdout: 'Successfully rebased and updated refs/heads/main.\n' },
+    );
+
+    await expect(
+      rebaseOnto('C:/repo', 'main', OID, userConfirmed(OK.reason)),
+    ).resolves.toBe('rebased');
   });
 
   it('refuses, and runs nothing, when HEAD moved to another branch', async () => {

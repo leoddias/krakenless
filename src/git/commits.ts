@@ -133,19 +133,46 @@ function mergeFailureMessage(said: string): string {
   return line ?? 'The merge did not run, and git did not say why.';
 }
 
+/** How a rebase that git considered successful actually ended. */
+export type RebaseOutcome =
+  | 'rebased'
+  /**
+   * The replay worked and the autostash did not: the working tree holds
+   * conflict markers and the stashed changes are still in a stash entry.
+   */
+  | 'autostash-conflicted';
+
+/**
+ * git's own words when re-applying the autostash conflicts.
+ *
+ * Matched rather than inferred from the status: git exits **0** in this case,
+ * so nothing else distinguishes it from a clean rebase at the moment it
+ * happens, and a status read afterwards cannot tell these conflict markers from
+ * ones that were already there.
+ */
+const AUTOSTASH_CONFLICT = /Applying autostash resulted in conflicts/i;
+
 /**
  * Replays `branch` onto `rev`. `branch` is the name the user was shown; the
  * rebase is abandoned before it starts if HEAD has moved off it.
+ *
+ * The command carries `--autostash` (see `buildRebaseCommand`), so uncommitted
+ * work is put aside and brought back around the replay. When bringing it back
+ * conflicts, git reports it on stdout and still exits 0 — that is read here and
+ * returned, because the caller has to say it out loud.
  */
 export async function rebaseOnto(
   repo: string,
   branch: string,
   rev: string,
   confirmation: Confirmation,
-): Promise<void> {
+): Promise<RebaseOutcome> {
   const gate = approve(confirmation);
   await assertOnBranch(repo, branch);
-  await runGit(repo, buildRebaseCommand(rev), gate);
+  const output = await runGit(repo, buildRebaseCommand(rev), gate);
+  return AUTOSTASH_CONFLICT.test(`${output.stdout}\n${output.stderr}`)
+    ? 'autostash-conflicted'
+    : 'rebased';
 }
 
 /** Moves `branch` to `rev`. Same HEAD guard, same reason. */

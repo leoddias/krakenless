@@ -217,7 +217,9 @@ export function CommitActions({
         setDialog({
           kind: 'confirm',
           title: `Rebase ${action.branch} onto this commit?`,
-          question: rebaseQuestion(action.branch, commit),
+          question: rebaseQuestion(action.branch, commit, {
+            autostash: action.autostash,
+          }),
           confirmLabel: 'Rebase',
           danger: true,
           run: (reason) => rebaseBranchOnto(store, action.branch, commit.oid, reason),

@@ -273,10 +273,22 @@ describe('what the menu refuses to offer', () => {
     expect(item({ branch: null }, 'reset-hard').disabled).toMatch(/detached/);
   });
 
-  it('refuses rebase over a dirty working tree, because git does', () => {
-    const disabled = item({ hasLocalChanges: true }, 'rebase').disabled;
-    expect(disabled).toMatch(/uncommitted changes/);
-    expect(disabled).toMatch(/stash/);
+  it('offers the rebase over a dirty working tree, and asks for the stash', () => {
+    // git refuses to rebase over uncommitted changes; `--autostash` is git's
+    // own answer to that, so the menu offers the operation instead of sending
+    // the user to a terminal to stash by hand.
+    const rebase = item({ hasLocalChanges: true }, 'rebase');
+
+    expect(rebase.disabled).toBeNull();
+    expect(rebase.action).toEqual({ kind: 'rebase', branch: 'main', autostash: true });
+  });
+
+  it('asks for no stash when there is nothing to stash', () => {
+    expect(item({ hasLocalChanges: false }, 'rebase').action).toEqual({
+      kind: 'rebase',
+      branch: 'main',
+      autostash: false,
+    });
   });
 
   it('still offers the operations git runs over a dirty working tree', () => {
@@ -287,7 +299,7 @@ describe('what the menu refuses to offer', () => {
     expect(item(dirty, 'reset-hard').disabled).toBeNull();
   });
 
-  it('reports the detached HEAD before the dirty tree — the branch is the harder block', () => {
+  it('still refuses a detached HEAD, dirty tree or not', () => {
     expect(item({ branch: null, hasLocalChanges: true }, 'rebase').disabled).toMatch(
       /detached/,
     );
@@ -405,6 +417,19 @@ describe('the questions', () => {
       expect(question).toContain('release');
       expect(question).toContain('a1b2c3d');
     }
+  });
+
+  it('says the uncommitted changes are stashed and brought back', () => {
+    const question = rebaseQuestion('main', commit(), { autostash: true });
+
+    expect(question).toMatch(/stashed before the replay/);
+    expect(question).toMatch(/brought back after it/);
+  });
+
+  it('mentions no stash on a clean tree, since none is created', () => {
+    // The question is also the confirmation string the git layer records; it
+    // has to be true of the command that actually runs.
+    expect(rebaseQuestion('main', commit())).not.toMatch(/stash/i);
   });
 
   it('warns that a rebase rewrites ids others may have pulled', () => {

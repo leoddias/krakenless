@@ -86,10 +86,22 @@ export function buildMergeCommand(rev: string): GitCommand {
  *
  * Rewrites history — every replayed commit gets a new oid — so it is
  * destructive even though the old commits survive in the reflog.
+ *
+ * `--autostash` is unconditional. git refuses to rebase over a dirty working
+ * tree, and the app used to relay that refusal as a greyed-out menu item that
+ * sent the user to a terminal to stash by hand. Git's own answer is better than
+ * ours: it stashes before the replay and restores after it, in one command,
+ * with the changes recoverable the whole time. On a clean tree the flag creates
+ * nothing and costs nothing.
+ *
+ * What it does *not* do is guarantee the restore succeeds. When re-applying the
+ * autostash conflicts, git says so, keeps the entry, and still exits 0 —
+ * `rebaseOnto` reads the output for exactly that, because a "rebased" that
+ * quietly left conflict markers in the working tree is the worst outcome here.
  */
 export function buildRebaseCommand(onto: string): GitCommand {
   return {
-    args: ['rebase', assertRevision(onto)],
+    args: ['rebase', '--autostash', assertRevision(onto)],
     destructive: true,
     // A rebase over a long branch is not a sub-second command.
     timeoutMs: 120_000,
