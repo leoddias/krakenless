@@ -231,6 +231,25 @@ pub fn worktree_write(
     Ok(stamp_of(contents.as_bytes()))
 }
 
+/// Deletes a working-tree file.
+///
+/// The same `resolve` guards as a write, for the same reason and one more: this
+/// is the only call in the app that removes a file the user can see, and the
+/// path it is handed comes from a list the user clicked in. A `.git` component,
+/// a symbolic link, a directory, or anything that resolves outside the
+/// repository is refused rather than removed.
+///
+/// Deliberately one file at a time and never recursive: a directory removal
+/// that went wrong would take work with it that was never named on screen.
+#[tauri::command]
+pub fn worktree_delete(repo: String, path: String) -> Result<(), WorktreeError> {
+    let resolved = resolve(&repo, &path)?;
+    std::fs::remove_file(&resolved).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => WorktreeError::NotFound(path.clone()),
+        _ => WorktreeError::WriteFailed(format!("{path}: {e}")),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -527,6 +546,57 @@ mod tests {
         let mode = std::fs::metadata(&file).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o755, "mode became {:o}", mode & 0o777);
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn deletes_a_file_inside_the_repository() {
+        let dir = temp_repo("delete");
+        let file = dir.join("src").join("gone.txt");
+        write(&file, "bye\n");
+
+        worktree_delete(repo_arg(&dir), "src/gone.txt".into()).unwrap();
+
+        assert!(!file.exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn delete_refuses_everything_a_write_refuses() {
+        // One list, one resolver: a delete that resolved paths its own way
+        // would be the one call in the app able to remove `.git/HEAD`.
+        let dir = temp_repo("delete-guards");
+        write(&dir.join(".git").join("HEAD"), "ref: refs/heads/main\n");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        let outside = dir.parent().unwrap().join("krakenless-outside-delete.txt");
+        write(&outside, "not yours\n");
+
+        for path in [
+            ".git/HEAD",
+            ".GIT/HEAD",
+            "../krakenless-outside-delete.txt",
+            "src",
+        ] {
+            let err = worktree_delete(repo_arg(&dir), path.into()).unwrap_err();
+            assert!(
+                matches!(err, WorktreeError::BadRequest(_)),
+                "{path} gave {err:?}"
+            );
+        }
+
+        assert!(outside.exists(), "a path outside the repository was deleted");
+        assert!(dir.join(".git").join("HEAD").exists());
+        assert!(dir.join("src").is_dir());
+
+        std::fs::remove_file(&outside).ok();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn delete_reports_a_missing_file_as_missing() {
+        let dir = temp_repo("delete-missing");
+        let err = worktree_delete(repo_arg(&dir), "nope.txt".into()).unwrap_err();
+        assert!(matches!(err, WorktreeError::NotFound(_)), "{err:?}");
         std::fs::remove_dir_all(&dir).ok();
     }
 }

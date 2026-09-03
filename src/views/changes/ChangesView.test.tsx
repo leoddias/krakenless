@@ -17,6 +17,10 @@ import {
   suggestCommitMessage,
   unstage,
 } from '../../state/actions';
+import { readHeadMessage } from '../../git/log';
+import { revealPath } from '../../config/launch';
+import { deleteWorktreeFile } from '../../fs/file';
+import { copyText } from '../shell/clipboard';
 import { StoreProvider } from '../../state/hooks';
 import { createStore, type Store } from '../../state/store';
 import { ChangesView } from './ChangesView';
@@ -29,6 +33,10 @@ vi.mock('../../state/actions', () => ({
   refreshStatus: vi.fn(),
   suggestCommitMessage: vi.fn(),
 }));
+vi.mock('../../git/log', () => ({ readHeadMessage: vi.fn() }));
+vi.mock('../../fs/file', () => ({ deleteWorktreeFile: vi.fn() }));
+vi.mock('../../config/launch', () => ({ revealPath: vi.fn() }));
+vi.mock('../shell/clipboard', () => ({ copyText: vi.fn() }));
 
 const stageMock = vi.mocked(stage);
 const unstageMock = vi.mocked(unstage);
@@ -36,6 +44,10 @@ const discardMock = vi.mocked(discard);
 const commitMock = vi.mocked(commitStaged);
 const refreshMock = vi.mocked(refreshStatus);
 const suggestMock = vi.mocked(suggestCommitMessage);
+const headMessageMock = vi.mocked(readHeadMessage);
+const deleteFileMock = vi.mocked(deleteWorktreeFile);
+const revealMock = vi.mocked(revealPath);
+const copyMock = vi.mocked(copyText);
 
 function entry(overrides: Partial<StatusEntry> & { path: string }): StatusEntry {
   return {
@@ -127,6 +139,10 @@ beforeEach(() => {
   });
   commitMock.mockReset().mockResolvedValue(undefined);
   refreshMock.mockReset().mockResolvedValue(undefined);
+  headMessageMock.mockReset().mockResolvedValue(null);
+  deleteFileMock.mockReset().mockResolvedValue(undefined);
+  revealMock.mockReset().mockResolvedValue(undefined);
+  copyMock.mockReset().mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -711,6 +727,133 @@ describe('commit box', () => {
       amend: true,
     });
   });
+  it('loads the last commit message when amending, so it can be committed', async () => {
+    // Amending replaces the message wholesale. An empty box meant retyping a
+    // message git already has — and until it was retyped, the button refused.
+    headMessageMock.mockResolvedValue('feat: the thing\n\nWith a body.');
+    renderWithEntries([entry({ path: 'a.ts', index: 'modified' })]);
+
+    fireEvent.click(screen.getByLabelText('Amend the last commit'));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('Commit message')).toHaveValue(
+        'feat: the thing\n\nWith a body.',
+      ),
+    );
+    expect(screen.getByRole('button', { name: 'Amend commit' })).toBeEnabled();
+  });
+
+  it('commits the loaded message unchanged when it is not edited', async () => {
+    headMessageMock.mockResolvedValue('feat: the thing');
+    const store = renderWithEntries([entry({ path: 'a.ts', index: 'modified' })]);
+    fireEvent.click(screen.getByLabelText('Amend the last commit'));
+    await waitFor(() =>
+      expect(screen.getByLabelText('Commit message')).toHaveValue('feat: the thing'),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Amend commit' }));
+
+    expect(commitMock).toHaveBeenCalledWith(store, {
+      message: 'feat: the thing',
+      amend: true,
+    });
+  });
+
+  it('never overwrites a message the user has already written', async () => {
+    headMessageMock.mockResolvedValue('feat: the old one');
+    renderWithEntries([entry({ path: 'a.ts', index: 'modified' })]);
+    typeMessage('fix: what I actually want to say');
+
+    fireEvent.click(screen.getByLabelText('Amend the last commit'));
+
+    await waitFor(() => expect(headMessageMock).not.toHaveBeenCalled());
+    expect(screen.getByLabelText('Commit message')).toHaveValue(
+      'fix: what I actually want to say',
+    );
+  });
+
+  it('takes the loaded message away again when amending is unticked', async () => {
+    headMessageMock.mockResolvedValue('feat: the old one');
+    renderWithEntries([entry({ path: 'a.ts', index: 'modified' })]);
+    const box = screen.getByLabelText('Amend the last commit');
+
+    fireEvent.click(box);
+    await waitFor(() =>
+      expect(screen.getByLabelText('Commit message')).toHaveValue('feat: the old one'),
+    );
+    fireEvent.click(box);
+
+    // It was never a draft for a new commit; leaving it there would look like
+    // one, and commit the old subject again.
+    expect(screen.getByLabelText('Commit message')).toHaveValue('');
+  });
+
+  it('keeps an edited message when amending is unticked', async () => {
+    headMessageMock.mockResolvedValue('feat: the old one');
+    renderWithEntries([entry({ path: 'a.ts', index: 'modified' })]);
+    const box = screen.getByLabelText('Amend the last commit');
+
+    fireEvent.click(box);
+    await waitFor(() =>
+      expect(screen.getByLabelText('Commit message')).toHaveValue('feat: the old one'),
+    );
+    typeMessage('feat: the old one, improved');
+    fireEvent.click(box);
+
+    expect(screen.getByLabelText('Commit message')).toHaveValue(
+      'feat: the old one, improved',
+    );
+  });
+
+  it('amends with nothing staged, which is how a message is fixed', async () => {
+    headMessageMock.mockResolvedValue('feat: typo in the subejct');
+    const store = renderWithEntries([]);
+
+    fireEvent.click(screen.getByLabelText('Amend the last commit'));
+    await waitFor(() =>
+      expect(screen.getByLabelText('Commit message')).toHaveValue(
+        'feat: typo in the subejct',
+      ),
+    );
+    typeMessage('feat: typo in the subject');
+    fireEvent.click(screen.getByRole('button', { name: 'Amend commit' }));
+
+    // Nothing staged is only a problem for a plain commit; an amend with an
+    // empty index rewrites the message, which is most of what amend is for.
+    expect(commitMock).toHaveBeenCalledWith(store, {
+      message: 'feat: typo in the subject',
+      amend: true,
+    });
+  });
+
+  it('says what an amend with nothing staged will do', async () => {
+    headMessageMock.mockResolvedValue('feat: a thing');
+    renderWithEntries([]);
+    expect(screen.getByText('Stage at least one file to commit.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText('Amend the last commit'));
+
+    expect(
+      await screen.findByText(/rewrites the last commit’s message/),
+    ).toBeInTheDocument();
+  });
+
+  it('still commits when the last message cannot be read', async () => {
+    // The box is left typeable; nothing about the amend depended on the read.
+    headMessageMock.mockRejectedValue(new Error('no such ref'));
+    const store = renderWithEntries([entry({ path: 'a.ts', index: 'modified' })]);
+
+    fireEvent.click(screen.getByLabelText('Amend the last commit'));
+    await waitFor(() => expect(headMessageMock).toHaveBeenCalled());
+    typeMessage('fix: typed by hand');
+    fireEvent.click(screen.getByRole('button', { name: 'Amend commit' }));
+
+    expect(commitMock).toHaveBeenCalledWith(store, {
+      message: 'fix: typed by hand',
+      amend: true,
+    });
+  });
+
   it('keeps the draft when a refresh unmounts the lists', () => {
     const store = renderWithEntries([entry({ path: 'a.ts', index: 'modified' })]);
     typeMessage('feat: a long message the user is still writing');
@@ -1082,5 +1225,203 @@ describe('selecting several files at once', () => {
     clickPath('Unstaged', 'd.ts', { shiftKey: true });
 
     expect(store.getState().selection.path).toBe('d.ts');
+  });
+});
+
+describe('the file context menu', () => {
+  /** Right-clicks a row and returns the menu it opened. */
+  function openMenu(sectionName: string, path: string): HTMLElement {
+    const row = within(section(sectionName))
+      .getByRole('button', { name: new RegExp(`^${path}$`) })
+      .closest('li');
+    if (row === null) throw new Error(`no row for ${path}`);
+    act(() => {
+      fireEvent.contextMenu(row, { clientX: 20, clientY: 30 });
+    });
+    return screen.getByRole('menu');
+  }
+
+  function choose(menu: HTMLElement, name: RegExp): void {
+    act(() => {
+      fireEvent.click(within(menu).getByRole('menuitem', { name }));
+    });
+  }
+
+  it('opens on a right-click and names the file it is about', () => {
+    renderWithEntries([entry({ path: 'a.ts', worktree: 'modified' })]);
+
+    const menu = openMenu('Unstaged', 'a.ts');
+
+    expect(menu).toHaveAccessibleName('Actions for a.ts');
+    for (const name of [/^Discard changes$/, /^Delete from disk$/, /^Copy path$/]) {
+      expect(within(menu).getByRole('menuitem', { name })).toBeInTheDocument();
+    }
+  });
+
+  it('asks before discarding, exactly as the row button does', async () => {
+    renderWithEntries([entry({ path: 'a.ts', worktree: 'modified' })]);
+
+    choose(openMenu('Unstaged', 'a.ts'), /^Discard changes$/);
+
+    // The menu is not a shortcut past the confirmation.
+    expect(discardMock).not.toHaveBeenCalled();
+    const dialog = screen.getByRole('alertdialog', { name: 'Confirm discard' });
+    act(() => {
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Discard 1 file' }));
+    });
+    await waitFor(() => expect(discardMock).toHaveBeenCalled());
+  });
+
+  it('asks before deleting, and only deletes once confirmed', async () => {
+    renderWithEntries([entry({ path: 'a.ts', worktree: 'modified' })]);
+
+    choose(openMenu('Unstaged', 'a.ts'), /^Delete from disk$/);
+
+    expect(deleteFileMock).not.toHaveBeenCalled();
+    const dialog = screen.getByRole('alertdialog', { name: 'Confirm delete' });
+    expect(dialog).toHaveTextContent('Delete a.ts from disk?');
+    act(() => {
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Delete 1 file' }));
+    });
+
+    await waitFor(() => expect(deleteFileMock).toHaveBeenCalledWith('/repo', 'a.ts'));
+    // The lists are the only place the user can check what is left.
+    await waitFor(() => expect(refreshMock).toHaveBeenCalled());
+  });
+
+  it('cancels a delete without touching the disk', () => {
+    renderWithEntries([entry({ path: 'a.ts', worktree: 'modified' })]);
+
+    choose(openMenu('Unstaged', 'a.ts'), /^Delete from disk$/);
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    });
+
+    expect(deleteFileMock).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole('alertdialog', { name: 'Confirm delete' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('warns that an untracked file exists nowhere else', () => {
+    renderWithEntries([entry({ path: 'new.ts', worktree: 'untracked' })]);
+
+    choose(openMenu('Unstaged', 'new.ts'), /^Delete from disk$/);
+
+    expect(screen.getByRole('alertdialog', { name: 'Confirm delete' })).toHaveTextContent(
+      /never seen its contents/i,
+    );
+  });
+
+  it('says which files survived a delete that failed partway', async () => {
+    renderWithEntries([
+      entry({ path: 'a.ts', worktree: 'modified' }),
+      entry({ path: 'b.ts', worktree: 'modified' }),
+    ]);
+    deleteFileMock.mockImplementation(async (_repo, path) => {
+      if (path === 'b.ts') throw new Error('permission denied');
+    });
+
+    clickPath('Unstaged', 'a.ts');
+    clickPath('Unstaged', 'b.ts', { shiftKey: true });
+    choose(openMenu('Unstaged', 'a.ts'), /^Delete 2 files from disk$/);
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'Delete 2 files' }));
+    });
+
+    // Every path is attempted even after one fails, and the failure is named.
+    await waitFor(() => expect(deleteFileMock).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        /1 of 2 files were not deleted: b\.ts/,
+      ),
+    );
+  });
+
+  it('acts on the whole selection when the clicked row is part of it', () => {
+    renderWithEntries([
+      entry({ path: 'a.ts', worktree: 'modified' }),
+      entry({ path: 'b.ts', worktree: 'modified' }),
+      entry({ path: 'c.ts', worktree: 'modified' }),
+    ]);
+
+    clickPath('Unstaged', 'a.ts');
+    clickPath('Unstaged', 'b.ts', { shiftKey: true });
+
+    expect(openMenu('Unstaged', 'b.ts')).toHaveAccessibleName('Actions for 2 files');
+  });
+
+  it('acts on one row alone when it is outside the selection', () => {
+    // Otherwise a right-click on an unselected file offers to delete files
+    // somewhere else in the list.
+    renderWithEntries([
+      entry({ path: 'a.ts', worktree: 'modified' }),
+      entry({ path: 'b.ts', worktree: 'modified' }),
+      entry({ path: 'c.ts', worktree: 'modified' }),
+    ]);
+
+    clickPath('Unstaged', 'a.ts');
+    clickPath('Unstaged', 'b.ts', { shiftKey: true });
+
+    expect(openMenu('Unstaged', 'c.ts')).toHaveAccessibleName('Actions for c.ts');
+  });
+
+  it('copies the path git speaks and the one the rest of the machine speaks', async () => {
+    renderWithEntries([entry({ path: 'src/a.ts', worktree: 'modified' })]);
+
+    choose(openMenu('Unstaged', 'src/a.ts'), /^Copy path$/);
+    await waitFor(() => expect(copyMock).toHaveBeenCalledWith('src/a.ts'));
+
+    choose(openMenu('Unstaged', 'src/a.ts'), /^Copy full path$/);
+    await waitFor(() => expect(copyMock).toHaveBeenCalledWith('/repo/src/a.ts'));
+  });
+
+  it('says so when the clipboard refused the copy', async () => {
+    // A copy that did not happen is otherwise only discovered at the paste.
+    copyMock.mockResolvedValue(false);
+    renderWithEntries([entry({ path: 'a.ts', worktree: 'modified' })]);
+
+    choose(openMenu('Unstaged', 'a.ts'), /^Copy path$/);
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'The path could not be copied.',
+      ),
+    );
+  });
+
+  it('reveals the absolute path, not the one git prints', async () => {
+    renderWithEntries([entry({ path: 'src/a.ts', worktree: 'modified' })]);
+
+    choose(openMenu('Unstaged', 'src/a.ts'), /^Reveal in file manager$/);
+
+    await waitFor(() => expect(revealMock).toHaveBeenCalledWith('/repo/src/a.ts'));
+  });
+
+  it('reports a file manager that would not start', async () => {
+    revealMock.mockRejectedValue(new Error('Could not start explorer'));
+    renderWithEntries([entry({ path: 'a.ts', worktree: 'modified' })]);
+
+    choose(openMenu('Unstaged', 'a.ts'), /^Reveal in file manager$/);
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        /Could not open the file manager/,
+      ),
+    );
+  });
+
+  it('refuses to discard from the staged list, with the reason on the item', () => {
+    // The staged row has no unstaged edit to drop, and discarding there would
+    // have to take the staged snapshot instead.
+    renderWithEntries([entry({ path: 'a.ts', index: 'modified' })]);
+
+    const menu = openMenu('Staged', 'a.ts');
+    const item = within(menu).getByRole('menuitem', { name: /^Discard changes$/ });
+
+    expect(item).toHaveAttribute('aria-disabled', 'true');
+    expect(menu).toHaveTextContent(/no unstaged changes/i);
+    choose(menu, /^Discard changes$/);
+    expect(screen.queryByRole('alertdialog', { name: 'Confirm discard' })).toBeNull();
   });
 });

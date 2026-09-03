@@ -140,3 +140,19 @@ export async function saveWorktreeFile(
   }
   return { ...file, text: toEditor(contents), stamp };
 }
+
+/**
+ * Removes a working-tree file from disk.
+ *
+ * Nothing here is recoverable through git: an untracked file deleted this way
+ * exists nowhere else, and a modified tracked file loses its edits. Rust
+ * refuses anything that could reach outside the repository or into `.git`; the
+ * *asking* is the caller's job, and no caller may skip it.
+ */
+export async function deleteWorktreeFile(repo: string, path: string): Promise<void> {
+  try {
+    await invoke('worktree_delete', { repo, path });
+  } catch (error) {
+    throw toFileError(error, 'write-failed');
+  }
+}

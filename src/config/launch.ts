@@ -111,3 +111,17 @@ export async function revealFolder(path: string): Promise<void> {
     throw new Error(describeLaunchFailure('the file manager', error));
   }
 }
+
+/**
+ * Shows one file in the platform's file manager, selected.
+ *
+ * Takes an absolute path: the file manager knows nothing about the repository
+ * root a git path is relative to.
+ */
+export async function revealPath(path: string): Promise<void> {
+  try {
+    await invoke('reveal_path', { path });
+  } catch (error) {
+    throw new Error(describeLaunchFailure('the file manager', error));
+  }
+}

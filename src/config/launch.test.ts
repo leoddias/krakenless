@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { editorLaunch, launch, mergetoolLaunch, revealFolder, tokenize } from './launch';
+import {
+  editorLaunch,
+  launch,
+  mergetoolLaunch,
+  revealFolder,
+  revealPath,
+  tokenize,
+} from './launch';
 
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
@@ -125,5 +132,28 @@ describe('revealFolder', () => {
     expect(invoke).toHaveBeenCalledWith('reveal_folder', {
       path: 'C:/Users/x/AppData/Roaming/krakenless',
     });
+  });
+});
+
+describe('revealPath', () => {
+  beforeEach(() => {
+    invoke.mockReset();
+  });
+
+  it('asks the shell to select the file itself', async () => {
+    invoke.mockResolvedValue(undefined);
+    await revealPath('C:/repos/app/src/a.ts');
+    expect(invoke).toHaveBeenCalledWith('reveal_path', {
+      path: 'C:/repos/app/src/a.ts',
+    });
+  });
+
+  it('turns a bare IPC rejection into something a user can read', async () => {
+    invoke.mockImplementation(async () => {
+      throw { kind: 'BadRequest', message: 'not found: C:/repos/app/gone.ts' };
+    });
+    await expect(revealPath('C:/repos/app/gone.ts')).rejects.toThrow(
+      'not found: C:/repos/app/gone.ts',
+    );
   });
 });

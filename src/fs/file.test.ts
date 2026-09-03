@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
-import { FileError, openWorktreeFile, saveWorktreeFile, type OpenFile } from './file';
+import {
+  deleteWorktreeFile,
+  FileError,
+  openWorktreeFile,
+  saveWorktreeFile,
+  type OpenFile,
+} from './file';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 
@@ -121,5 +127,38 @@ describe('saveWorktreeFile', () => {
       kind: 'write-failed',
       message: 'disk full',
     });
+  });
+});
+
+describe('deleteWorktreeFile', () => {
+  it('asks Rust to remove exactly the path it was given', async () => {
+    invokeMock.mockResolvedValue(undefined);
+
+    await deleteWorktreeFile(REPO, 'src/a.ts');
+
+    expect(invokeMock).toHaveBeenCalledWith('worktree_delete', {
+      repo: REPO,
+      path: 'src/a.ts',
+    });
+  });
+
+  it('reports a refusal as a FileError of its own kind', async () => {
+    // A delete that resolves outside the repository is refused in Rust; the UI
+    // has to be able to tell that apart from a file that was simply not there.
+    invokeMock.mockRejectedValue({
+      kind: 'OutsideRepo',
+      message: '../elsewhere.txt',
+    });
+
+    await expect(deleteWorktreeFile(REPO, '../elsewhere.txt')).rejects.toMatchObject({
+      name: 'FileError',
+      kind: 'outside-repo',
+    });
+  });
+
+  it('never reports an unrecognised failure as success', async () => {
+    invokeMock.mockRejectedValue('the window went away');
+
+    await expect(deleteWorktreeFile(REPO, 'a.ts')).rejects.toBeInstanceOf(FileError);
   });
 });

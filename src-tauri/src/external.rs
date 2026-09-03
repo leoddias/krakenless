@@ -133,6 +133,51 @@ pub fn reveal_folder(path: String) -> Result<(), ExternalError> {
     open_external(program.to_string(), args, None)
 }
 
+/// The arguments that make a file manager open a folder *and select* an item.
+///
+/// Split out from the spawn so it can be asserted on: the child is detached
+/// with its output discarded, so nothing about the launch is observable
+/// afterwards, and the Windows form is unforgiving — Explorer wants
+/// `/select,<path>` as **one** argument with backslashes, and silently opens
+/// the user's Documents folder instead when either is wrong.
+#[cfg(windows)]
+fn reveal_launch(path: &str) -> (String, Vec<String>) {
+    let native = path.replace('/', "\\");
+    ("explorer".into(), vec![format!("/select,{native}")])
+}
+
+#[cfg(target_os = "macos")]
+fn reveal_launch(path: &str) -> (String, Vec<String>) {
+    ("open".into(), vec!["-R".into(), path.into()])
+}
+
+/// No desktop-independent way to select a file, so the containing folder is
+/// opened instead. Better than doing nothing, and better than guessing at a
+/// file manager that may not be installed.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn reveal_launch(path: &str) -> (String, Vec<String>) {
+    let parent = Path::new(path)
+        .parent()
+        .map_or_else(|| path.to_string(), |dir| dir.to_string_lossy().into_owned());
+    ("xdg-open".into(), vec![parent])
+}
+
+/// Shows one file in the platform's file manager, selected.
+///
+/// Takes the absolute path the UI already knows, and checks it rather than
+/// trusting it: a row drawn before the file was deleted would otherwise open a
+/// file manager at nothing — or, on Windows, at whatever folder Explorer falls
+/// back to, which reads as the app having opened the wrong place.
+#[tauri::command]
+pub fn reveal_path(path: String) -> Result<(), ExternalError> {
+    if !Path::new(&path).exists() {
+        return Err(ExternalError::BadRequest(format!("not found: {path}")));
+    }
+    let (program, args) = reveal_launch(&path);
+    // Explorer exits non-zero even on success, so the spawn is all we check.
+    open_external(program, args, None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,5 +272,39 @@ mod tests {
             Some(dir.to_string_lossy().into_owned()),
         );
         assert!(result.is_ok(), "spawn failed: {result:?}");
+    }
+
+    #[test]
+    fn reveal_refuses_a_path_that_is_not_there() {
+        let missing = std::env::temp_dir().join("krakenless-no-such-file-9c1d.txt");
+        let err = reveal_path(missing.to_string_lossy().into_owned()).unwrap_err();
+        assert!(matches!(err, ExternalError::BadRequest(_)), "{err:?}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_reveal_selects_the_file_itself() {
+        // `/select,` and the path must arrive as one argument, with backslashes.
+        // Two arguments, or forward slashes, and Explorer opens the user's
+        // Documents folder without saying so.
+        let (program, args) = reveal_launch("C:/repo/src/main.rs");
+        assert_eq!(program, "explorer");
+        assert_eq!(args, vec![r"/select,C:\repo\src\main.rs".to_string()]);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_reveal_selects_the_file_itself() {
+        let (program, args) = reveal_launch("/repo/src/main.rs");
+        assert_eq!(program, "open");
+        assert_eq!(args, vec!["-R".to_string(), "/repo/src/main.rs".to_string()]);
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn other_unix_reveal_opens_the_containing_folder() {
+        let (program, args) = reveal_launch("/repo/src/main.rs");
+        assert_eq!(program, "xdg-open");
+        assert_eq!(args, vec!["/repo/src".to_string()]);
     }
 }

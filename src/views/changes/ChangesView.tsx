@@ -16,6 +16,9 @@
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { revealPath } from '../../config/launch';
+import { deleteWorktreeFile } from '../../fs/file';
+import { readHeadMessage } from '../../git/log';
 import type { RepoStatus, StatusEntry } from '../../git/types';
 import {
   commitStaged,
@@ -29,7 +32,16 @@ import {
 import { useAppState, useStore } from '../../state/hooks';
 import { isBusy } from '../../state/store';
 import type { Loadable } from '../../state/store';
+import { ContextMenu, type MenuSection } from '../shell/ContextMenu';
+import { copyText } from '../shell/clipboard';
 import { OperationPanel } from './OperationPanel';
+import {
+  buildFileMenu,
+  deleteCost,
+  deleteQuestion,
+  type DeleteCost,
+  type FileAction,
+} from './fileMenu';
 import {
   EMPTY_SELECTION,
   nextSelection,
@@ -75,6 +87,20 @@ interface Pending {
   notice: PendingNotice;
 }
 
+/** A delete waiting on its confirmation, and what it would cost. */
+interface PendingDelete {
+  paths: string[];
+  cost: DeleteCost;
+}
+
+/** Where a file context menu was opened, and on which rows. */
+interface FileMenuTarget {
+  entries: StatusEntry[];
+  /** Viewport coordinates of the right-click. */
+  x: number;
+  y: number;
+}
+
 /** Draft of the commit the user is writing; kept above every refresh. */
 interface CommitDraft {
   message: string;
@@ -87,9 +113,16 @@ export function ChangesView(): ReactNode {
   const status = useAppState((state) => state.status);
   const busy = useAppState(isBusy);
   const selectedPath = useAppState((state) => state.selection.path);
+  // A bare repository has no working tree, and `root` aliases the git
+  // directory there — never a path to hand a file manager or a delete.
+  const repoRoot = useAppState((state) =>
+    state.repo.state === 'ready' && !state.repo.value.bare ? state.repo.value.root : null,
+  );
   const store = useStore();
 
   const [pending, setPending] = useState<Pending | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
+  const [menu, setMenu] = useState<FileMenuTarget | null>(null);
   const [recoveries, setRecoveries] = useState<Recovery[]>([]);
   const [failure, setFailure] = useState<string | null>(null);
   const nextRecoveryId = useRef(0);
@@ -213,6 +246,79 @@ export function ChangesView(): ReactNode {
     }
   };
 
+  /**
+   * Carries out what the context menu was asked for.
+   *
+   * Both writes stop here rather than running: a discard goes through the same
+   * confirmation the row button uses, and a delete opens its own. The two reads
+   * — copy and reveal — run immediately, and both report their own failure,
+   * because a copy that did not happen is only discovered at the next paste.
+   */
+  const runMenuAction = (action: FileAction, entries: StatusEntry[]): void => {
+    switch (action.kind) {
+      case 'discard':
+        askDiscard(action.paths);
+        return;
+      case 'delete':
+        setFailure(null);
+        setPendingDelete({
+          paths: action.paths,
+          cost: deleteCost(entries.filter((entry) => action.paths.includes(entry.path))),
+        });
+        return;
+      case 'reveal':
+        void revealPath(action.path).catch((error: unknown) => {
+          setFailure(`Could not open the file manager. ${messageOf(error)}`);
+        });
+        return;
+      case 'copy':
+        void copyText(action.text).then(
+          (copied) => {
+            if (!copied) setFailure(`The ${action.what} could not be copied.`);
+          },
+          (error: unknown) => {
+            setFailure(`The ${action.what} could not be copied. ${messageOf(error)}`);
+          },
+        );
+        return;
+    }
+  };
+
+  /**
+   * Deletes the confirmed files, one at a time, and says what survived.
+   *
+   * One `await` per file rather than a batch: a failure halfway through a batch
+   * leaves the user with no idea which files are gone. Every path is attempted
+   * even after one fails, and the status is re-read afterwards whatever
+   * happened — the lists are the only place the user can check.
+   */
+  const runDelete = async (current: PendingDelete): Promise<void> => {
+    setPendingDelete(null);
+    setFailure(null);
+    if (repoRoot === null) {
+      setFailure('The repository path is not known, so nothing was deleted.');
+      return;
+    }
+
+    const failed: string[] = [];
+    let firstReason: string | null = null;
+    for (const path of current.paths) {
+      try {
+        await deleteWorktreeFile(repoRoot, path);
+      } catch (error) {
+        failed.push(path);
+        firstReason ??= messageOf(error);
+      }
+    }
+
+    await refreshStatus(store);
+    if (failed.length > 0) {
+      setFailure(
+        `${failed.length === current.paths.length ? 'Nothing was deleted' : `${String(failed.length)} of ${String(current.paths.length)} files were not deleted`}: ${failed.join(', ')}. ${firstReason ?? ''}`,
+      );
+    }
+  };
+
   return (
     <section className={styles.panel} aria-label="Changes">
       {/*
@@ -254,6 +360,26 @@ export function ChangesView(): ReactNode {
         />
       )}
 
+      {pendingDelete !== null && (
+        <DeleteConfirmation
+          pending={pendingDelete}
+          busy={busy}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={() => void runDelete(pendingDelete)}
+        />
+      )}
+
+      {menu !== null && (
+        <FileMenu
+          target={menu}
+          root={repoRoot}
+          busy={busy}
+          discardable={discardablePaths(status)}
+          onChoose={runMenuAction}
+          onClose={() => setMenu(null)}
+        />
+      )}
+
       {status.state === 'idle' && (
         <Notice title="No repository open">
           Open a repository to see its working-tree changes.
@@ -283,6 +409,7 @@ export function ChangesView(): ReactNode {
           onStage={(paths) => void runStaging('Staging', () => stage(store, paths))}
           onUnstage={(paths) => void runStaging('Unstaging', () => unstage(store, paths))}
           onAskDiscard={askDiscard}
+          onOpenMenu={setMenu}
           selectedPath={selectedPath}
           onShowDiff={showInDiff}
         />
@@ -310,6 +437,7 @@ function ChangeLists({
   onStage,
   onUnstage,
   onAskDiscard,
+  onOpenMenu,
   selectedPath,
   onShowDiff,
 }: {
@@ -321,6 +449,7 @@ function ChangeLists({
   onStage: (paths: string[]) => void;
   onUnstage: (paths: string[]) => void;
   onAskDiscard: (paths: string[]) => void;
+  onOpenMenu: (target: FileMenuTarget) => void;
   selectedPath: string | null;
   onShowDiff: (path: string) => void;
 }): ReactNode {
@@ -363,6 +492,7 @@ function ChangeLists({
           { label: 'Stage', run: () => onStage(pathsOf(entry)) },
           { label: 'Discard', danger: true, run: () => onAskDiscard(pathsOf(entry)) },
         ]}
+        onOpenMenu={onOpenMenu}
         selectedPath={selectedPath}
         onShowDiff={onShowDiff}
       />
@@ -379,6 +509,7 @@ function ChangeLists({
         rowActions={(entry) => [
           { label: 'Unstage', run: () => onUnstage(pathsOf(entry)) },
         ]}
+        onOpenMenu={onOpenMenu}
         selectedPath={selectedPath}
         onShowDiff={onShowDiff}
       />
@@ -529,6 +660,148 @@ function DiscardConfirmation({
   );
 }
 
+/**
+ * The context menu for one or more working-tree rows.
+ *
+ * Thin on purpose: which items exist, and which of them may run, is decided in
+ * `fileMenu.ts` where it can be asserted. This turns that answer into the menu
+ * the shell already knows how to draw, and hands the chosen action back with
+ * the rows it was built from — so a delete confirmation can say what each of
+ * those rows would cost even after the menu is gone.
+ */
+function FileMenu({
+  target,
+  root,
+  busy,
+  discardable,
+  onChoose,
+  onClose,
+}: {
+  target: FileMenuTarget;
+  root: string | null;
+  busy: boolean;
+  discardable: ReadonlySet<string>;
+  onChoose: (action: FileAction, entries: StatusEntry[]) => void;
+  onClose: () => void;
+}): ReactNode {
+  const sections: MenuSection[] = buildFileMenu({
+    entries: target.entries,
+    root,
+    busy,
+    discardable,
+  }).map((section) =>
+    section.map((item) => ({
+      id: item.id,
+      label: item.label,
+      disabled: item.disabled,
+      ...(item.action === undefined
+        ? {}
+        : { onSelect: () => onChoose(item.action as FileAction, target.entries) }),
+    })),
+  );
+
+  const first = target.entries[0];
+  const label =
+    target.entries.length === 1 && first !== undefined
+      ? `Actions for ${first.path}`
+      : `Actions for ${String(target.entries.length)} files`;
+
+  return (
+    <ContextMenu
+      sections={sections}
+      x={target.x}
+      y={target.y}
+      label={label}
+      onClose={onClose}
+    />
+  );
+}
+
+/**
+ * The question asked before files leave the disk.
+ *
+ * Discard has a stash behind it and can promise the work back; this cannot
+ * promise anything, so it says exactly what git would still hold and what it
+ * would not. Untracked files are called out separately because they are the
+ * only ones whose contents exist nowhere else in the world.
+ */
+function DeleteConfirmation({
+  pending,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  pending: PendingDelete;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}): ReactNode {
+  const { paths, cost } = pending;
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
+  // The safe choice takes focus, so a stray Enter cancels instead of deletes.
+  useEffect(() => {
+    cancelRef.current?.focus();
+  }, []);
+
+  return (
+    <div
+      className={styles.confirm}
+      role="alertdialog"
+      aria-label="Confirm delete"
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') onCancel();
+      }}
+    >
+      <strong className={styles.noticeTitle}>{deleteQuestion(paths)}</strong>
+      <p className={styles.noticeText}>
+        These files are removed from disk. This is not a discard: Krakenless keeps no
+        stash of them, and nothing here puts them back.
+      </p>
+      {cost.untracked.length > 0 && (
+        <p className={styles.warning}>
+          {cost.untracked.length === 1
+            ? 'One of these is untracked, so git has never seen its contents.'
+            : `${String(cost.untracked.length)} of these are untracked, so git has never seen their contents.`}{' '}
+          Nothing in the repository can bring them back.
+        </p>
+      )}
+      {cost.tracked.length > 0 && (
+        <p className={styles.noticeText}>
+          The committed version of the tracked files stays in the repository — `git
+          restore` brings those back — but any change since the last commit goes with the
+          file.
+        </p>
+      )}
+      <ul className={styles.pathList}>
+        {paths.map((path) => (
+          <li key={path} className={styles.path}>
+            {path}
+          </li>
+        ))}
+      </ul>
+      <div className={styles.confirmActions}>
+        <button
+          type="button"
+          className={styles.button}
+          ref={cancelRef}
+          onClick={onCancel}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          className={`${styles.button} ${styles.danger}`}
+          disabled={busy}
+          onClick={onConfirm}
+        >
+          {paths.length === 1 ? 'Delete 1 file' : `Delete ${String(paths.length)} files`}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 interface RowAction {
   label: string;
   danger?: boolean;
@@ -546,6 +819,7 @@ function FileSection({
   busy,
   onBulk,
   rowActions,
+  onOpenMenu,
   selectedPath,
   onShowDiff,
 }: {
@@ -560,6 +834,7 @@ function FileSection({
   busy: boolean;
   onBulk: (paths: string[]) => void;
   rowActions: (entry: StatusEntry) => RowAction[];
+  onOpenMenu: (target: FileMenuTarget) => void;
   /** Path the diff panel is currently narrowed to, so the row can show it. */
   selectedPath: string | null;
   onShowDiff: (path: string) => void;
@@ -631,6 +906,22 @@ function FileSection({
                   ? `${styles.row} ${styles.rowSelected}`
                   : styles.row
               }
+              /*
+                Right-click acts on the selection when the clicked row is part
+                of it, and on that row alone otherwise — the rule every file
+                list uses. Acting on the selection regardless would let a
+                right-click on an unselected file delete files elsewhere in the
+                list; replacing the selection would throw away work the user
+                spent ten shift-clicks building.
+              */
+              onContextMenu={(event) => {
+                event.preventDefault();
+                const target =
+                  live.paths.has(entry.path) && live.paths.size > 1
+                    ? entries.filter((candidate) => live.paths.has(candidate.path))
+                    : [entry];
+                onOpenMenu({ entries: target, x: event.clientX, y: event.clientY });
+              }}
             >
               <span className={styles.state} title={STATE_LABELS[entry[side]]}>
                 {STATE_LETTERS[entry[side]]}
@@ -747,15 +1038,65 @@ function CommitBox({
   const aiCommand = useAppState((state) => state.config.aiCommand).trim();
   const [suggesting, setSuggesting] = useState(false);
   const [aiNote, setAiNote] = useState<string | null>(null);
+  /**
+   * The message this box filled in from the last commit, while it is untouched.
+   *
+   * Ticking Amend loads that commit's message, because an amend replaces it
+   * wholesale — leaving the box empty asked the user to retype a message git
+   * already has, and made the button refuse to do anything until they did.
+   * Unticking puts the box back to empty, but only if this is still exactly
+   * what was loaded: once a word has been changed it is the user's draft, and
+   * theirs to keep.
+   */
+  const loadedMessage = useRef<string | null>(null);
+  // The draft as of this render, for the callback that resumes after an await:
+  // the box can have been typed into while git was answering.
+  const latest = useRef(draft);
+  latest.current = draft;
 
   const empty = message.trim().length === 0;
-  const disabled = busy || empty || stagedCount === 0;
   // Amending mid-merge would rewrite a commit while the operation is still
   // running, and unlike a plain commit git would not stop it.
   const canAmend = !hasConflicts && head !== null;
   // What the button will actually do, so the flag sent to git can never differ
   // from the label the user read.
   const amending = amend && canAmend;
+  // An amend with nothing staged is a real operation — it rewrites the last
+  // commit's message — so only a plain commit needs something to commit.
+  const disabled = busy || empty || (stagedCount === 0 && !amending);
+
+  /**
+   * Ticks or unticks Amend, carrying the last commit's message with it.
+   *
+   * The read failing is not worth an error: the box is simply left as it was,
+   * and the user can type. Nothing about the amend itself depends on it.
+   */
+  const toggleAmend = async (checked: boolean): Promise<void> => {
+    if (!checked) {
+      const untouched =
+        loadedMessage.current !== null && message === loadedMessage.current;
+      loadedMessage.current = null;
+      onDraft({ ...draft, amend: false, message: untouched ? '' : message });
+      return;
+    }
+    onDraft({ ...draft, amend: true });
+    // A draft already written is an answer; it is not replaced by the old one.
+    if (!empty) return;
+    const repo = store.getState().repo;
+    if (repo.state !== 'ready') return;
+    try {
+      const previous = await readHeadMessage(repo.value.root);
+      if (previous === null || previous.length === 0) return;
+      const now = latest.current;
+      // Still the same empty box, still amending: anything else means the user
+      // has moved on, and their state wins.
+      if (!now.amend || now.message.trim().length > 0) return;
+      loadedMessage.current = previous;
+      onDraft({ ...now, message: previous });
+    } catch {
+      // Left as it was; the box is still typeable and Amend still works.
+    }
+  };
 
   /**
    * Fills the box; never commits. A model's sentence about someone's code is a
@@ -790,6 +1131,7 @@ function CommitBox({
     onDraft({ ...draft, error: null });
     try {
       await commitStaged(store, { message, amend: amending });
+      loadedMessage.current = null;
       onDraft({ message: '', amend: false, error: null });
     } catch (failure) {
       onDraft({ ...draft, error: `Commit failed: ${messageOf(failure)}` });
@@ -815,7 +1157,7 @@ function CommitBox({
           type="checkbox"
           checked={amending}
           disabled={busy || !canAmend}
-          onChange={(event) => onDraft({ ...draft, amend: event.target.checked })}
+          onChange={(event) => void toggleAmend(event.target.checked)}
         />
         Amend the last commit
       </label>
@@ -845,7 +1187,9 @@ function CommitBox({
       )}
 
       <div className={styles.commitActions}>
-        <span className={styles.commitHint}>{commitHint(stagedCount, empty)}</span>
+        <span className={styles.commitHint}>
+          {commitHint(stagedCount, empty, amending)}
+        </span>
         <button
           type="button"
           className={styles.button}
@@ -886,10 +1230,22 @@ function aiTitle(command: string, stagedCount: number, message: string): string 
 }
 
 /** Says why the button is off, instead of leaving a dead control on screen. */
-function commitHint(stagedCount: number, emptyMessage: boolean): string {
-  if (stagedCount === 0) return 'Stage at least one file to commit.';
+function commitHint(
+  stagedCount: number,
+  emptyMessage: boolean,
+  amending: boolean,
+): string {
+  // Nothing staged is only a problem for a plain commit. An amend with an empty
+  // index rewrites the last commit's message, which is most of what people
+  // amend for, so saying "stage a file first" there was simply wrong.
+  if (stagedCount === 0 && !amending) return 'Stage at least one file to commit.';
   if (emptyMessage) return 'Write a commit message to commit.';
-  return stagedCount === 1 ? '1 file staged.' : `${stagedCount} files staged.`;
+  if (amending) {
+    return stagedCount === 0
+      ? 'Nothing staged: this rewrites the last commit’s message.'
+      : `${String(stagedCount)} file${stagedCount === 1 ? '' : 's'} staged; they join the last commit.`;
+  }
+  return stagedCount === 1 ? '1 file staged.' : `${String(stagedCount)} files staged.`;
 }
 
 function Notice({
