@@ -326,6 +326,16 @@
   font-weight: 600;
 }
 
+/* The branch whose commit the diff panel is showing. Distinct from `.current`,
+   which is the branch checked out: after this change the two are routinely
+   different, and confusing "what I am looking at" with "where I am working" is
+   the whole class of mistake this panel now has to avoid. */
+.nameSelected {
+  background: var(--selected);
+  color: var(--fg-strong);
+  border-radius: var(--radius);
+}
+
 .marker {
   flex: none;
   font-size: 0.6875rem;

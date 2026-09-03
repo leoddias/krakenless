@@ -59,7 +59,7 @@ function stash(
 
 const BRANCHES: Branch[] = [
   branch({ name: 'main', current: true, upstream: 'origin/main', ahead: 2, behind: 1 }),
-  branch({ name: 'feature/x' }),
+  branch({ name: 'feature/x', oid: 'f'.repeat(40) }),
   branch({ name: 'origin/main', remote: true }),
 ];
 
@@ -111,6 +111,12 @@ function renderLoaded(
     store.dispatch({ type: 'branches/loaded', branches });
     store.dispatch({ type: 'stashes/loaded', stashes });
   });
+}
+
+/** Presses the Switch button on a branch's row. */
+async function clickSwitchFor(name: string): Promise<void> {
+  const row = screen.getByRole('button', { name }).parentElement as HTMLElement;
+  await click(within(row).getByRole('button', { name: 'Switch' }));
 }
 
 async function click(element: HTMLElement): Promise<void> {
@@ -289,13 +295,22 @@ describe('branch list', () => {
     ).toBeInTheDocument();
   });
 
-  it('marks the current branch and does not offer to switch to it', async () => {
+  it('marks the current branch, and clicking it selects rather than switches', async () => {
     renderLoaded();
     const current = screen.getByRole('button', { name: /main\s*\(current branch\)/ });
     expect(current).toHaveAttribute('aria-current', 'true');
-    expect(current).toHaveAttribute('aria-disabled', 'true');
+
     await click(current);
+
     expect(switchToMock).not.toHaveBeenCalled();
+    expect(selectCommitMock).toHaveBeenCalledWith(expect.anything(), 'a'.repeat(40));
+  });
+
+  it('offers no Switch button for the branch already checked out', () => {
+    renderLoaded();
+    const row = screen.getByRole('button', { name: /main\s*\(current branch\)/ })
+      .parentElement as HTMLElement;
+    expect(within(row).getByRole('button', { name: 'Switch' })).toBeDisabled();
   });
 
   it('shows ahead and behind counts per branch', () => {
@@ -307,9 +322,45 @@ describe('branch list', () => {
     expect(within(row).getByTitle('Tracks origin/main, 2 ahead, 1 behind')).toBeTruthy();
   });
 
-  it('switches on click', async () => {
+  // The behaviour this replaced ran `git switch` on a click. In a repository
+  // with uncommitted work that either churns the whole working tree or is
+  // refused after blocking the window — for the sake of *reading* a branch.
+  it('selects the commit a branch points at, and moves nothing on disk', async () => {
     const store = renderLoaded();
+
     await click(screen.getByRole('button', { name: 'feature/x' }));
+
+    expect(selectCommitMock).toHaveBeenCalledWith(store, 'f'.repeat(40));
+    expect(switchToMock).not.toHaveBeenCalled();
+  });
+
+  it('marks the branch whose commit is on screen', async () => {
+    const store = renderLoaded();
+    await act(async () => {
+      store.dispatch({ type: 'selection/commit', oid: 'f'.repeat(40) });
+    });
+
+    expect(screen.getByRole('button', { name: 'feature/x' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(
+      screen.getByRole('button', { name: /main\s*\(current branch\)/ }),
+    ).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('checks out only from the Switch button, which says what it does', async () => {
+    const store = renderLoaded();
+    const row = screen.getByRole('button', { name: 'feature/x' })
+      .parentElement as HTMLElement;
+    const switchButton = within(row).getByRole('button', { name: 'Switch' });
+    expect(switchButton).toHaveAttribute(
+      'title',
+      expect.stringContaining('changes the files in your working tree'),
+    );
+
+    await click(switchButton);
+
     expect(switchToMock).toHaveBeenCalledWith(store, 'feature/x');
   });
 
@@ -325,7 +376,7 @@ describe('branch list', () => {
       });
       return false;
     });
-    await click(screen.getByRole('button', { name: 'feature/x' }));
+    await clickSwitchFor('feature/x');
 
     const alert = screen.getByRole('alert');
     expect(alert).toHaveTextContent('Could not switch to "feature/x"');
@@ -335,7 +386,7 @@ describe('branch list', () => {
 
   it('says nothing extra when the switch worked', async () => {
     renderLoaded();
-    await click(screen.getByRole('button', { name: 'feature/x' }));
+    await clickSwitchFor('feature/x');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 

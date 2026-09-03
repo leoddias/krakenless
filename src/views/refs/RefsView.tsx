@@ -444,6 +444,13 @@ export function RefsView(): ReactNode {
         <BranchesSection
           busy={locked}
           selectedOid={selectedOid}
+          // Reading a branch is a selection, never a checkout: the diff panel
+          // shows what the commit at its tip changed, and nothing on disk
+          // moves.
+          onSelect={(branch) => {
+            clearMessages();
+            void selectCommit(store, branch.oid);
+          }}
           onSwitch={(name) => {
             clearMessages();
             void runSwitch(name);
@@ -551,12 +558,14 @@ function CollapsibleHeader({
 function BranchesSection({
   busy,
   selectedOid,
+  onSelect,
   onSwitch,
   onCreate,
   onAskDelete,
 }: {
   busy: boolean;
   selectedOid: string | null;
+  onSelect: (branch: Branch) => void;
   onSwitch: (name: string) => void;
   onCreate: CreateBranch;
   onAskDelete: (name: string) => void;
@@ -600,6 +609,8 @@ function BranchesSection({
           <BranchLists
             branches={branches.value}
             busy={busy}
+            selectedOid={selectedOid}
+            onSelect={onSelect}
             onSwitch={onSwitch}
             onCreate={onCreate}
             onAskDelete={onAskDelete}
@@ -613,12 +624,16 @@ function BranchesSection({
 function BranchLists({
   branches,
   busy,
+  selectedOid,
+  onSelect,
   onSwitch,
   onCreate,
   onAskDelete,
 }: {
   branches: readonly Branch[];
   busy: boolean;
+  selectedOid: string | null;
+  onSelect: (branch: Branch) => void;
   onSwitch: (name: string) => void;
   onCreate: CreateBranch;
   onAskDelete: (name: string) => void;
@@ -647,8 +662,29 @@ function BranchLists({
             <ul className={styles.list}>
               {local.map((branch) => (
                 <li key={branch.name} className={styles.row}>
-                  <BranchButton branch={branch} busy={busy} onSwitch={onSwitch} />
+                  <BranchButton
+                    branch={branch}
+                    busy={busy}
+                    selected={selectedOid === branch.oid}
+                    onSelect={onSelect}
+                  />
                   <Divergence branch={branch} />
+                  {/* Checking out is the thing that moves files, so it is the
+                      thing that says so on its face, rather than something a
+                      click on a name does silently. */}
+                  <button
+                    type="button"
+                    className={styles.button}
+                    disabled={busy || branch.current}
+                    title={
+                      branch.current
+                        ? `${branch.name} is already checked out.`
+                        : `Check out ${branch.name}. This changes the files in your working tree.`
+                    }
+                    onClick={() => onSwitch(branch.name)}
+                  >
+                    Switch
+                  </button>
                   <button
                     type="button"
                     className={`${styles.button} ${styles.danger}`}
@@ -700,33 +736,41 @@ function BranchLists({
   );
 }
 
+/**
+ * A local branch row's name, which *selects* rather than checks out.
+ *
+ * Clicking it used to run `git switch`. In a repository with a lot of
+ * uncommitted work that is the most expensive thing the app can do by
+ * accident: git either churns the whole working tree or refuses, the window
+ * blocks while it decides, and the list then redraws on whatever branch it
+ * ended up on. Reading a branch is not a reason to move anyone's files.
+ *
+ * So a click answers "what is on this branch?" — it selects the commit the
+ * branch points at, and the diff panel shows what that commit changed.
+ * Checking out is still one click away, on its own button that says so.
+ */
 function BranchButton({
   branch,
   busy,
-  onSwitch,
+  selected,
+  onSelect,
 }: {
   branch: Branch;
   busy: boolean;
-  onSwitch: (name: string) => void;
+  selected: boolean;
+  onSelect: (branch: Branch) => void;
 }): ReactNode {
-  // The current branch is `aria-disabled`, not `disabled`: the row stays
-  // focusable so a keyboard user can read where they are, and its click is
-  // simply not a switch.
   return (
     <button
       type="button"
-      className={`${styles.name} ${branch.current ? styles.current : ''}`}
+      className={`${styles.name} ${branch.current ? styles.current : ''} ${
+        selected ? styles.nameSelected : ''
+      }`}
       disabled={busy}
-      aria-disabled={branch.current ? 'true' : undefined}
       aria-current={branch.current ? 'true' : undefined}
-      title={
-        branch.current
-          ? `${branch.name} is the current branch. ${trackingSummary(branch)}`
-          : `Switch to ${branch.name}. ${trackingSummary(branch)}`
-      }
-      onClick={() => {
-        if (!branch.current) onSwitch(branch.name);
-      }}
+      aria-pressed={selected}
+      title={`Show the commit ${branch.name} points at. ${trackingSummary(branch)}`}
+      onClick={() => onSelect(branch)}
     >
       <span aria-hidden="true" className={styles.marker}>
         {branch.current ? '●' : '○'}
