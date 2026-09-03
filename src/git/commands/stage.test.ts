@@ -119,12 +119,28 @@ describe('buildDiscardCommand', () => {
       'stash',
       'push',
       '--keep-index',
-      '--include-untracked',
       '--message',
       'label',
       '--',
       'a.txt',
     ]);
+  });
+
+  it('never asks for untracked content on the tracked phase', () => {
+    // With --include-untracked git stages the pathspec itself, and a tracked
+    // path under an ignored directory makes that step fail *after* the stash
+    // exists — the discard stops half done and the recovery notice fires.
+    expect(
+      buildDiscardCommand(['a.txt'], 'label', { keepIndex: true }).args,
+    ).not.toContain('--include-untracked');
+  });
+
+  it('asks for untracked content on the untracked phase', () => {
+    // Without it there is nothing to stash: an untracked file has no index
+    // entry, so a plain `stash push` saves nothing and the file stays put.
+    expect(
+      buildDiscardCommand(['new.txt'], 'label', { keepIndex: false }).args,
+    ).toContain('--include-untracked');
   });
 
   it('drops --keep-index for untracked paths, which git rejects with it', () => {

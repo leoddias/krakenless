@@ -8,7 +8,14 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -170,6 +177,30 @@ describe('discard recovery against real git', () => {
     runRecovery(recoveryFor(sourceOid, ['my notes.txt'], presentPaths).commands[0]!);
 
     expect(read('my notes.txt')).toBe('spaced\n');
+  });
+
+  it('discards a tracked path that sits under an ignored directory', () => {
+    // Real report: a file committed once with `add -f` and later covered by a
+    // .gitignore rule. `--include-untracked` makes git stage the pathspec, that
+    // step refuses the ignored directory, and the push exits 1 *after* writing
+    // the stash — the worktree edit stays on disk and the user is told the
+    // discard failed partway. The tracked phase must not pass that flag.
+    mkdirSync(join(repo, 'cache', 'plugins'), { recursive: true });
+    write(join('cache', 'plugins', 'p.json'), 'one\n');
+    write('.gitignore', 'cache/\n');
+    git(['add', '--force', 'cache/plugins/p.json', '.gitignore']);
+    git(['commit', '--quiet', '--message', 'ignored but tracked']);
+    write(join('cache', 'plugins', 'p.json'), 'two\n');
+
+    git(buildDiscardCommand(['cache/plugins/p.json'], 'label', { keepIndex: true }).args);
+
+    expect(read(join('cache', 'plugins', 'p.json'))).toBe('one\n');
+    const stashOid = git(['rev-parse', 'refs/stash']).trim();
+    const { sourceOid, presentPaths } = describeStash(stashOid, false);
+    runRecovery(
+      recoveryFor(sourceOid, ['cache/plugins/p.json'], presentPaths).commands[0]!,
+    );
+    expect(read(join('cache', 'plugins', 'p.json'))).toBe('two\n');
   });
 
   it('creates no stash for a path whose worktree matches the index', () => {

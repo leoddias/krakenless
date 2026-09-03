@@ -165,8 +165,14 @@ export function buildDiscardCommand(
       // `checkout-index`, which fails outright on an untracked path
       // ("did not match any file(s) known to git"). An untracked file has no
       // index entry to protect anyway.
-      ...(options.keepIndex ? ['--keep-index'] : []),
-      '--include-untracked',
+      //
+      // The two flags are mutually exclusive by construction: the tracked
+      // phase must not ask for untracked content, because `--include-untracked`
+      // makes git stage the pathspec itself, and a *tracked* path that sits
+      // under an ignored directory (committed once with `add -f`, then ignored)
+      // makes that step fail with "paths are ignored by one of your .gitignore
+      // files" — after the stash entry exists, leaving the discard half done.
+      ...(options.keepIndex ? ['--keep-index'] : ['--include-untracked']),
       '--message',
       label,
       ...pathspec(paths),
