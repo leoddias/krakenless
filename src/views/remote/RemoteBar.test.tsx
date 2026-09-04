@@ -551,3 +551,60 @@ describe('RemoteBar — a branch merely behind', () => {
     expect(screen.getByText(/2 commits this branch does not/)).toBeInTheDocument();
   });
 });
+
+describe('RemoteBar — the button that just succeeded', () => {
+  it('turns the push button green with a check, and says so to assistive technology', async () => {
+    // A push that worked used to be one grey line under the toolbar — the
+    // same weight the app gives "nothing happened".
+    renderReady({ upstream: 'origin/main', ahead: 1 });
+    expect(button('Push')).not.toHaveAttribute('data-done');
+
+    await act(async () => {
+      fireEvent.click(button('Push'));
+    });
+
+    expect(button('Push')).toHaveAttribute('data-done', 'true');
+    expect(button('Push').querySelector('svg')).not.toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent('Push finished.');
+    // Only the button that ran: the others stay as they were.
+    expect(button('Fetch')).not.toHaveAttribute('data-done');
+    expect(button('Pull')).not.toHaveAttribute('data-done');
+  });
+
+  it('marks the pull the same way', async () => {
+    renderReady();
+    await act(async () => {
+      fireEvent.click(button('Pull'));
+    });
+    expect(button('Pull')).toHaveAttribute('data-done', 'true');
+  });
+
+  it('does not mark a push that failed', async () => {
+    pushMock.mockResolvedValue(false);
+    renderReady({ upstream: 'origin/main', ahead: 1 });
+
+    await act(async () => {
+      fireEvent.click(button('Push'));
+    });
+
+    expect(button('Push')).not.toHaveAttribute('data-done');
+    expect(screen.getByRole('alert')).toHaveTextContent('Push did not complete');
+  });
+
+  it('drops the mark when the branch changes underneath it', async () => {
+    const store = renderReady({ upstream: 'origin/main', ahead: 1 });
+    await act(async () => {
+      fireEvent.click(button('Push'));
+    });
+    expect(button('Push')).toHaveAttribute('data-done', 'true');
+
+    act(() => {
+      store.dispatch({
+        type: 'status/loaded',
+        status: statusOf({ branch: 'release', upstream: 'origin/release' }),
+      });
+    });
+
+    expect(button('Push')).not.toHaveAttribute('data-done');
+  });
+});

@@ -194,6 +194,26 @@ export function ChevronDownIcon(props: IconProps): ReactNode {
  * button says what is happening where the user is already looking — instead of
  * the whole window reloading to tell them.
  */
+/** A check mark, for a control whose action just finished. */
+export function CheckIcon({ size = 16, className }: IconProps): ReactNode {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={className}
+    >
+      <path d="M3 8.5l3.2 3.2L13 4.8" />
+    </svg>
+  );
+}
+
 export function SpinnerIcon({ size = 16, className }: IconProps): ReactNode {
   return (
     <svg

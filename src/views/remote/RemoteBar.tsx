@@ -26,7 +26,7 @@ import {
 import { useAppState, useStore } from '../../state/hooks';
 import { isBusy } from '../../state/store';
 import { DialogHost, type ConfirmDialog } from '../history/CommitActions';
-import { FetchIcon, PullIcon, PushIcon, SpinnerIcon } from '../shell/icons';
+import { CheckIcon, FetchIcon, PullIcon, PushIcon, SpinnerIcon } from '../shell/icons';
 import styles from './RemoteBar.module.css';
 import {
   BUSY_REASON,
@@ -233,6 +233,14 @@ export function RemoteBar(): ReactNode {
   // doing anything?" belongs on the control that was pressed.
   const spinning = (kind: ActionKind, icon: ReactNode): ReactNode =>
     running === kind ? <SpinnerIcon className={styles.spinner} /> : icon;
+  // The button that just succeeded turns green for as long as its outcome
+  // line is on screen — the same condition, so the two never disagree.
+  const finished = (...kinds: ActionKind[]): boolean =>
+    running === null &&
+    outcome !== null &&
+    outcome.ok &&
+    outcomeApplies &&
+    kinds.includes(outcome.kind);
 
   const actions: ToolbarAction[] = [
     {
@@ -241,6 +249,7 @@ export function RemoteBar(): ReactNode {
       icon: spinning('fetch', <FetchIcon />),
       reason: fetchBlock(gate),
       hint: 'Downloads new commits from every remote and prunes branches that are gone. Nothing in your working tree changes.',
+      done: finished('fetch'),
       onClick: () => void run('fetch', () => fetchRemote(store)),
     },
     {
@@ -255,6 +264,7 @@ export function RemoteBar(): ReactNode {
         diverged === null
           ? 'Fast-forward only. If your branch and its upstream have diverged, git stops and says so instead of merging for you.'
           : 'Your branch and its upstream have diverged. This asks for confirmation, then fetches and merges the upstream into your branch.',
+      done: finished('pull', 'pull-merge'),
       onClick: onPull,
     },
     {
@@ -263,6 +273,7 @@ export function RemoteBar(): ReactNode {
       icon: spinning(publishing ? 'publish' : 'push', <PushIcon />),
       reason: pushReason,
       hint: pushHint(upstream, publishRemote),
+      done: finished('push', 'publish'),
       onClick: onPush,
     },
   ];
@@ -329,6 +340,7 @@ export function RemoteBar(): ReactNode {
             className={outcome.ok ? styles.success : styles.failure}
             role={outcome.ok ? 'status' : 'alert'}
           >
+            {outcome.ok && <CheckIcon size={12} className={styles.successIcon} />}
             {outcome.ok
               ? SUCCESS_LABEL[outcome.kind]
               : `${FAILURE_LABEL[outcome.kind]} Krakenless is showing what git reported; read that message before trying again.`}
@@ -423,6 +435,13 @@ interface ToolbarAction {
   /** Non-null when the action is unavailable; the text says why. */
   reason: string | null;
   hint: string;
+  /**
+   * True right after this action succeeded: the button turns green and says
+   * so, until the next click or the next refresh of the branch. A push that
+   * worked used to be one grey line under the toolbar, which is the same
+   * weight the app gives "nothing happened".
+   */
+  done?: boolean;
   onClick: () => void;
 }
 
@@ -441,6 +460,7 @@ function Action({
   reason,
   hint,
   reasonId,
+  done = false,
   onClick,
 }: ToolbarAction & { reasonId: string | null }): ReactNode {
   const hintId = `${id}-hint`;
@@ -449,12 +469,15 @@ function Action({
     <div className={styles.action}>
       <button
         type="button"
-        className={styles.button}
+        className={done ? `${styles.button} ${styles.buttonDone}` : styles.button}
         disabled={reason !== null}
         aria-describedby={reasonId ?? hintId}
+        // Announced, not only coloured: the green is the feedback for eyes, the
+        // attribute is the same feedback for a screen reader.
+        data-done={done ? 'true' : undefined}
         onClick={onClick}
       >
-        {icon}
+        {done ? <CheckIcon className={styles.check} /> : icon}
         <span>{label}</span>
       </button>
       {reason === null && (
