@@ -608,3 +608,66 @@ describe('RemoteBar — the button that just succeeded', () => {
     expect(button('Push')).not.toHaveAttribute('data-done');
   });
 });
+
+describe('RemoteBar — the green fades, the sentence stays', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('takes the mark off the button after a few seconds and keeps the outcome', async () => {
+    // A control that stays highlighted stops reading as "this just happened"
+    // and starts reading as a state the button is in.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderReady({ upstream: 'origin/main', ahead: 1 });
+    await act(async () => {
+      fireEvent.click(button('Push'));
+    });
+    expect(button('Push')).toHaveAttribute('data-done', 'true');
+
+    act(() => {
+      vi.advanceTimersByTime(5_000);
+    });
+
+    expect(button('Push')).not.toHaveAttribute('data-done');
+    // The answer to "did it work?" outlives the moment of feedback.
+    expect(screen.getByRole('status')).toHaveTextContent('Push finished.');
+  });
+
+  it('keeps the mark for the whole five seconds', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderReady({ upstream: 'origin/main', ahead: 1 });
+    await act(async () => {
+      fireEvent.click(button('Push'));
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(4_900);
+    });
+
+    expect(button('Push')).toHaveAttribute('data-done', 'true');
+  });
+
+  it('gives a second action its own five seconds', async () => {
+    // The first countdown must not fire into the second action and take the
+    // green off a button that had only just earned it.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderReady({ upstream: 'origin/main', ahead: 1 });
+    await act(async () => {
+      fireEvent.click(button('Push'));
+    });
+    act(() => {
+      vi.advanceTimersByTime(4_000);
+    });
+
+    await act(async () => {
+      fireEvent.click(button('Fetch'));
+    });
+    // The push's countdown had 1s left; the fetch's has just started.
+    act(() => {
+      vi.advanceTimersByTime(2_000);
+    });
+
+    expect(button('Fetch')).toHaveAttribute('data-done', 'true');
+    expect(button('Push')).not.toHaveAttribute('data-done');
+  });
+});

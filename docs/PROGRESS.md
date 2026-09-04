@@ -55,9 +55,10 @@
   also when the rest of the diff is empty.
 - **The remote toolbar shows success in green**: the button that just
   finished gets a check, a green tint and one pulse (none under
-  `prefers-reduced-motion`), and the outcome line is green with a check.
-  Announced through `data-done` too.
-- **Test status:** `npm test` 2127 passing (101 files), `cargo test` 108 passing;
+  `prefers-reduced-motion`), and goes back to normal after five seconds while
+  the outcome line — green, with a check — stays. Announced through
+  `data-done` too.
+- **Test status:** `npm test` 2130 passing (101 files), `cargo test` 108 passing;
   oxlint, prettier and clippy clean. `cargo fmt` is *not* clean and never has
   been — see `docs/ROADMAP.md` § Backlog.
 - **Git no longer runs on the UI thread** (ADR-0028). Every git command used to

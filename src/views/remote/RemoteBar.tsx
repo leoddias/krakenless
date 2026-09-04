@@ -15,7 +15,7 @@
  * error the user cannot act on.
  */
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   fetchRemote,
   pullCurrent,
@@ -87,6 +87,16 @@ const FAILURE_LABEL: Record<ActionKind, string> = {
   publish: 'Publishing did not complete. The branch still has no upstream.',
 };
 
+/**
+ * How long the finished button stays green.
+ *
+ * Long enough to be seen by someone who looked away while it ran, short
+ * enough that it is gone before the next thing they do — a control that stays
+ * highlighted stops reading as "this just happened" and starts reading as a
+ * state the button is in.
+ */
+const CELEBRATION_MS = 5_000;
+
 /** The remote toolbar. Reads the store, acts only through the action layer. */
 export function RemoteBar(): ReactNode {
   const store = useStore();
@@ -98,6 +108,13 @@ export function RemoteBar(): ReactNode {
 
   const [running, setRunning] = useState<ActionKind | null>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
+  // The action whose button is green *right now*. Separate from `outcome`
+  // because the two have different lifetimes: the green is a moment of
+  // feedback and expires on its own, while the sentence stays until something
+  // replaces it — the answer to "did it work?" must still be on screen a
+  // minute later, when the button has long since gone back to normal.
+  const [celebrating, setCelebrating] = useState<ActionKind | null>(null);
+  const celebrationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The merge-pull question, while it is on screen. Kept as dialog state (not
   // derived) so a background refresh that changes the counts mid-question
   // cannot swap the sentence the user is about to agree to.
@@ -146,17 +163,49 @@ export function RemoteBar(): ReactNode {
 
   const publishing = upstream.kind === 'no-upstream';
 
+  /**
+   * Turns a button green for a few seconds, and only that long.
+   *
+   * The timer is held in a ref and cleared on every call, so a second action
+   * finishing does not leave the first one's countdown running — that timer
+   * would fire later and take the green off a button that had only just
+   * earned it. Cleared on unmount too: a repository closed mid-countdown must
+   * not have this setting state on a component that is gone.
+   */
+  const celebrate = useCallback((kind: ActionKind | null): void => {
+    if (celebrationTimer.current !== null) clearTimeout(celebrationTimer.current);
+    celebrationTimer.current = null;
+    setCelebrating(kind);
+    if (kind === null) return;
+    celebrationTimer.current = setTimeout(() => {
+      celebrationTimer.current = null;
+      setCelebrating(null);
+    }, CELEBRATION_MS);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (celebrationTimer.current !== null) clearTimeout(celebrationTimer.current);
+    };
+  }, []);
+
+  const finish = (kind: ActionKind, ok: boolean): void => {
+    setOutcome({ kind, ok, repoRoot, branch: branchNow });
+    celebrate(ok ? kind : null);
+  };
+
   const run = async (kind: ActionKind, act: () => Promise<boolean>): Promise<void> => {
     setRunning(kind);
     setOutcome(null);
+    celebrate(null);
     try {
       // `false` means the action layer caught a GitError and dispatched a
       // notice. It is a failure, and it is recorded as one.
-      setOutcome({ kind, ok: await act(), repoRoot, branch: branchNow });
+      finish(kind, await act());
     } catch {
       // The action layer is not supposed to throw; if it does, the operation
       // still did not finish, and saying so is the only honest option.
-      setOutcome({ kind, ok: false, repoRoot, branch: branchNow });
+      finish(kind, false);
     } finally {
       setRunning(null);
     }
@@ -169,18 +218,19 @@ export function RemoteBar(): ReactNode {
   const runMergePull = async (reason: string): Promise<void> => {
     setRunning('pull-merge');
     setOutcome(null);
+    celebrate(null);
     try {
       const result = await pullMergeCurrent(store, reason);
-      if (result !== 'conflicted') {
-        setOutcome({
-          kind: 'pull-merge',
-          ok: result === 'pulled',
-          repoRoot,
-          branch: branchNow,
-        });
-      }
+      // Three answers, and `null` is the failure — the action layer returns it
+      // once it has reported the error itself. `autostash-conflicted` counts
+      // as finished: the merge landed, and what did not is the stash coming
+      // back, which the warning notice says in its own words. Calling the pull
+      // a failure there would contradict it, and the fast-forward pull has
+      // always reported that case as finished.
+      if (result === null) finish('pull-merge', false);
+      else if (result !== 'conflicted') finish('pull-merge', true);
     } catch {
-      setOutcome({ kind: 'pull-merge', ok: false, repoRoot, branch: branchNow });
+      finish('pull-merge', false);
     } finally {
       setRunning(null);
     }
@@ -233,14 +283,15 @@ export function RemoteBar(): ReactNode {
   // doing anything?" belongs on the control that was pressed.
   const spinning = (kind: ActionKind, icon: ReactNode): ReactNode =>
     running === kind ? <SpinnerIcon className={styles.spinner} /> : icon;
-  // The button that just succeeded turns green for as long as its outcome
-  // line is on screen — the same condition, so the two never disagree.
+  // The button that just succeeded, for the few seconds the green lasts. It
+  // still answers to `outcomeApplies`: a branch that changed underneath the
+  // toolbar takes the sentence away, and a green button left over it would be
+  // making a claim about a branch nobody is looking at any more.
   const finished = (...kinds: ActionKind[]): boolean =>
     running === null &&
-    outcome !== null &&
-    outcome.ok &&
+    celebrating !== null &&
     outcomeApplies &&
-    kinds.includes(outcome.kind);
+    kinds.includes(celebrating);
 
   const actions: ToolbarAction[] = [
     {
