@@ -86,6 +86,11 @@ after 2 more weeks → proceed to v0.2. Else: keep as personal tool, stop invest
 
 ## Backlog (ideas parking lot — not scheduled)
 
+**A chunked discard leaves many stash entries.** ADR-0044: a discard of
+thousands of files is one stash push per 8,000 characters of paths, each
+labelled `(k/N)`. A "drop all parts of this discard" control on the stash list
+would tidy that in one click.
+
 **Delete should move the file to the OS trash, not remove it.** ADR-0041 ships
 a real delete with a confirmation that says what it costs; the recoverable form
 the safety bar asks for is the platform trash (`SHFileOperation` on Windows,

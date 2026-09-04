@@ -40,7 +40,22 @@
   `layout` like the panel sizes. The file list has a List / Tree switch
   (`diffFileList`). `useLayout` now lives in `views/shell/useLayout.ts`. Not
   yet used by hand in the running app.
-- **Test status:** `npm test` 2105 passing (97 files), `cargo test` 103 passing;
+- **"Discard all" over thousands of files works** (2026-09-04, ADR-0044): a
+  long pathspec goes to git on stdin for `add`/`restore`, and a stash push is
+  chunked because git itself cannot take a long list there. The planner reads
+  one `status` instead of `ls-files` + `diff`. The runner names a too-long
+  command line instead of claiming git is missing.
+- **Pull carries `--autostash`** (2026-09-04, ADR-0044): a dirty working tree
+  no longer makes a pull fail; the autostash-conflict case is detected the
+  same way the rebase's is (`autostash.ts`) and reported as a warning.
+- **An untracked file shows its contents in the diff panel** as every line
+  added, read through the editor's door (`openWorktreeFile`), no hunk buttons,
+  also when the rest of the diff is empty.
+- **The remote toolbar shows success in green**: the button that just
+  finished gets a check, a green tint and one pulse (none under
+  `prefers-reduced-motion`), and the outcome line is green with a check.
+  Announced through `data-done` too.
+- **Test status:** `npm test` 2144 passing (102 files), `cargo test` 103 passing;
   oxlint, prettier and clippy clean. `cargo fmt` is *not* clean and never has
   been — see `docs/ROADMAP.md` § Backlog.
 - **Git no longer runs on the UI thread** (ADR-0028). Every git command used to
@@ -198,6 +213,29 @@
   until `buildPushCommand` emits a `<local>:<upstream>` refspec.
 
 ## Session log
+
+### 2026-09-04 (later) — four reports from one afternoon of use
+
+**Discard all with 4,524 untracked files** said "Could not start git. Is it
+installed and on PATH?". Windows refused to start the process: the paths were
+the command line. The obvious fix — a pathspec on stdin — repairs `add` and
+`restore` and does nothing for `stash push`, which hands the list to its own
+`git clean` as arguments and dies *after* writing the entry. So the discard
+chunks its pushes (ADR-0044), and every attempted route is a test against the
+real binary so the next person does not retry them.
+
+**Pull over an edited file** failed where git refuses to overwrite; both pulls
+now carry `--autostash`, and the exit-0 conflict case is read the way the
+rebase's is — the detector and the sentence moved to `autostash.ts`.
+
+**An untracked file** clicked in the working-tree panel said "Nothing to diff
+yet — stage it to see its contents". It now shows the file from disk as every
+line added, through the ordinary file block told it is a preview.
+
+**A push that succeeded** was one grey line. The button turns green with a
+check and pulses once; the outcome line is green with a check.
+
+None of the four has been used by hand in the running app yet.
 
 ### 2026-09-04 — every edge drags, and the file list can be a tree
 

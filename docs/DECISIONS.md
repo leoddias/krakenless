@@ -1152,3 +1152,45 @@ stylesheet used to hard-code. `ConflictResolver` keeps its own local share
 state for now; moving it onto `useLayout` is a small follow-up. A header
 column's edge is a `separator` with a `tabindex`, so the widths are reachable
 from the keyboard like the panel edges are (ADR-0020).
+
+## ADR-0044 — A long path list goes to git on stdin, and a stash push is chunked; the pull carries `--autostash` (amends ADR-0042)
+
+**Date:** 2026-09-04 · **Status:** accepted
+
+**Decision — the path list.** `pathspecInput` puts a pathspec after `--` as
+before while it is short, and past 8,000 characters (`PATHSPEC_ARGV_LIMIT`)
+sends it NUL-separated on stdin with `--pathspec-from-file=- --pathspec-file-nul`.
+`add` and `restore --staged` take that route. `stash push` cannot: given a
+pathspec file it still hands the paths as *arguments* to the `git clean` and
+`git checkout` it spawns underneath, and on Windows that inner spawn fails with
+"cannot spawn git: Filename too long" **after the stash entry is written** —
+verified against git 2.39 with 5,000 paths, and kept as a test so a git that
+fixes it is noticed. So `discardPaths` runs one push per chunk of paths that
+fits the budget (`chunkPathspec`), each entry labelled `(k/N)`, each its own
+route back; a failure keeps the routes the earlier pushes earned, and the
+partway message now quotes git's own error. `planDiscard` no longer runs
+`ls-files` and `diff` over the requested paths — neither accepts stdin — and
+reads one `status` instead. The Rust runner reports a command line past the
+platform's limit as a bad argument rather than "git could not be started".
+
+**Why.** "Discard all" over 4,524 untracked build files failed with "Could not
+start git. Is it installed and on PATH?" — Windows refused to start the
+process (error 206) because the paths were the command line. Every fix short of
+chunking was tried and is recorded in the tests: stdin fixes `add` and
+`restore`; it does not fix `stash push`, and neither does staging the files
+first and stashing without `-u`. Twenty stash entries for a four-thousand-file
+discard is ugly; it is also recoverable, which a single entry that git could
+not finish was not.
+
+**Decision — the pull.** Both pull builders carry `--autostash`, for the reason
+the rebase does (ADR-0042). `pull` and `pullMerge` return an outcome read from
+git's output, and `autostash-conflicted` is reported as a warning. The
+detector moved to `autostash.ts`, shared by the rebase and the pull, along with
+the one sentence the user is told.
+
+**Consequences.** `GitCommand` gained `stdin`, which the runner sends when the
+caller passed none. The discard's recovery notice can list many commands; the
+stash list can gain many entries from one click, all labelled as parts of one
+discard. Backlog: a "drop all parts" control for those. The untracked-file
+preview and the green success state on the remote toolbar shipped in the same
+session and are product changes, not decisions; PROGRESS has them.
