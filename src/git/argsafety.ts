@@ -28,6 +28,76 @@ export function pathspec(paths: string[]): string[] {
 }
 
 /**
+ * Past this many characters of paths, the list travels on stdin.
+ *
+ * Windows caps a command line at 32,767 characters, and `CreateProcess`
+ * fails outright above it — the runner then reports "could not start git",
+ * which is not what happened. The cap is set well under the limit so the
+ * subcommand, its flags and the runner's own globals always fit beside it.
+ */
+export const PATHSPEC_ARGV_LIMIT = 8_000;
+
+/**
+ * Splits a path list into runs that each fit the argument budget.
+ *
+ * For `git stash push`, which cannot take a long list at all: given a
+ * pathspec file it still hands the paths to the `git clean` and `git checkout`
+ * it spawns underneath *as arguments*, and on Windows that inner spawn fails
+ * with "Filename too long" — after the stash entry has been written (verified
+ * against git 2.39 with 5,000 paths). So the caller runs one push per run,
+ * and every run is short enough for git's own subprocesses.
+ */
+export function chunkPathspec(paths: string[]): string[][] {
+  const chunks: string[][] = [];
+  let current: string[] = [];
+  let length = 0;
+  for (const path of paths.map(assertPath)) {
+    if (current.length > 0 && length + path.length + 1 > PATHSPEC_ARGV_LIMIT) {
+      chunks.push(current);
+      current = [];
+      length = 0;
+    }
+    current.push(path);
+    length += path.length + 1;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
+
+/** What a builder spreads into its command: arguments, and maybe stdin. */
+export interface PathspecInput {
+  args: string[];
+  stdin?: string;
+}
+
+/**
+ * A pathspec sized for the command line it will run on.
+ *
+ * A short list goes after `--` as always. A long one — "Discard all" over a
+ * few thousand untracked files is the case that found this — goes through
+ * `--pathspec-from-file=- --pathspec-file-nul`, NUL-separated on stdin, which
+ * has no length limit. Both forms are literal: the runner's
+ * `--literal-pathspecs` sets `GIT_LITERAL_PATHSPECS`, which git honours for a
+ * pathspec file just as for arguments (verified against git 2.39).
+ *
+ * Only for subcommands that accept `--pathspec-from-file`: `add`, `restore`,
+ * `stash push`, `checkout`, `reset`, `rm`, `commit`. `diff` and `ls-files` do
+ * not, and must not be given one.
+ */
+export function pathspecInput(paths: string[]): PathspecInput {
+  if (paths.length === 0) {
+    reject('pathspec needs at least one path', '');
+  }
+  const checked = paths.map(assertPath);
+  const length = checked.reduce((sum, path) => sum + path.length + 1, 0);
+  if (length <= PATHSPEC_ARGV_LIMIT) return { args: ['--', ...checked] };
+  return {
+    args: ['--pathspec-from-file=-', '--pathspec-file-nul'],
+    stdin: checked.join('\0'),
+  };
+}
+
+/**
  * A repository-relative path that is safe to pass to git. Paths always travel
  * after `--`, so a leading dash is not itself dangerous — but a path that is
  * empty, absolute, or escapes the repository points at something the user did

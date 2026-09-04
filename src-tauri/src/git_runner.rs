@@ -239,9 +239,25 @@ pub fn run_capture(
     // Own process group, so killing on timeout reaches everything it spawned.
     command.process_group(0);
 
-    let mut child = command
-        .spawn()
-        .map_err(|e| GitRunError::SpawnFailed(e.to_string()))?;
+    let mut child = command.spawn().map_err(|e| {
+        // A command line past the platform's limit fails here too, and
+        // reporting it as "git could not be started" sends the user to check
+        // their PATH for a problem that is ours: too many paths as arguments.
+        // Windows refuses with error 206 (ERROR_FILENAME_EXCED_RANGE); POSIX
+        // with E2BIG (7). Builders are meant to put long lists on stdin.
+        #[cfg(windows)]
+        let too_long = e.raw_os_error() == Some(206);
+        #[cfg(not(windows))]
+        let too_long = e.raw_os_error() == Some(7);
+        if too_long {
+            GitRunError::BadArgument(
+                "the command line is too long for this system; too many paths were passed as arguments"
+                    .into(),
+            )
+        } else {
+            GitRunError::SpawnFailed(e.to_string())
+        }
+    })?;
 
     // Write stdin on its own thread too: a patch larger than the pipe buffer
     // would otherwise block us here while the child blocks writing output.

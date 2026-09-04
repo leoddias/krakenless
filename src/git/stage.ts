@@ -11,7 +11,8 @@ import {
   buildUnstageCommand,
   type CommitOptions,
 } from './commands/stage';
-import { pathspec } from './argsafety';
+import { chunkPathspec } from './argsafety';
+import { getStatus } from './status';
 import { recoveryFor, unrecoverableNote } from './recovery';
 import type { Confirmation } from './confirm';
 import { GitError } from './errors';
@@ -277,20 +278,24 @@ async function planDiscard(
   repo: string,
   paths: string[],
 ): Promise<{ tracked: string[]; untracked: string[] }> {
-  const listed = await runGit(repo, { args: ['ls-files', '-z', ...pathspec(paths)] });
-  const tracked = new Set(
-    listed.stdout.split('\u0000').filter((path) => path.length > 0),
-  );
-
-  // Worktree-vs-index differences: exactly the paths a discard would change.
-  const dirty = await runGit(repo, {
-    args: ['diff', '--name-only', '-z', ...pathspec(paths)],
-  });
-  const changed = new Set(dirty.stdout.split('\u0000').filter((path) => path.length > 0));
+  // One status read over the whole tree rather than `ls-files` and `diff`
+  // over the requested paths: neither of those accepts a pathspec on stdin,
+  // and a few thousand untracked files — "Discard all" after a build — pushed
+  // the command line past what Windows will start a process with.
+  const status = await getStatus(repo);
+  const changed = new Set<string>();
+  const untracked = new Set<string>();
+  for (const entry of status.entries) {
+    if (entry.worktree === 'untracked') untracked.add(entry.path);
+    else if (entry.worktree !== 'unmodified' && entry.worktree !== 'ignored') {
+      // Worktree-vs-index differences: exactly the paths a discard would change.
+      changed.add(entry.path);
+    }
+  }
 
   return {
-    tracked: paths.filter((path) => tracked.has(path) && changed.has(path)),
-    untracked: paths.filter((path) => !tracked.has(path)),
+    tracked: paths.filter((path) => changed.has(path)),
+    untracked: paths.filter((path) => untracked.has(path)),
   };
 }
 
@@ -348,20 +353,19 @@ async function describeStash(
 }
 
 /**
- * Runs one stash phase and describes what it created, if anything.
+ * Runs one stash push and describes what it created, if anything.
  *
  * A failure still has to report the stash: `stash push` can fail *after*
  * stashing a file and removing it from disk, and losing that oid to an
  * exception means the file is gone with no route back.
  */
-async function stashAway(
+async function stashOnce(
   repo: string,
   paths: string[],
   label: string,
   keepIndex: boolean,
   gate: { confirmed: true },
 ): Promise<StashedPhase | null> {
-  if (paths.length === 0) return null;
   const before = await stashTip(repo);
 
   try {
@@ -369,7 +373,10 @@ async function stashAway(
   } catch (error) {
     const created = await stashTip(repo);
     if (created !== null && created !== before) {
-      throw new StashedButFailed(await describeStash(repo, created, paths, !keepIndex));
+      throw new StashedButFailed(
+        [await describeStash(repo, created, paths, !keepIndex)],
+        error,
+      );
     }
     throw error;
   }
@@ -382,14 +389,58 @@ async function stashAway(
   return describeStash(repo, after, paths, !keepIndex);
 }
 
-/** Carries a phase's stash out of a failure so the undo route survives. */
-class StashedButFailed extends Error {
-  readonly phase: StashedPhase;
+/**
+ * Runs one phase — tracked or untracked — as as many pushes as its paths need.
+ *
+ * One push per chunk (see `chunkPathspec`). `git stash push` cannot take a
+ * long path list by any route: given one on stdin it still hands the paths as
+ * arguments to the `git clean` and `git checkout` it runs underneath, and on
+ * Windows that inner spawn fails with "Filename too long" *after* the entry
+ * is written — the discard stops with the files still on disk, which is the
+ * screenshot that found this. Each push is its own entry and its own route
+ * back; a discard of four thousand files is twenty stashes and twenty
+ * commands, which is ugly and honest. A failure keeps what earlier pushes
+ * earned, so nothing already stashed loses its oid to the exception.
+ */
+async function stashAway(
+  repo: string,
+  paths: string[],
+  label: string,
+  keepIndex: boolean,
+  gate: { confirmed: true },
+): Promise<StashedPhase[]> {
+  const chunks = chunkPathspec(paths);
+  const done: StashedPhase[] = [];
+  for (const [index, chunk] of chunks.entries()) {
+    const part =
+      chunks.length === 1
+        ? label
+        : `${label} (${String(index + 1)}/${String(chunks.length)})`;
+    try {
+      const phase = await stashOnce(repo, chunk, part, keepIndex, gate);
+      if (phase !== null) done.push(phase);
+    } catch (error) {
+      if (error instanceof StashedButFailed) {
+        throw new StashedButFailed([...done, ...error.phases], error.cause);
+      }
+      if (done.length > 0) throw new StashedButFailed(done, error);
+      throw error;
+    }
+  }
+  return done;
+}
 
-  constructor(phase: StashedPhase) {
+/** Carries every stash a failed discard made out of the failure, so the undo routes survive. */
+class StashedButFailed extends Error {
+  readonly phases: StashedPhase[];
+  /** What actually went wrong, in git's words. */
+  override readonly cause: unknown;
+
+  constructor(phases: StashedPhase[], cause: unknown) {
     super('The discard failed after stashing');
     this.name = 'StashedButFailed';
-    this.phase = phase;
+    this.phases = phases;
+    this.cause = cause;
   }
 }
 
@@ -418,26 +469,31 @@ export async function discardPaths(
 
   const undoCommands: string[] = [];
   const notes: string[] = [];
-  const absorb = (phase: StashedPhase | null): void => {
-    if (phase === null) return;
+  const absorb = (phase: StashedPhase): void => {
     const recovery = collectRecovery(phase);
     undoCommands.push(...recovery.commands);
     notes.push(...recovery.notes);
   };
 
   try {
-    absorb(await stashAway(repo, plan.tracked, stashLabel, true, gate));
-    absorb(await stashAway(repo, plan.untracked, stashLabel, false, gate));
+    for (const phase of await stashAway(repo, plan.tracked, stashLabel, true, gate)) {
+      absorb(phase);
+    }
+    for (const phase of await stashAway(repo, plan.untracked, stashLabel, false, gate)) {
+      absorb(phase);
+    }
   } catch (error) {
     // Work may already be off disk. Whatever went wrong, the routes back that
-    // earlier phases earned must travel with the error, not be dropped with it.
-    if (error instanceof StashedButFailed) absorb(error.phase);
-    if (undoCommands.length === 0 && notes.length === 0) throw error;
+    // earlier pushes earned must travel with the error, not be dropped with it.
+    const cause = error instanceof StashedButFailed ? error.cause : error;
+    if (error instanceof StashedButFailed) error.phases.forEach(absorb);
+    if (undoCommands.length === 0 && notes.length === 0) throw cause;
 
     throw new GitError(
       'command-failed',
       [
         'The discard failed partway, and some changes are already in a stash.',
+        `git said: ${cause instanceof Error ? cause.message : String(cause)}.`,
         ...undoCommands.map((command) => `Recover with: ${command}`),
         ...notes,
       ].join(' '),

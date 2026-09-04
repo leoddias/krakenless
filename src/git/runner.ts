@@ -92,7 +92,7 @@ export async function runGit(
       repo,
       args: command.args,
       timeoutMs: command.timeoutMs ?? null,
-      stdin: options.stdin ?? null,
+      stdin: options.stdin ?? command.stdin ?? null,
     });
   } catch (error) {
     throw toGitError(command.args, error);

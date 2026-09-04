@@ -17,6 +17,12 @@ export interface GitCommand {
   destructive?: boolean;
   /** Overrides the runner's default timeout for slow operations (fetch, push). */
   timeoutMs?: number;
+  /**
+   * Text for git's standard input, when the command carries its own — a
+   * pathspec list too long for the command line (see `pathspecInput`). A
+   * caller's `RunOptions.stdin` takes precedence, for the patch case.
+   */
+  stdin?: string;
 }
 
 /** Raw result of running git, straight from the Rust shell. */

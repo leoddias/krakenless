@@ -1,4 +1,4 @@
-import { assertRevision, pathspec } from '../argsafety';
+import { assertRevision, pathspec, pathspecInput } from '../argsafety';
 import { GitError } from '../errors';
 import type { GitCommand } from '../types';
 
@@ -12,7 +12,8 @@ import type { GitCommand } from '../types';
 
 /** Stages whole paths. Adding is always recoverable, so it needs no confirmation. */
 export function buildStageCommand(paths: string[]): GitCommand {
-  return { args: ['add', ...pathspec(paths)] };
+  const { args, stdin } = pathspecInput(paths);
+  return { args: ['add', ...args], ...(stdin === undefined ? {} : { stdin }) };
 }
 
 /**
@@ -20,7 +21,12 @@ export function buildStageCommand(paths: string[]): GitCommand {
  * — the working tree keeps the user's edits either way.
  */
 export function buildUnstageCommand(paths: string[]): GitCommand {
-  return { args: ['restore', '--staged', ...pathspec(paths)], destructive: true };
+  const { args, stdin } = pathspecInput(paths);
+  return {
+    args: ['restore', '--staged', ...args],
+    destructive: true,
+    ...(stdin === undefined ? {} : { stdin }),
+  };
 }
 
 /**
@@ -157,7 +163,9 @@ export function buildDiscardCommand(
   label: string,
   options: { keepIndex: boolean },
 ): GitCommand {
+  const { args: paths_, stdin } = pathspecInput(paths);
   return {
+    ...(stdin === undefined ? {} : { stdin }),
     args: [
       'stash',
       'push',
@@ -175,7 +183,7 @@ export function buildDiscardCommand(
       ...(options.keepIndex ? ['--keep-index'] : ['--include-untracked']),
       '--message',
       label,
-      ...pathspec(paths),
+      ...paths_,
     ],
     destructive: true,
     timeoutMs: 120_000,
