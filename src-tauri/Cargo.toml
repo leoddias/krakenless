@@ -1,6 +1,6 @@
 [package]
 name = "krakenless"
-version = "0.6.0"
+version = "0.6.1"
 description = "Fast, private desktop Git GUI"
 authors = ["Leonardo Dias"]
 license = "AGPL-3.0-only"
