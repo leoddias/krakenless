@@ -55,9 +55,18 @@ export function buildFetchCommand(options: FetchOptions = {}): GitCommand {
  * why. The alternative — an implicit merge or rebase — makes a decision on the
  * user's behalf that can leave the repository mid-operation with conflicts they
  * did not ask for. Divergence is surfaced as an error and handled explicitly.
+ *
+ * `--autostash` for the reason the rebase carries it (ADR-0042): git refuses
+ * to pull over a working tree whose files the pull would touch, and relaying
+ * that refusal sends the user to a terminal to stash by hand. Git's own answer
+ * is to stash before and restore after, and on a clean tree it costs nothing.
+ * When the restore conflicts git says so and exits 0 — `pull` reads for it.
  */
 export function buildPullCommand(): GitCommand {
-  return { args: ['pull', '--ff-only', '--progress'], timeoutMs: NETWORK_TIMEOUT_MS };
+  return {
+    args: ['pull', '--ff-only', '--autostash', '--progress'],
+    timeoutMs: NETWORK_TIMEOUT_MS,
+  };
 }
 
 /**
@@ -79,7 +88,7 @@ export function buildPullCommand(): GitCommand {
  */
 export function buildPullMergeCommand(): GitCommand {
   return {
-    args: ['pull', '--no-rebase', '--ff', '--no-edit', '--progress'],
+    args: ['pull', '--no-rebase', '--ff', '--no-edit', '--autostash', '--progress'],
     timeoutMs: NETWORK_TIMEOUT_MS,
   };
 }

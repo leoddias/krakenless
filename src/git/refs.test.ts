@@ -339,3 +339,46 @@ describe('pushTag', () => {
     await expect(pushTag('C:/repo', 'origin', 'v1.0')).rejects.toThrow(GitError);
   });
 });
+
+describe('pull --autostash', () => {
+  beforeEach(() => {
+    invoke.mockReset();
+  });
+
+  it('carries the flag on both pulls, so a dirty tree is not a refusal', () => {
+    // "Pull did not complete, and your branch was left as it was" over one
+    // edited file was the report; git's own answer is to stash around it.
+    expect(buildPullCommand().args).toContain('--autostash');
+    expect(buildPullMergeCommand().args).toContain('--autostash');
+  });
+
+  it('reports a clean pull as pulled', async () => {
+    invoke.mockResolvedValue(
+      raw({ stdout: 'Updating 1234567..89abcde\nFast-forward\n' }),
+    );
+    await expect(pull('C:/repo')).resolves.toBe('pulled');
+  });
+
+  it('reports an autostash git could not put back, which it exits 0 for', async () => {
+    invoke.mockResolvedValue(
+      raw({
+        stdout: 'Updating 1234567..89abcde\nFast-forward\n',
+        stderr:
+          'Created autostash: 8ed340f\nApplying autostash resulted in conflicts.\nYour changes are safe in the stash.\n',
+      }),
+    );
+    await expect(pull('C:/repo')).resolves.toBe('autostash-conflicted');
+  });
+
+  it('reports the same on the merge pull', async () => {
+    invoke.mockResolvedValue(
+      raw({
+        stderr:
+          'Your local changes are stashed, however applying them\nresulted in conflicts.  You can either resolve the conflicts\n',
+      }),
+    );
+    await expect(
+      pullMerge('C:/repo', userConfirmed('Merge origin/main into main?')),
+    ).resolves.toBe('autostash-conflicted');
+  });
+});

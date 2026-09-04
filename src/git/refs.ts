@@ -24,6 +24,7 @@ import {
   buildStashDropCommand,
   buildStashListCommand,
 } from './commands/stage';
+import { autostashConflictedIn } from './autostash';
 import { approve, type Confirmation } from './confirm';
 import { classifyFailure, GitError } from './errors';
 import { parseBranches, parseRemotes, parseStashes } from './parsers/branch';
@@ -79,12 +80,22 @@ export function fetch(repo: string, options: FetchOptions = {}): Promise<unknown
  * that refusal into a `diverged` error the UI answers with the explicit
  * merge-pull ({@link pullMerge}) rather than a silent merge nobody chose.
  */
-export async function pull(repo: string): Promise<void> {
-  await runGit(repo, buildPullCommand(), SAFE);
+/**
+ * How a pull ended when git considered it a success.
+ *
+ * `autostash-conflicted` is the one that must never pass in silence: the pull
+ * worked, git exited 0, and the working tree holds conflict markers with the
+ * user's changes in a stash nobody mentioned (see `autostash.ts`).
+ */
+export type PullOutcome = 'pulled' | 'autostash-conflicted';
+
+export async function pull(repo: string): Promise<PullOutcome> {
+  const output = await runGit(repo, buildPullCommand(), SAFE);
+  return autostashConflictedIn(output) ? 'autostash-conflicted' : 'pulled';
 }
 
 /** How a merge-pull ended when it did not fail outright. */
-export type PullMergeOutcome = 'pulled' | 'conflicted';
+export type PullMergeOutcome = PullOutcome | 'conflicted';
 
 /**
  * Pulls with an explicit merge — the answer to a `diverged` refusal from
@@ -110,7 +121,9 @@ export async function pullMerge(
     ...approve(confirmation),
     allowExitCodes: [1],
   });
-  if (output.code === 0) return 'pulled';
+  if (output.code === 0) {
+    return autostashConflictedIn(output) ? 'autostash-conflicted' : 'pulled';
+  }
 
   const failure = classifyFailure(command.args, output);
   if (failure.kind === 'conflict') return 'conflicted';

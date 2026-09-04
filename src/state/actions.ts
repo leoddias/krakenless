@@ -41,6 +41,7 @@ import {
   type RebaseOutcome,
   type ResetMode,
 } from '../git/commits';
+import { autostashConflictMessage } from '../git/autostash';
 import {
   abortMerge,
   applyStash,
@@ -59,6 +60,7 @@ import {
   switchNewBranch,
   type DeleteBranchOutcome,
   type PullMergeOutcome,
+  type PullOutcome,
 } from '../git/refs';
 import { getStatus } from '../git/status';
 import {
@@ -725,10 +727,31 @@ export async function fetchRemote(store: Store): Promise<boolean> {
   return true;
 }
 
+/**
+ * Pulls fast-forward only, stashing uncommitted work around it.
+ *
+ * The one outcome that must never pass in silence is an autostash git could
+ * not re-apply (see `autostash.ts`): the pull succeeded, so nothing looks
+ * wrong, while the working tree holds conflict markers and the user's changes
+ * sit in a stash they were never told about. Reported as a warning naming it.
+ */
 export async function pullCurrent(store: Store): Promise<boolean> {
   const root = currentRoot(store);
   if (root === null) return false;
-  return operate(store, () => pull(root));
+
+  let outcome: PullOutcome | null = null;
+  const ran = await operate(store, async () => {
+    outcome = await pull(root);
+  });
+  if (!ran) return false;
+
+  if (outcome === 'autostash-conflicted') {
+    store.dispatch({
+      type: 'notice',
+      notice: { tone: 'warning', message: autostashConflictMessage('The pull finished') },
+    });
+  }
+  return true;
 }
 
 /**
@@ -760,6 +783,11 @@ export async function pullMergeCurrent(
         message:
           'The pull stopped on merge conflicts. Resolve them, then commit the merge — or abort it from the conflict banner.',
       },
+    });
+  } else if (outcome === 'autostash-conflicted') {
+    store.dispatch({
+      type: 'notice',
+      notice: { tone: 'warning', message: autostashConflictMessage('The pull finished') },
     });
   }
   return outcome;
@@ -933,7 +961,7 @@ export async function rebaseBranchOnto(
       type: 'notice',
       notice: {
         tone: 'warning',
-        message: `${branch} was rebased, but your stashed changes did not come back cleanly: the working tree has conflict markers and the changes are still in the stash git named "autostash". Resolve the files, then drop that stash — or reset them and pop it again.`,
+        message: autostashConflictMessage(`${branch} was rebased`),
       },
     });
   }

@@ -743,3 +743,29 @@ describe('refreshDiff — a stale answer never lands behind a newer selection', 
     ]);
   });
 });
+
+describe('pullCurrent — the autostash', () => {
+  it('warns when the stashed changes did not come back cleanly', async () => {
+    // git exits 0 here. Without this notice the pull reads as a success while
+    // the working tree holds conflict markers and the work sits in a stash.
+    pullFn.mockResolvedValue('autostash-conflicted');
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await expect(pullCurrent(store)).resolves.toBe(true);
+
+    expect(store.getState().notice).toMatchObject({ tone: 'warning' });
+    expect(store.getState().notice?.message).toMatch(/still in the stash/);
+  });
+
+  it('says nothing extra about a pull whose stash came back', async () => {
+    pullFn.mockResolvedValue('pulled');
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+    store.dispatch({ type: 'notice', notice: null });
+
+    await expect(pullCurrent(store)).resolves.toBe(true);
+
+    expect(store.getState().notice).toBeNull();
+  });
+});
