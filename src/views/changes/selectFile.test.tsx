@@ -183,7 +183,14 @@ describe('when a commit is selected in the history', () => {
 });
 
 describe('an untracked file', () => {
-  it('says git has nothing to compare it against, not "wrong selection"', () => {
+  it('shows the file from disk, every line added, not "wrong selection"', async () => {
+    // `git diff` has nothing to say about a file it does not track, so the
+    // panel reads it from disk and draws it the way git will once it is staged.
+    invoke.mockImplementation(async (name: string) =>
+      name === 'worktree_read'
+        ? { text: 'export {};\n', stamp: '11-x', lossy: false }
+        : { stdout: '', stderr: '', code: 0, timed_out: false, stdout_lossy: false },
+    );
     renderPanels((store) => {
       store.dispatch({
         type: 'status/loaded',
@@ -194,8 +201,9 @@ describe('an untracked file', () => {
     });
 
     fireEvent.click(fileRow('new.ts'));
-    expect(screen.getByText('Nothing to diff yet')).toBeTruthy();
-    expect(screen.getByText(/not tracked by git yet/)).toBeTruthy();
+    const article = await screen.findByRole('article', { name: 'new.ts' });
+    expect(article).toHaveTextContent('export {};');
+    expect(screen.queryByText(/not part of the current selection/)).toBeNull();
     expect(screen.queryByText('File not in this diff')).toBeNull();
   });
 

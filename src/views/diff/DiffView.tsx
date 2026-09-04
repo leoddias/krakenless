@@ -17,13 +17,15 @@
 import {
   memo,
   useCallback,
+  useEffect,
   useMemo,
   useState,
   type CSSProperties,
   type ReactNode,
 } from 'react';
 import { LAYOUT_BOUNDS, type FileListMode } from '../../config/schema';
-import type { DiffLine, FileDiff } from '../../git/types';
+import { openWorktreeFile } from '../../fs/file';
+import type { DiffLine, FileDiff, Hunk } from '../../git/types';
 import { discardHunk, stageHunks } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
 import { isBusy } from '../../state/store';
@@ -48,6 +50,7 @@ import {
 } from './labels';
 import {
   planFiles,
+  planKey,
   REVEAL_CHUNK,
   sliceHunks,
   type FilePlan,
@@ -147,9 +150,27 @@ export function DiffView(): ReactNode {
 
       {diff.state === 'error' && <DiffError message={diff.message} kind={diff.kind} />}
 
-      {diff.state === 'ready' && diff.value.length === 0 && (
+      {diff.state === 'ready' && diff.value.length === 0 && !untrackedPath && (
         <Notice title="No changes">Nothing differs in this selection.</Notice>
       )}
+
+      {/*
+        A working tree whose only changes are new files has an empty diff, and
+        that is the case where the selected untracked file is the whole story.
+      */}
+      {diff.state === 'ready' &&
+        diff.value.length === 0 &&
+        untrackedPath &&
+        selectedPath !== null && (
+          <div className={styles.content}>
+            <UntrackedPreview
+              path={selectedPath}
+              editable={editable}
+              editing={editing === selectedPath}
+              onEdit={setEditing}
+            />
+          </div>
+        )}
 
       {diff.state === 'ready' && diff.value.length > 0 && (
         <div
@@ -457,17 +478,26 @@ function FileDiffs({
   const shown = plans.filter((plan) => plan.file.newPath === activePath);
 
   if (shown.length === 0) {
+    // Reachable from the working-tree panel, where untracked files are listed
+    // next to modified ones and look equally clickable. `git diff` says
+    // nothing about them — there is no earlier version — so the file is read
+    // from disk and drawn as what it is to git: every line added.
+    if (untracked && selectedPath !== null) {
+      return (
+        <div className={styles.content}>
+          <UntrackedPreview
+            path={selectedPath}
+            editable={editable}
+            editing={editing === selectedPath}
+            onEdit={onEdit}
+          />
+        </div>
+      );
+    }
     return (
       <div className={styles.content}>
-        <Notice title={untracked ? 'Nothing to diff yet' : 'File not in this diff'}>
-          {untracked
-            ? // Reachable from the working-tree panel, where untracked files are
-              // listed next to modified ones and look equally clickable. Git has
-              // no previous version to compare against, so `git diff` says
-              // nothing about them — which is a different problem from "wrong
-              // selection", and needs a different next step.
-              `"${selectedPath ?? ''}" is not tracked by git yet, so there is no earlier version to compare it against. Stage it to see its contents as a diff.`
-            : `"${selectedPath ?? ''}" is not part of the current selection. Pick a file from the list.`}
+        <Notice title="File not in this diff">
+          {`"${selectedPath ?? ''}" is not part of the current selection. Pick a file from the list.`}
         </Notice>
       </div>
     );
@@ -495,12 +525,19 @@ const FileDiffBlock = memo(function FileDiffBlock({
   editing,
   onEdit,
   onReveal,
+  preview = false,
 }: {
   plan: FilePlan;
   editable: boolean;
   editing: boolean;
   onEdit: (path: string | null) => void;
   onReveal: (key: string, lines: number) => void;
+  /**
+   * The file is being shown, not diffed: an untracked file read from disk.
+   * No hunk can be staged or discarded from it — there is no index entry for
+   * `apply --cached` to patch — so the hunks carry no buttons.
+   */
+  preview?: boolean;
 }): ReactNode {
   const { file, key, total, visible } = plan;
   const note = emptyBodyReason(file);
@@ -536,11 +573,11 @@ const FileDiffBlock = memo(function FileDiffBlock({
         <FileEditor key={file.newPath} path={file.newPath} onClose={() => onEdit(null)} />
       ) : note === null ? (
         <>
-          {blocker !== null && slices.length > 0 && (
+          {!preview && blocker !== null && slices.length > 0 && (
             <p className={styles.fileNote}>{blocker}</p>
           )}
           {slices.map((slice, index) => (
-            <HunkBlock key={index} file={file} slice={slice} />
+            <HunkBlock key={index} file={file} slice={slice} preview={preview} />
           ))}
           {hidden > 0 && (
             <div className={styles.fileNote}>
@@ -571,9 +608,12 @@ const FileDiffBlock = memo(function FileDiffBlock({
 const HunkBlock = memo(function HunkBlock({
   file,
   slice,
+  preview = false,
 }: {
   file: FileDiff;
   slice: HunkSlice;
+  /** A file shown from disk rather than diffed; see `FileDiffBlock`. */
+  preview?: boolean;
 }): ReactNode {
   const hunk = slice.hunk;
   const store = useStore();
@@ -584,8 +624,8 @@ const HunkBlock = memo(function HunkBlock({
   // not seen is exactly what this panel promises never to invite. The note
   // below says how to get the buttons back.
   const truncated = slice.hidden > 0;
-  const actions = truncated ? [] : hunkActions(file);
-  const withheld = truncated && hunkActions(file).length > 0;
+  const actions = truncated || preview ? [] : hunkActions(file);
+  const withheld = truncated && !preview && hunkActions(file).length > 0;
 
   const run = (action: HunkAction): void => {
     if (action === 'discard') {
@@ -722,6 +762,121 @@ function ConfirmDiscardHunk({
       </div>
     </div>
   );
+}
+
+/** What an untracked file read from disk turned into, or why it could not. */
+type Preview =
+  | { state: 'loading' }
+  | { state: 'ready'; file: FileDiff }
+  | { state: 'refused'; reason: string };
+
+/**
+ * An untracked file, shown as the diff git would print once it is staged:
+ * every line added.
+ *
+ * Read through the same door the editor uses (`openWorktreeFile`), so the
+ * same refusals apply — a binary, a file too large for a text box — and the
+ * user sees the reason rather than a blank. The diff is synthesised, one hunk
+ * from line 1, and rendered by the ordinary file block so it looks like every
+ * other file in the panel; the block is told it is a preview so no hunk offers
+ * a button it could not honour.
+ */
+function UntrackedPreview({
+  path,
+  editable,
+  editing,
+  onEdit,
+}: {
+  path: string;
+  editable: boolean;
+  editing: boolean;
+  onEdit: (path: string | null) => void;
+}): ReactNode {
+  const root = useAppState((state) =>
+    state.repo.state === 'ready' && !state.repo.value.bare ? state.repo.value.root : null,
+  );
+  const [preview, setPreview] = useState<Preview>({ state: 'loading' });
+  // Reveal state for this one file, kept here: the panel's map is keyed to the
+  // diff git returned, and this file is not in it.
+  const [visible, setVisible] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setPreview({ state: 'loading' });
+    setVisible(null);
+    if (root === null) {
+      setPreview({ state: 'refused', reason: 'The repository path is not known yet.' });
+      return;
+    }
+    void openWorktreeFile(root, path).then(
+      (opened) => {
+        if (!cancelled) setPreview({ state: 'ready', file: asAdded(path, opened.text) });
+      },
+      (error: unknown) => {
+        if (cancelled) return;
+        setPreview({
+          state: 'refused',
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [root, path]);
+
+  if (preview.state === 'loading') {
+    return <Notice title="Reading the file…">{path}</Notice>;
+  }
+  if (preview.state === 'refused') {
+    return (
+      <Notice title="Nothing to diff yet">
+        {`"${path}" is not tracked by git yet, and its contents cannot be shown here: ${preview.reason}`}
+      </Notice>
+    );
+  }
+
+  const reveals = new Map(visible === null ? [] : [[planKey(preview.file), visible]]);
+  const plan = planFiles([preview.file], reveals)[0];
+  if (plan === undefined) return null;
+  return (
+    <FileDiffBlock
+      plan={plan}
+      editable={editable}
+      editing={editing}
+      onEdit={onEdit}
+      onReveal={(_key, lines) => setVisible(lines)}
+      preview
+    />
+  );
+}
+
+/** The diff git prints for a new file: one hunk, every line added. */
+function asAdded(path: string, text: string): FileDiff {
+  // A trailing newline ends the last line rather than starting an empty one.
+  const lines = text.length === 0 ? [] : text.replace(/\n$/, '').split('\n');
+  const hunk: Hunk = {
+    header: `@@ -0,0 +1,${String(lines.length)} @@`,
+    oldStart: 0,
+    oldLines: 0,
+    newStart: 1,
+    newLines: lines.length,
+    lines: lines.map((line, index) => ({
+      kind: 'added',
+      text: line,
+      newLine: index + 1,
+    })),
+  };
+  return {
+    oldPath: path,
+    newPath: path,
+    kind: 'added',
+    binary: false,
+    conflicted: false,
+    side: 'unstaged',
+    headerLines: [],
+    hunks: lines.length === 0 ? [] : [hunk],
+  };
 }
 
 function lineClass(kind: DiffLine['kind']): string | undefined {
