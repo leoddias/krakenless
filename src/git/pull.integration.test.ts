@@ -64,7 +64,15 @@ beforeEach(() => {
   commitFile(origin, 'shared.txt', 'base\n');
   commitFile(origin, 'other.txt', 'other\n');
 
-  git(workspace, ['clone', '--quiet', origin, 'clone']);
+  // `core.autocrlf` is set *at clone time*, not afterwards by `identify`: Git
+  // for Windows ships with `core.autocrlf=true` in its system config (GitHub's
+  // Windows runner keeps it), so a clone made without this checks every file
+  // out with CRLF. Turning it off a moment later then makes git compare those
+  // bytes against LF blobs and call every file modified — the autostash picks
+  // up files the test never touched, the pull updates one of them, and the
+  // restore conflicts. That failed only on the runner, where no global config
+  // overrides the system one.
+  git(workspace, ['-c', 'core.autocrlf=false', 'clone', '--quiet', origin, 'clone']);
   identify(clone);
 
   // The upstream moves on: a commit the clone does not have, to a file the
@@ -94,6 +102,11 @@ describe('pull --autostash against real git', () => {
     // An edit to a file the pull does not touch: the stash goes out and comes
     // back, and the edit is where it was.
     writeFileSync(join(clone, 'other.txt'), 'other, edited\n');
+    // The fixture holds exactly the one edit this test made. Asserted because
+    // it silently stopped being true once: a clone that checked files out with
+    // CRLF made git call every file modified, the autostash carried the file
+    // the pull was about to update, and the restore conflicted.
+    expect(git(clone, ['status', '--short'])).toBe('M other.txt');
 
     const { code, output } = run(clone, buildPullCommand().args);
 

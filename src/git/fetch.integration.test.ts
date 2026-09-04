@@ -56,7 +56,9 @@ beforeEach(() => {
   identify(origin);
   commit(origin, 'seed.txt');
 
-  git(workspace, ['clone', '--quiet', origin, 'clone']);
+  // Line endings off at clone time, not a moment later; see the same line in
+  // `pull.integration.test.ts` for what setting it afterwards costs.
+  git(workspace, ['-c', 'core.autocrlf=false', 'clone', '--quiet', origin, 'clone']);
   identify(clone);
 });
 
