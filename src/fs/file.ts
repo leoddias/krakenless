@@ -156,3 +156,23 @@ export async function deleteWorktreeFile(repo: string, path: string): Promise<vo
     throw toFileError(error, 'write-failed');
   }
 }
+
+/**
+ * Writes a backup blob back over (or as) a working-tree file.
+ *
+ * Rust reads the blob from the object store and writes the bytes itself, so
+ * this works for a binary the editor would refuse and for a file that no
+ * longer exists — an untracked file a discard removed. No stamp: putting a
+ * backup back is the one write whose whole point is to replace what is there.
+ */
+export async function restoreFromBackup(
+  repo: string,
+  path: string,
+  blobOid: string,
+): Promise<void> {
+  try {
+    await invoke('worktree_restore_blob', { repo, path, blobOid });
+  } catch (error) {
+    throw toFileError(error, 'write-failed');
+  }
+}

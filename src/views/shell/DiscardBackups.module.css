@@ -81,3 +81,36 @@
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+
+/* --- one row for many files ------------------------------------------------ */
+
+.groupToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.groupToggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.chevron {
+  flex: none;
+  color: var(--faint);
+}
+
+/* The files of a folded discard, listed under their row and stepped in. */
+.groupList {
+  flex-basis: 100%;
+  list-style: none;
+  margin: 0.25rem 0 0;
+  padding: 0 0 0 1.1rem;
+}

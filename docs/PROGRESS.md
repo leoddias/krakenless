@@ -40,11 +40,13 @@
   `layout` like the panel sizes. The file list has a List / Tree switch
   (`diffFileList`). `useLayout` now lives in `views/shell/useLayout.ts`. Not
   yet used by hand in the running app.
-- **"Discard all" over thousands of files works** (2026-09-04, ADR-0044): a
-  long pathspec goes to git on stdin for `add`/`restore`, and a stash push is
-  chunked because git itself cannot take a long list there. The planner reads
-  one `status` instead of `ls-files` + `diff`. The runner names a too-long
-  command line instead of claiming git is missing.
+- **A discard no longer stashes** (2026-09-04, ADR-0045): the file's bytes
+  go into the object store as a blob first, then `restore --worktree` /
+  `clean`; Undo lives in "Recent discards", grouped per discard, restored by
+  Rust byte for byte (binaries included, missing files recreated). Nothing
+  appears in the stash list or on the graph. "Discard all" over thousands of
+  files is one `hash-object` and a few chunked `clean`s (ADR-0044's stdin
+  pathspec and chunking stay; its stash chunking is gone).
 - **Pull carries `--autostash`** (2026-09-04, ADR-0044): a dirty working tree
   no longer makes a pull fail; the autostash-conflict case is detected the
   same way the rebase's is (`autostash.ts`) and reported as a warning.
@@ -55,7 +57,7 @@
   finished gets a check, a green tint and one pulse (none under
   `prefers-reduced-motion`), and the outcome line is green with a check.
   Announced through `data-done` too.
-- **Test status:** `npm test` 2144 passing (102 files), `cargo test` 103 passing;
+- **Test status:** `npm test` 2127 passing (101 files), `cargo test` 108 passing;
   oxlint, prettier and clippy clean. `cargo fmt` is *not* clean and never has
   been — see `docs/ROADMAP.md` § Backlog.
 - **Git no longer runs on the UI thread** (ADR-0028). Every git command used to
@@ -73,8 +75,8 @@
   Rebase and reset confirm first, and the git layer re-reads HEAD before running
   so a branch that moved between question and answer is refused.
 - The discard path — the only code that takes work off disk — has integration
-  tests that **execute the recovery command the UI displays**. Keep that
-  property for any future change to `stage.ts` or `recovery.ts`.
+  tests that **read the backup blobs back and compare bytes** (ADR-0045).
+  Keep that property for any future change to `stage.ts` or `worktree.rs`.
 - **A diverged branch is no longer a dead end** (2026-08-31, ADR-0035): push is
   blocked with the reason while behind, and Pull becomes a confirmed
   "Pull (merge)". New error kinds `diverged` / `non-fast-forward`.
@@ -213,6 +215,18 @@
   until `buildPushCommand` emits a `<local>:<upstream>` refspec.
 
 ## Session log
+
+### 2026-09-04 (evening) — the discard stops stashing
+
+"Cliquei em discard e criou um stash, isso não é necessário." It was not: the
+safety bar asks for a recoverable form, and the stash was only the first one
+chosen. The whole-file discard now takes the same route the hunk discard has
+taken since ADR-0032 — bytes into the object store as a blob, then
+`restore --worktree` or `clean` — and the way back is the Undo button in
+"Recent discards", which Rust performs byte for byte from `git cat-file`,
+recreating a file `clean` removed. Many files fold into one row with Undo all.
+`recovery.ts`, the stash chunking from the afternoon, and the printed
+`git restore --source=` command are gone (ADR-0045). Not used by hand yet.
 
 ### 2026-09-04 (later) — four reports from one afternoon of use
 

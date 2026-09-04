@@ -1,10 +1,11 @@
 /**
- * The discard recovery route, run against the real git binary.
+ * The whole-file discard against the real git binary, end to end: the backup,
+ * the removal, and the way back.
  *
- * These tests replicate exactly what `discardPaths` builds and then **execute
- * the recovery command it would show the user**. That last step is the point:
- * a recovery command that is merely well-formed is worthless, and the previous
- * version of it — `git checkout <oid> -- <path>` — was well-formed and wrong.
+ * These tests run exactly the commands `discardPaths` builds, in its order,
+ * and then **restore from the oids it reported** — with `git cat-file`, the
+ * same read the Rust restore does. A backup whose oid is merely well-formed
+ * is worthless; the bytes coming back identical is the point.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -20,71 +21,45 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { buildDiscardCommand } from './commands/stage';
-import { recoveryFor } from './recovery';
+import { chunkPathspec } from './argsafety';
+import {
+  buildBackupBlobsCommand,
+  buildRemoveUntrackedCommand,
+  buildRestoreWorktreeCommand,
+} from './commands/stage';
+import type { GitCommand } from './types';
 
-// These spawn dozens of real git processes against fresh repositories. Under
-// the parallel runner that comfortably exceeds the 5s default, and a timeout
-// here reads as a product failure when it is only contention for the CPU.
-vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 let repo: string;
 
-function git(args: string[]): string {
-  return execFileSync('git', ['--no-pager', '--literal-pathspecs', ...args], {
+/** Runs a built command the way the runner does: arguments, plus its stdin. */
+function run(command: GitCommand, options: { binary?: boolean } = {}): string | Buffer {
+  return execFileSync('git', ['--no-pager', '--literal-pathspecs', ...command.args], {
     cwd: repo,
-    encoding: 'utf8',
+    ...(options.binary === true ? {} : { encoding: 'utf8' as const }),
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0', LC_ALL: 'C' },
+    ...(command.stdin === undefined ? {} : { input: command.stdin }),
   });
 }
 
-function write(name: string, contents: string): void {
-  writeFileSync(join(repo, name), contents, 'utf8');
+function git(args: string[]): string {
+  return run({ args }) as string;
 }
 
-function read(name: string): string {
-  return readFileSync(join(repo, name), 'utf8');
+function write(name: string, contents: string | Buffer): void {
+  writeFileSync(join(repo, name), contents);
 }
 
-/** Mirrors `describeStash`: where the content lives, and what is in it. */
-function describeStash(
-  stashOid: string,
-  untracked: boolean,
-): {
-  sourceOid: string;
-  presentPaths: string[];
-} {
-  const sourceOid = untracked ? git(['rev-parse', `${stashOid}^3`]).trim() : stashOid;
-  const presentPaths = git(['ls-tree', '-r', '--name-only', sourceOid])
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-  return { sourceOid, presentPaths };
+/** Backs the paths up and returns their oids, as `discardPaths` would. */
+function backUp(paths: string[]): string[] {
+  const out = run(buildBackupBlobsCommand(paths)) as string;
+  return out.split('\n').filter((line) => line.length > 0);
 }
 
-/**
- * Runs the command string the UI would display, exactly as written.
- *
- * Paths are read back out of their quotes rather than split on whitespace —
- * splitting would pass `my` and `notes.txt` as two pathspecs, which is the very
- * mistake the quoting exists to prevent.
- */
-function runRecovery(command: string): void {
-  const match = /^git restore --source=(\S+) --worktree -- (.*)$/.exec(command);
-  if (match === null) throw new Error(`Unexpected recovery command: ${command}`);
-  const paths = [...(match[2] ?? '').matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((quoted) =>
-    (quoted[1] ?? '').replace(/\\(.)/g, '$1'),
-  );
-  git(['restore', `--source=${match[1] ?? ''}`, '--worktree', '--', ...paths]);
-}
-
-/** `rev-parse --verify --quiet` exits 1 when the ref does not exist. */
-function stashTipOrEmpty(): string {
-  try {
-    return git(['rev-parse', '--verify', '--quiet', 'refs/stash']).trim();
-  } catch {
-    return '';
-  }
+/** The bytes of a backup blob, read the way the Rust restore reads them. */
+function blob(oid: string): Buffer {
+  return run({ args: ['cat-file', 'blob', oid] }, { binary: true }) as Buffer;
 }
 
 beforeEach(() => {
@@ -92,10 +67,8 @@ beforeEach(() => {
   git(['init', '--quiet']);
   git(['config', 'user.email', 'test@example.com']);
   git(['config', 'user.name', 'Test']);
-  // Line-ending conversion off: these tests assert what *this code* does to
-  // content, and `core.autocrlf=true` — the Git for Windows default, and what
-  // GitHub's Windows runners use — would have git rewrite it underneath them.
-  // The autocrlf=true behaviour is covered separately and deliberately.
+  // Off, so what these tests see is what this code does, not what
+  // `core.autocrlf=true` (the Git for Windows default) does underneath it.
   git(['config', 'core.autocrlf', 'false']);
   write('seed.txt', 'seed\n');
   git(['add', '.']);
@@ -106,110 +79,88 @@ afterEach(() => {
   rmSync(repo, { recursive: true, force: true });
 });
 
-describe('discard recovery against real git', () => {
-  it('brings back a discarded untracked file', () => {
-    // The bug this guards: `--include-untracked` stores the file in the stash's
-    // *third parent*, not its tree. Restoring from the stash oid errors with
-    // "pathspec did not match", and the file exists nowhere else on disk.
-    write('notes.txt', 'my notes\n');
-    git(buildDiscardCommand(['notes.txt'], 'label', { keepIndex: false }).args);
-    expect(existsSync(join(repo, 'notes.txt'))).toBe(false);
-
-    const stashOid = git(['rev-parse', 'refs/stash']).trim();
-    const { sourceOid, presentPaths } = describeStash(stashOid, true);
-    const plan = recoveryFor(sourceOid, ['notes.txt'], presentPaths);
-
-    expect(plan.commands).toHaveLength(1);
-    runRecovery(plan.commands[0]!);
-    expect(read('notes.txt')).toBe('my notes\n');
-  });
-
-  it('never emits a caret, which cmd.exe would eat', () => {
-    // `--source=<oid>^3` pasted into cmd.exe silently becomes `--source=<oid>`,
-    // which restores from the wrong tree.
-    write('notes.txt', 'x\n');
-    git(buildDiscardCommand(['notes.txt'], 'label', { keepIndex: false }).args);
-
-    const stashOid = git(['rev-parse', 'refs/stash']).trim();
-    const { sourceOid, presentPaths } = describeStash(stashOid, true);
-    const plan = recoveryFor(sourceOid, ['notes.txt'], presentPaths);
-
-    expect(plan.commands[0]).not.toContain('^');
-    expect(sourceOid).toMatch(/^[0-9a-f]{40}$/);
-  });
-
-  it('brings back a tracked edit while leaving the staged snapshot alone', () => {
+describe('the whole-file discard against real git', () => {
+  it('brings back a tracked edit byte for byte, leaving the staged snapshot alone', () => {
     write('seed.txt', 'staged\n');
     git(['add', 'seed.txt']);
-    write('seed.txt', 'worktree\n');
+    // No trailing newline and a CRLF: the two things a text round trip loses.
+    write('seed.txt', 'worktree\r\nedited');
 
-    git(buildDiscardCommand(['seed.txt'], 'label', { keepIndex: true }).args);
-    expect(read('seed.txt')).toBe('staged\n');
+    const [oid] = backUp(['seed.txt']);
+    run(buildRestoreWorktreeCommand(['seed.txt']));
 
-    const stashOid = git(['rev-parse', 'refs/stash']).trim();
-    const { sourceOid, presentPaths } = describeStash(stashOid, false);
-    runRecovery(recoveryFor(sourceOid, ['seed.txt'], presentPaths).commands[0]!);
-
-    expect(read('seed.txt')).toBe('worktree\n');
+    expect(readFileSync(join(repo, 'seed.txt'), 'utf8')).toBe('staged\n');
     expect(git(['show', ':seed.txt'])).toBe('staged\n');
+    expect(blob(oid ?? '').toString('utf8')).toBe('worktree\r\nedited');
   });
 
-  it('reports a discarded deletion as unrecoverable rather than offering a command that fails', () => {
-    // The stash records the deletion, so the path is absent from its tree and
-    // `git restore --source` would abort. Saying so beats a command that errors.
+  it('brings back a removed untracked file, which exists nowhere else', () => {
+    write('notes.txt', 'my notes\n');
+
+    const [oid] = backUp(['notes.txt']);
+    run(buildRemoveUntrackedCommand(['notes.txt']));
+
+    expect(existsSync(join(repo, 'notes.txt'))).toBe(false);
+    expect(blob(oid ?? '').toString('utf8')).toBe('my notes\n');
+  });
+
+  it('backs a binary up exactly, which is why the restore is not a text path', () => {
+    const bytes = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe, 0x0d, 0x0a, 0x1a,
+    ]);
+    write('logo.png', bytes);
+
+    const [oid] = backUp(['logo.png']);
+    run(buildRemoveUntrackedCommand(['logo.png']));
+
+    expect(Buffer.compare(blob(oid ?? ''), bytes)).toBe(0);
+  });
+
+  it('restores a deleted tracked file from the index, with nothing to back up', () => {
     rmSync(join(repo, 'seed.txt'));
-    git(buildDiscardCommand(['seed.txt'], 'label', { keepIndex: true }).args);
 
-    const stashOid = git(['rev-parse', 'refs/stash']).trim();
-    const { sourceOid, presentPaths } = describeStash(stashOid, false);
-    const plan = recoveryFor(sourceOid, ['seed.txt'], presentPaths);
+    run(buildRestoreWorktreeCommand(['seed.txt']));
 
-    expect(plan.commands).toEqual([]);
-    expect(plan.unrecoverable).toEqual(['seed.txt']);
+    expect(readFileSync(join(repo, 'seed.txt'), 'utf8')).toBe('seed\n');
+  });
+
+  it('leaves the stash list and the graph alone', () => {
+    write('seed.txt', 'edited\n');
+
+    backUp(['seed.txt']);
+    run(buildRestoreWorktreeCommand(['seed.txt']));
+
+    expect(git(['stash', 'list'])).toBe('');
+    expect(git(['log', '--oneline', '--all']).trim().split('\n')).toHaveLength(1);
   });
 
   it('keeps a path with a space intact through the round trip', () => {
     write('my notes.txt', 'spaced\n');
-    git(buildDiscardCommand(['my notes.txt'], 'label', { keepIndex: false }).args);
 
-    const stashOid = git(['rev-parse', 'refs/stash']).trim();
-    const { sourceOid, presentPaths } = describeStash(stashOid, true);
-    runRecovery(recoveryFor(sourceOid, ['my notes.txt'], presentPaths).commands[0]!);
+    const [oid] = backUp(['my notes.txt']);
+    run(buildRemoveUntrackedCommand(['my notes.txt']));
 
-    expect(read('my notes.txt')).toBe('spaced\n');
+    expect(existsSync(join(repo, 'my notes.txt'))).toBe(false);
+    expect(blob(oid ?? '').toString('utf8')).toBe('spaced\n');
   });
 
-  it('discards a tracked path that sits under an ignored directory', () => {
-    // Real report: a file committed once with `add -f` and later covered by a
-    // .gitignore rule. `--include-untracked` makes git stage the pathspec, that
-    // step refuses the ignored directory, and the push exits 1 *after* writing
-    // the stash — the worktree edit stays on disk and the user is told the
-    // discard failed partway. The tracked phase must not pass that flag.
-    mkdirSync(join(repo, 'cache', 'plugins'), { recursive: true });
-    write(join('cache', 'plugins', 'p.json'), 'one\n');
-    write('.gitignore', 'cache/\n');
-    git(['add', '--force', 'cache/plugins/p.json', '.gitignore']);
-    git(['commit', '--quiet', '--message', 'ignored but tracked']);
-    write(join('cache', 'plugins', 'p.json'), 'two\n');
+  it('handles thousands of untracked files: one backup, chunked cleans', () => {
+    const count = 3000;
+    const paths = Array.from({ length: count }, (_, i) => `out/file-${String(i)}.json`);
+    mkdirSync(join(repo, 'out'));
+    for (const path of paths) write(path, `{"n":${String(path.length)}}\n`);
 
-    git(buildDiscardCommand(['cache/plugins/p.json'], 'label', { keepIndex: true }).args);
+    const oids = backUp(paths);
+    expect(oids).toHaveLength(count);
+    const chunks = chunkPathspec(paths);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) run(buildRemoveUntrackedCommand(chunk));
 
-    expect(read(join('cache', 'plugins', 'p.json'))).toBe('one\n');
-    const stashOid = git(['rev-parse', 'refs/stash']).trim();
-    const { sourceOid, presentPaths } = describeStash(stashOid, false);
-    runRecovery(
-      recoveryFor(sourceOid, ['cache/plugins/p.json'], presentPaths).commands[0]!,
+    expect(existsSync(join(repo, 'out/file-0.json'))).toBe(false);
+    expect(existsSync(join(repo, `out/file-${String(count - 1)}.json`))).toBe(false);
+    expect(blob(oids[count - 1] ?? '').toString('utf8')).toBe(
+      `{"n":${paths[count - 1]?.length ?? 0}}\n`,
     );
-    expect(read(join('cache', 'plugins', 'p.json'))).toBe('two\n');
-  });
-
-  it('creates no stash for a path whose worktree matches the index', () => {
-    write('seed.txt', 'staged only\n');
-    git(['add', 'seed.txt']);
-    const before = stashTipOrEmpty();
-
-    // The planner excludes it: `git diff --name-only` reports nothing for it.
-    expect(git(['diff', '--name-only', '--', 'seed.txt']).trim()).toBe('');
-    expect(before).toBe('');
+    expect(git(['stash', 'list'])).toBe('');
   });
 });

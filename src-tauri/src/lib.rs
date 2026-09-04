@@ -46,6 +46,7 @@ pub fn run() {
             worktree::worktree_read,
             worktree::worktree_write,
             worktree::worktree_delete,
+            worktree::worktree_restore_blob,
             rebase_state::rebase_state,
             updater::update_install_kind,
             updater::update_portable_apply,

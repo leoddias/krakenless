@@ -21,7 +21,7 @@ import {
   commit,
   discardHunks,
   discardPaths,
-  readBackupBlob,
+  type DiscardBackupRecord,
   stagePaths,
   unstagePaths,
   type DiscardResult,
@@ -74,7 +74,13 @@ import {
 } from '../git/operation';
 import { hasConflictMarkers } from '../git/conflict';
 import { listWorktreeSummaries } from '../git/worktrees';
-import { FileError, openWorktreeFile, saveWorktreeFile, type OpenFile } from '../fs/file';
+import {
+  FileError,
+  openWorktreeFile,
+  saveWorktreeFile,
+  type OpenFile,
+  restoreFromBackup,
+} from '../fs/file';
 import type { FileDiff, Hunk } from '../git/types';
 import type { DiscardBackup, Store } from './store';
 
@@ -392,26 +398,19 @@ export async function discardHunk(
 /**
  * Puts a discarded file back from its backup blob.
  *
- * Writes through the same worktree writer the conflict resolver uses rather
- * than telling the user to run a shell redirect: `git cat-file -p <oid> > path`
- * is byte-exact in `cmd.exe` and `pwsh`, but Windows PowerShell 5.1 treats `>`
- * as `Out-File` and re-encodes the stream to UTF-16LE with a BOM. Doing the
- * write here is the only way the promise of recovery is actually kept on the
- * platform this app targets.
+ * Written by Rust straight from the object store rather than through the
+ * editor's text path: the blob may be a binary the editor refuses, and the
+ * file may no longer exist at all (an untracked file the discard removed).
+ * Never a shell redirect, either — `git cat-file -p <oid> > path` is
+ * byte-exact in `cmd.exe` and `pwsh`, but Windows PowerShell 5.1 treats `>`
+ * as `Out-File` and re-encodes the stream to UTF-16LE with a BOM.
  */
 export async function undoDiscard(store: Store, backup: DiscardBackup): Promise<void> {
   const root = currentRoot(store);
   if (root === null) return;
 
   try {
-    await mutate(store, async () => {
-      const contents = await readBackupBlob(root, backup.blobOid);
-      // Re-read for the current stamp only. The blob's bytes are written back
-      // verbatim — `saveWorktreeFile` reformats nothing — so the line endings
-      // and the missing trailing newline come back as they were.
-      const current = await openWorktreeFile(root, backup.path);
-      await saveWorktreeFile(root, current, contents);
-    });
+    await mutate(store, () => restoreFromBackup(root, backup.path, backup.blobOid));
   } catch (error) {
     store.dispatch({ type: 'notice', notice: { tone: 'error', ...describe(error) } });
     return;
@@ -427,9 +426,55 @@ export async function undoDiscard(store: Store, backup: DiscardBackup): Promise<
 }
 
 /**
- * Discards changes to `paths`. Returns the stash label so the UI can tell the
- * user exactly how to get the changes back — the discard is only defensible
- * because that recovery route exists.
+ * Puts every file of one discard back, and says how many came back.
+ *
+ * One at a time and every one attempted: a failure on the third file must
+ * not leave the other seventeen unrestored *and* unmentioned.
+ */
+export async function undoDiscards(
+  store: Store,
+  backups: DiscardBackup[],
+): Promise<void> {
+  const root = currentRoot(store);
+  if (root === null) return;
+
+  const failed: string[] = [];
+  let firstReason: string | null = null;
+  await mutate(store, async () => {
+    for (const backup of backups) {
+      try {
+        await restoreFromBackup(root, backup.path, backup.blobOid);
+        store.dispatch({ type: 'discard/forgotten', blobOid: backup.blobOid });
+      } catch (error) {
+        failed.push(backup.path);
+        firstReason ??= describe(error).message;
+      }
+    }
+  });
+
+  const restored = backups.length - failed.length;
+  store.dispatch({
+    type: 'notice',
+    notice:
+      failed.length === 0
+        ? {
+            tone: 'info',
+            message: `Restored ${String(restored)} file(s) from their backups.`,
+          }
+        : {
+            tone: 'error',
+            message: `Restored ${String(restored)} of ${String(backups.length)} file(s). Not restored: ${failed.join(', ')}. ${firstReason ?? ''} Their backups are still listed.`,
+          },
+  });
+}
+
+/**
+ * Discards changes to `paths`, recording a backup of each file first.
+ *
+ * The records are dispatched the moment the blobs exist, before anything is
+ * removed: a restore or a clean that fails halfway must not take the only
+ * route back with it. They land in "Recent discards", where Undo puts a file
+ * back — the discard is only defensible because that button exists.
  */
 export async function discard(
   store: Store,
@@ -438,20 +483,26 @@ export async function discard(
 ): Promise<DiscardResult | null> {
   const root = currentRoot(store);
   if (root === null || paths.length === 0) return null;
-  const count = paths.length;
+  const at = new Date().toISOString();
+  const record = (backups: DiscardBackupRecord[]): void => {
+    for (const backup of backups) {
+      store.dispatch({ type: 'discard/recorded', backup: { ...backup, at } });
+    }
+  };
 
   let result: DiscardResult | null = null;
   try {
     await mutate(store, async () => {
       // The token is minted from the text the user agreed to; a caller that
       // never asked has nothing to pass here.
-      result = await discardPaths(root, paths, userConfirmed(confirmationReason));
+      result = await discardPaths(root, paths, userConfirmed(confirmationReason), {
+        onBackedUp: record,
+      });
     });
   } catch (error) {
-    // A discard that failed partway may still have moved work into a stash, and
-    // the message carries the route back. It is dispatched *and* rethrown: a
-    // caller that treated this as "nothing happened" would tell the user there
-    // is nothing to recover while a stash holds their work.
+    // Dispatched *and* rethrown: a caller that treated this as "nothing
+    // happened" would tell the user there is nothing to recover while the
+    // backups above may already be the only copy of their work.
     store.dispatch({ type: 'notice', notice: { tone: 'error', ...describe(error) } });
     throw error;
   }
@@ -461,22 +512,7 @@ export async function discard(
     store.dispatch({
       type: 'notice',
       notice: outcome.discarded
-        ? {
-            tone: 'info',
-            // Anything the command cannot bring back is said here; a command
-            // shown above a path list it does not cover reads as "this
-            // restores all of them".
-            message: [
-              `Discarded changes to ${count} file(s).`,
-              ...(outcome.notes ?? []),
-            ].join(' '),
-            // Only when there is something to run: an empty hint renders as
-            // "Run this to undo:" above nothing, promising a route the code
-            // deliberately decided not to offer.
-            ...(outcome.undoCommands.length === 0
-              ? {}
-              : { undoHint: outcome.undoCommands.join('\n') }),
-          }
+        ? { tone: 'info', message: discardedMessage(outcome) }
         : {
             tone: 'warning',
             message: 'Nothing to discard — those paths had no changes.',
@@ -484,6 +520,24 @@ export async function discard(
     });
   }
   return result;
+}
+
+/** The sentence a finished discard leaves behind. */
+function discardedMessage(outcome: DiscardResult): string {
+  const kept = outcome.backups.length;
+  const restored = outcome.restoredFromIndex.length;
+  const parts: string[] = [];
+  if (kept > 0) {
+    parts.push(
+      `Discarded changes to ${String(kept)} file${kept === 1 ? '' : 's'}; a backup of each is in Recent discards, where Undo puts it back.`,
+    );
+  }
+  if (restored > 0) {
+    parts.push(
+      `${String(restored)} deleted file${restored === 1 ? ' was' : 's were'} restored from git.`,
+    );
+  }
+  return parts.join(' ');
 }
 
 export async function commitStaged(store: Store, options: CommitOptions): Promise<void> {

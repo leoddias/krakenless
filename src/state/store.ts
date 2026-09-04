@@ -58,11 +58,19 @@ export interface Selection {
   path: string | null;
 }
 
-/** How many hunk-discard backups are kept before the oldest is dropped. */
-const MAX_DISCARD_BACKUPS = 20;
+/**
+ * How many discard backups are kept before the oldest is dropped.
+ *
+ * Whole-file discards record one entry per file (ADR-0045), and "Discard
+ * all" over a build directory is thousands at once — a cap of twenty would
+ * drop most of their records on the floor while the notice promised Undo.
+ * The entries are a path and an oid each; five thousand of them are nothing.
+ */
+const MAX_DISCARD_BACKUPS = 5000;
 
 /**
- * A file's bytes as they were immediately before a hunk was discarded.
+ * A file's bytes as they were immediately before a discard — of a hunk, or of
+ * the whole file.
  *
  * The blob is a loose object in no tree and on no ref, so this record is the
  * only thing that names it. `git gc` leaves unreferenced objects alone for two
@@ -71,7 +79,11 @@ const MAX_DISCARD_BACKUPS = 20;
 export interface DiscardBackup {
   path: string;
   blobOid: string;
-  /** ISO 8601, so the list reads as history rather than as an unordered set. */
+  /**
+   * ISO 8601, so the list reads as history rather than as an unordered set.
+   * Every file of one discard shares the same stamp, which is how the panel
+   * folds them into one row with one Undo.
+   */
   at: string;
 }
 

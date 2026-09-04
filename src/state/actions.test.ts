@@ -15,6 +15,7 @@ import {
   stage,
   stageHunks,
   undoDiscard,
+  undoDiscards,
   unstage,
 } from './actions';
 import { createStore, isBusy } from './store';
@@ -34,9 +35,9 @@ const applyHunks = vi.hoisted(() => vi.fn());
 const commit = vi.hoisted(() => vi.fn());
 const discardPaths = vi.hoisted(() => vi.fn());
 const discardHunks = vi.hoisted(() => vi.fn());
-const readBackupBlob = vi.hoisted(() => vi.fn());
 const openWorktreeFile = vi.hoisted(() => vi.fn());
 const saveWorktreeFile = vi.hoisted(() => vi.fn());
+const restoreFromBackup = vi.hoisted(() => vi.fn());
 const listBranches = vi.hoisted(() => vi.fn());
 const listStashes = vi.hoisted(() => vi.fn());
 const fetchRemoteFn = vi.hoisted(() => vi.fn());
@@ -74,12 +75,12 @@ vi.mock('../git/stage', () => ({
   commit,
   discardPaths,
   discardHunks,
-  readBackupBlob,
   discardHunkRefusal: () => null,
 }));
 vi.mock('../fs/file', () => ({
   openWorktreeFile,
   saveWorktreeFile,
+  restoreFromBackup,
   FileError: class extends Error {},
 }));
 
@@ -144,9 +145,8 @@ describe('actions', () => {
     dropStash.mockResolvedValue(undefined);
     discardPaths.mockResolvedValue({
       discarded: true,
-      stashLabel: 'krakenless: discarded now',
-      undoCommands: ['git restore --source=abc123 --worktree -- "a.txt"'],
-      notes: [],
+      backups: [{ path: 'a.txt', blobOid: 'c'.repeat(40) }],
+      restoredFromIndex: [],
     });
   });
 
@@ -406,46 +406,9 @@ describe('actions', () => {
     });
   });
 
-  it('returns the stash label so the UI can explain the undo', async () => {
-    const store = createStore();
-    await openRepo(store, 'C:/repos/app');
-
-    const result = await discard(store, ['a.txt'], 'Discard changes to a.txt?');
-
-    expect(discardPaths).toHaveBeenCalledWith(
-      REPO.root,
-      ['a.txt'],
-      expect.objectContaining({ reason: 'Discard changes to a.txt?' }),
-    );
-    expect(result?.stashLabel).toContain('krakenless');
-    // The undo route must reach the user, not just the return value. It must
-    // be the worktree-only form: `git checkout <oid> -- <path>` would write the
-    // index too and clobber the staged snapshot the discard protected.
-    expect(store.getState().notice?.undoHint).toContain('git restore --source=');
-    expect(store.getState().notice?.undoHint).toContain('--worktree');
-  });
-
-  it('offers no undo hint when there is no command to run', async () => {
-    // Discarding a deletion stashes something but produces no restore command;
-    // an empty hint would render as "Run this to undo:" above nothing.
-    discardPaths.mockResolvedValue({
-      discarded: true,
-      stashLabel: 'krakenless: deletion',
-      undoCommands: [],
-      notes: ['The stash abc123 also holds "a.txt", which this command cannot restore.'],
-    });
-    const store = createStore();
-    await openRepo(store, 'C:/repos/app');
-
-    await discard(store, ['a.txt'], 'Discard?');
-
-    expect(store.getState().notice?.undoHint).toBeUndefined();
-    expect(store.getState().notice?.message).toContain('cannot restore');
-  });
-
-  it('says nothing was discarded when git created no stash', async () => {
-    // `stash push -- <path>` exits 0 and creates nothing when the path is
-    // unchanged; claiming success would send the user to an unrelated stash.
+  it('says nothing was discarded when no path had changes', async () => {
+    // Claiming success over an unchanged path would promise a backup that
+    // was never taken.
     listBranches.mockResolvedValue([]);
     listStashes.mockResolvedValue([]);
     fetchRemoteFn.mockResolvedValue({
@@ -462,7 +425,11 @@ describe('actions', () => {
     deleteBranch.mockResolvedValue({ deleted: true });
     applyStash.mockResolvedValue(undefined);
     dropStash.mockResolvedValue(undefined);
-    discardPaths.mockResolvedValue({ discarded: false, undoCommands: [] });
+    discardPaths.mockResolvedValue({
+      discarded: false,
+      backups: [],
+      restoredFromIndex: [],
+    });
     const store = createStore();
     await openRepo(store, 'C:/repos/app');
 
@@ -470,26 +437,6 @@ describe('actions', () => {
 
     expect(store.getState().notice).toMatchObject({ tone: 'warning' });
     expect(store.getState().notice?.undoHint).toBeUndefined();
-  });
-
-  it('reports a discard that failed after stashing, with its recovery route', async () => {
-    // The file is already off disk at this point; swallowing the error would
-    // leave the user with no idea where their work went.
-    discardPaths.mockRejectedValue(
-      new GitError(
-        'command-failed',
-        'The discard failed partway. Your changes are in a stash: git restore --source=abc --worktree -- "a.txt"',
-      ),
-    );
-    const store = createStore();
-    await openRepo(store, 'C:/repos/app');
-
-    // Rethrown, not swallowed: a caller that read `null` as "nothing happened"
-    // would tell the user there is nothing to recover while a stash holds it.
-    await expect(discard(store, ['a.txt'], 'Discard?')).rejects.toThrow(/stash/);
-    expect(store.getState().notice).toMatchObject({ tone: 'error' });
-    expect(store.getState().notice?.message).toContain('git restore --source=');
-    expect(isBusy(store.getState())).toBe(false);
   });
 
   it('reads as much history as the settings ask for', async () => {
@@ -626,61 +573,6 @@ describe('actions', () => {
   });
 });
 
-describe('undoDiscard', () => {
-  const ORIGINAL = 'the original bytes\n';
-  const BACKUP = {
-    path: 'src/a.ts',
-    blobOid: 'a'.repeat(40),
-    at: '2026-08-31T10:00:00.000Z',
-  };
-
-  beforeEach(() => {
-    readBackupBlob.mockResolvedValue(ORIGINAL);
-    openWorktreeFile.mockResolvedValue({
-      path: 'src/a.ts',
-      text: '',
-      shape: {},
-      stamp: 'stamp',
-    });
-    saveWorktreeFile.mockResolvedValue(undefined);
-  });
-
-  async function opened() {
-    const store = createStore();
-    await openRepo(store, 'C:/repos/app');
-    store.dispatch({ type: 'discard/recorded', backup: BACKUP });
-    return store;
-  }
-
-  it('writes the blob back verbatim through the app, not a shell redirect', async () => {
-    const store = await opened();
-
-    await undoDiscard(store, BACKUP);
-
-    expect(readBackupBlob).toHaveBeenCalledWith(REPO.root, BACKUP.blobOid);
-    // Exactly what came out of the object store: `saveWorktreeFile` reformats
-    // nothing, so line endings and a missing final newline survive.
-    expect(saveWorktreeFile).toHaveBeenCalledWith(
-      REPO.root,
-      expect.objectContaining({ path: 'src/a.ts' }),
-      ORIGINAL,
-    );
-    expect(store.getState().discards).toEqual([]);
-  });
-
-  it('keeps the backup listed when the restore fails', async () => {
-    // Dropping the record on a failed restore would throw away the oid that is
-    // still the only way back to the discarded work.
-    saveWorktreeFile.mockRejectedValue(new GitError('command-failed', 'disk full'));
-    const store = await opened();
-
-    await undoDiscard(store, BACKUP);
-
-    expect(store.getState().discards).toEqual([BACKUP]);
-    expect(store.getState().notice?.tone).toBe('error');
-  });
-});
-
 describe('refreshDiff — a stale answer never lands behind a newer selection', () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -767,5 +659,152 @@ describe('pullCurrent — the autostash', () => {
     await expect(pullCurrent(store)).resolves.toBe(true);
 
     expect(store.getState().notice).toBeNull();
+  });
+});
+
+describe('discard — the backups are the route back', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    openRepository.mockResolvedValue(REPO);
+    getStatus.mockResolvedValue(STATUS);
+    readLog.mockResolvedValue([]);
+    getWorktreeDiff.mockResolvedValue([]);
+    getStagedDiff.mockResolvedValue([]);
+    saveConfig.mockResolvedValue(undefined);
+    listBranches.mockResolvedValue([]);
+    listStashes.mockResolvedValue([]);
+  });
+
+  it('records every backup before the files are touched, with one stamp per discard', async () => {
+    // The hook fires from inside the git layer before its first destructive
+    // command; the records must already be in the store by then.
+    discardPaths.mockImplementation(
+      async (
+        _root: string,
+        _paths: string[],
+        _c: unknown,
+        hooks: { onBackedUp?: Function },
+      ) => {
+        hooks.onBackedUp?.([
+          { path: 'a.txt', blobOid: 'a'.repeat(40) },
+          { path: 'b.txt', blobOid: 'b'.repeat(40) },
+        ]);
+        return {
+          discarded: true,
+          backups: [
+            { path: 'a.txt', blobOid: 'a'.repeat(40) },
+            { path: 'b.txt', blobOid: 'b'.repeat(40) },
+          ],
+          restoredFromIndex: [],
+        };
+      },
+    );
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await discard(store, ['a.txt', 'b.txt'], 'Discard changes to 2 files?');
+
+    const discards = store.getState().discards;
+    expect(discards.map((entry) => entry.path)).toEqual(['b.txt', 'a.txt']);
+    expect(new Set(discards.map((entry) => entry.at)).size).toBe(1);
+    expect(store.getState().notice?.message).toMatch(/2 files.*Recent discards/);
+    expect(store.getState().notice?.undoHint).toBeUndefined();
+  });
+
+  it('keeps the records when the discard fails after backing up', async () => {
+    // The clean died halfway: whatever it removed is only in the blobs now.
+    discardPaths.mockImplementation(
+      async (
+        _root: string,
+        _paths: string[],
+        _c: unknown,
+        hooks: { onBackedUp?: Function },
+      ) => {
+        hooks.onBackedUp?.([{ path: 'a.txt', blobOid: 'a'.repeat(40) }]);
+        throw new GitError('command-failed', 'fatal: cannot spawn git');
+      },
+    );
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await expect(discard(store, ['a.txt'], 'Discard?')).rejects.toThrow(/cannot spawn/);
+
+    expect(store.getState().discards.map((entry) => entry.path)).toEqual(['a.txt']);
+    expect(store.getState().notice).toMatchObject({ tone: 'error' });
+    expect(isBusy(store.getState())).toBe(false);
+  });
+
+  it('says a deleted file came back from git rather than from a backup', async () => {
+    discardPaths.mockResolvedValue({
+      discarded: true,
+      backups: [],
+      restoredFromIndex: ['gone.txt'],
+    });
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await discard(store, ['gone.txt'], 'Discard?');
+
+    expect(store.getState().discards).toEqual([]);
+    expect(store.getState().notice?.message).toMatch(
+      /1 deleted file was restored from git/,
+    );
+  });
+});
+
+describe('undoDiscard', () => {
+  const BACKUP = {
+    path: 'src/a.ts',
+    blobOid: 'a'.repeat(40),
+    at: '2026-08-31T10:00:00.000Z',
+  };
+
+  beforeEach(() => {
+    restoreFromBackup.mockReset().mockResolvedValue(undefined);
+  });
+
+  async function opened() {
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+    store.dispatch({ type: 'discard/recorded', backup: BACKUP });
+    return store;
+  }
+
+  it('writes the blob back through Rust, byte for byte, never a shell redirect', async () => {
+    const store = await opened();
+
+    await undoDiscard(store, BACKUP);
+
+    expect(restoreFromBackup).toHaveBeenCalledWith(REPO.root, 'src/a.ts', BACKUP.blobOid);
+    expect(store.getState().discards).toEqual([]);
+    expect(store.getState().notice?.message).toContain('Restored src/a.ts');
+  });
+
+  it('keeps the backup listed when the restore fails', async () => {
+    // Dropping the record on a failed restore would throw away the oid that is
+    // still the only way back to the discarded work.
+    restoreFromBackup.mockRejectedValue(new GitError('command-failed', 'disk full'));
+    const store = await opened();
+
+    await undoDiscard(store, BACKUP);
+
+    expect(store.getState().discards).toEqual([BACKUP]);
+    expect(store.getState().notice?.tone).toBe('error');
+  });
+
+  it('restores a whole discard, attempts every file, and names what did not come back', async () => {
+    const second = { ...BACKUP, path: 'src/b.ts', blobOid: 'b'.repeat(40) };
+    restoreFromBackup.mockImplementation(async (_root: string, path: string) => {
+      if (path === 'src/a.ts') throw new GitError('command-failed', 'locked');
+    });
+    const store = await opened();
+    store.dispatch({ type: 'discard/recorded', backup: second });
+
+    await undoDiscards(store, [BACKUP, second]);
+
+    expect(restoreFromBackup).toHaveBeenCalledTimes(2);
+    expect(store.getState().discards).toEqual([BACKUP]);
+    expect(store.getState().notice?.tone).toBe('error');
+    expect(store.getState().notice?.message).toMatch(/Restored 1 of 2.*src\/a\.ts/);
   });
 });

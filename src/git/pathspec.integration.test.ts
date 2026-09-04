@@ -9,24 +9,12 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { chunkPathspec } from './argsafety';
-import {
-  buildDiscardCommand,
-  buildStageCommand,
-  buildUnstageCommand,
-} from './commands/stage';
+import { buildStageCommand, buildUnstageCommand } from './commands/stage';
 import type { GitCommand } from './types';
 
 vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
@@ -73,37 +61,6 @@ afterEach(() => {
 });
 
 describe('a pathspec on stdin, against real git', () => {
-  it('cannot stash thousands of untracked files in one push, whatever the route', () => {
-    // The reason `discardPaths` chunks: git hands the paths to the `git clean`
-    // it spawns underneath as arguments, so a pathspec file does not help,
-    // and the entry is written before that spawn fails. If a future git fixes
-    // this, the test fails and the chunking can go.
-    const command = buildDiscardCommand(paths(), 'label', { keepIndex: false });
-    expect(command.stdin).toBeDefined();
-
-    expect(() => run(command)).toThrow();
-    // Both halves of the trap: the entry exists, the files are still there.
-    expect(git(['stash', 'list'])).toContain('label');
-    expect(existsSync(join(repo, 'out/file-0.json'))).toBe(true);
-  });
-
-  it('discards thousands of untracked files a chunk at a time', () => {
-    const chunks = chunkPathspec(paths());
-    expect(chunks.length).toBeGreaterThan(1);
-
-    for (const chunk of chunks) {
-      run(buildDiscardCommand(chunk, 'label', { keepIndex: false }));
-    }
-
-    expect(existsSync(join(repo, 'out/file-0.json'))).toBe(false);
-    expect(existsSync(join(repo, `out/file-${String(COUNT - 1)}.json`))).toBe(false);
-    expect(git(['stash', 'list']).split('\n').filter(Boolean)).toHaveLength(
-      chunks.length,
-    );
-    // And only them: the file outside the list is where it was.
-    expect(readFileSync(join(repo, 'seed.txt'), 'utf8')).toBe('seed\n');
-  });
-
   it('stages and unstages thousands of files', () => {
     run(buildStageCommand(paths()));
     expect(

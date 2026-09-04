@@ -2,18 +2,19 @@ import {
   buildApplyCachedCommand,
   buildApplyCheckCommand,
   buildBackupBlobCommand,
+  buildBackupBlobsCommand,
   buildCommitCommand,
-  buildDiscardCommand,
   buildDiscardHunkCheckCommand,
   buildDiscardHunkCommand,
   buildReadBlobCommand,
+  buildRemoveUntrackedCommand,
+  buildRestoreWorktreeCommand,
   buildStageCommand,
   buildUnstageCommand,
   type CommitOptions,
 } from './commands/stage';
 import { chunkPathspec } from './argsafety';
 import { getStatus } from './status';
-import { recoveryFor, unrecoverableNote } from './recovery';
 import type { Confirmation } from './confirm';
 import { GitError } from './errors';
 import { serializeHunks } from './patch';
@@ -242,267 +243,130 @@ export function amendCommit(
   );
 }
 
-export interface DiscardResult {
-  /** False when git created no stash; nothing was discarded. */
-  discarded: boolean;
-  /** Message of the stash(es) holding the discarded changes, when any were made. */
-  stashLabel?: string;
-  /** Exact commands that bring the changes back, in order. */
-  undoCommands: string[];
-  /** Anything the commands above cannot restore, said plainly. */
-  notes?: string[];
+/** One file's bytes as they were a moment before the discard. */
+export interface DiscardBackupRecord {
+  path: string;
+  blobOid: string;
 }
 
-/** Resolves the current stash tip, or null when there are no stashes. */
-async function stashTip(repo: string): Promise<string | null> {
-  const output = await runGit(
-    repo,
-    { args: ['rev-parse', '--verify', '--quiet', 'refs/stash'] },
-    { allowExitCodes: [1] },
-  );
-  const oid = output.stdout.trim();
-  return oid.length === 0 ? null : oid;
+export interface DiscardResult {
+  /** False when nothing on the requested paths needed discarding. */
+  discarded: boolean;
+  /** One per file that had bytes on disk, taken before anything was removed. */
+  backups: DiscardBackupRecord[];
+  /**
+   * Files that were deleted on disk and came back from the index. Nothing
+   * to back up for those — there were no bytes — and nothing lost either.
+   */
+  restoredFromIndex: string[];
+}
+
+/** What the discard has to do, sorted by what git needs for each. */
+interface DiscardPlan {
+  /** Tracked, changed on disk, and still there. */
+  tracked: string[];
+  /** Tracked and gone from disk: `restore` brings them back, no backup needed. */
+  deleted: string[];
+  untracked: string[];
 }
 
 /**
- * Splits the requested paths into what git actually needs discarding.
+ * Sorts the requested paths into what git actually needs doing.
  *
- * Derived here, never taken from the caller: `keepIndex` is the only thing
- * standing between a discard and losing a staged snapshot, and a tracked path
- * mistakenly passed as untracked would lose it silently, exit 0, no warning.
- * Paths whose worktree side matches the index are dropped entirely — stashing
- * those creates an entry and changes nothing, so the user would be told their
- * changes were discarded while the file sits untouched.
+ * One status read over the whole tree rather than `ls-files` and `diff` over
+ * the requested paths: neither accepts a pathspec on stdin, and a few thousand
+ * untracked files — "Discard all" after a build — pushed the command line past
+ * what Windows will start a process with. Paths whose working tree matches the
+ * index are dropped: there is nothing to discard, and saying "discarded"
+ * about them would be a lie.
  */
-async function planDiscard(
-  repo: string,
-  paths: string[],
-): Promise<{ tracked: string[]; untracked: string[] }> {
-  // One status read over the whole tree rather than `ls-files` and `diff`
-  // over the requested paths: neither of those accepts a pathspec on stdin,
-  // and a few thousand untracked files — "Discard all" after a build — pushed
-  // the command line past what Windows will start a process with.
+async function planDiscard(repo: string, paths: string[]): Promise<DiscardPlan> {
   const status = await getStatus(repo);
-  const changed = new Set<string>();
+  const tracked = new Set<string>();
+  const deleted = new Set<string>();
   const untracked = new Set<string>();
   for (const entry of status.entries) {
+    if (entry.conflicted) continue;
     if (entry.worktree === 'untracked') untracked.add(entry.path);
+    else if (entry.worktree === 'deleted') deleted.add(entry.path);
     else if (entry.worktree !== 'unmodified' && entry.worktree !== 'ignored') {
-      // Worktree-vs-index differences: exactly the paths a discard would change.
-      changed.add(entry.path);
+      tracked.add(entry.path);
     }
   }
-
   return {
-    tracked: paths.filter((path) => changed.has(path)),
+    tracked: paths.filter((path) => tracked.has(path)),
+    deleted: paths.filter((path) => deleted.has(path)),
     untracked: paths.filter((path) => untracked.has(path)),
   };
 }
 
-/** What one stash phase produced, once it is known to have created an entry. */
-interface StashedPhase {
-  /** The stash entry itself, for `git stash show` and for naming it. */
-  stashOid: string;
-  /** Oid whose *tree* holds the content — the third parent for untracked. */
-  sourceOid: string;
-  /** Paths that tree actually contains. */
-  presentPaths: string[];
-  /** Paths the phase was asked to discard. */
-  requestedPaths: string[];
-}
+/** Exactly a sha1 or a sha256 oid; the lengths in between are not real. */
+const OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 /**
- * Resolves where a phase's content really lives, and what is in it.
+ * Backs every file up, or backs nothing up.
  *
- * `stash push --include-untracked` stores untracked files in the stash's third
- * parent, not its tree (verified against git 2.39), so restoring from the stash
- * oid would fail for exactly the case where the file exists nowhere else.
+ * The oids come back one per line in the order the paths went in. A count
+ * that does not match, or a line that is not an oid, means git did not do
+ * what was asked, and a discard that proceeded on a partial backup would be
+ * the unrecoverable discard this route exists to avoid.
  */
-async function describeStash(
-  repo: string,
-  stashOid: string,
-  requestedPaths: string[],
-  untracked: boolean,
-): Promise<StashedPhase> {
-  let sourceOid = stashOid;
-  if (untracked) {
-    const parent = await runGit(
-      repo,
-      { args: ['rev-parse', '--verify', '--quiet', `${stashOid}^3`] },
-      { allowExitCodes: [1] },
+async function backUp(repo: string, paths: string[]): Promise<DiscardBackupRecord[]> {
+  const output = await runGit(repo, buildBackupBlobsCommand(paths));
+  const oids = output.stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (oids.length !== paths.length || !oids.every((oid) => OID.test(oid))) {
+    throw new GitError(
+      'parse-failed',
+      'Could not back the files up before discarding, so nothing was discarded.',
+      { args: ['hash-object'] },
     );
-    const resolved = parent.stdout.trim();
-    // Resolved to a literal oid on purpose: `^` is an escape character in
-    // cmd.exe, so a copy-pasted `--source=<oid>^3` silently loses the `^3`.
-    if (resolved.length > 0) sourceOid = resolved;
   }
-
-  // Scoped to the paths asked about. Listing the whole tree would walk every
-  // file in the repository, and one undecodable name anywhere in it would make
-  // the runner throw `undecodable-output` *after* the stash already took the
-  // work off disk — leaving no oid to recover from.
-  const listed = await runGit(repo, {
-    args: ['ls-tree', '-r', '-z', '--name-only', sourceOid, '--', ...requestedPaths],
-  });
-  return {
-    stashOid,
-    sourceOid,
-    presentPaths: listed.stdout.split('\u0000').filter((path) => path.length > 0),
-    requestedPaths,
-  };
+  return paths.map((path, index) => ({ path, blobOid: oids[index] ?? '' }));
 }
 
 /**
- * Runs one stash push and describes what it created, if anything.
+ * Discards working-tree changes for the given paths, keeping every file's
+ * bytes as a blob first.
  *
- * A failure still has to report the stash: `stash push` can fail *after*
- * stashing a file and removing it from disk, and losing that oid to an
- * exception means the file is gone with no route back.
- */
-async function stashOnce(
-  repo: string,
-  paths: string[],
-  label: string,
-  keepIndex: boolean,
-  gate: { confirmed: true },
-): Promise<StashedPhase | null> {
-  const before = await stashTip(repo);
-
-  try {
-    await runGit(repo, buildDiscardCommand(paths, label, { keepIndex }), gate);
-  } catch (error) {
-    const created = await stashTip(repo);
-    if (created !== null && created !== before) {
-      throw new StashedButFailed(
-        [await describeStash(repo, created, paths, !keepIndex)],
-        error,
-      );
-    }
-    throw error;
-  }
-
-  // `git stash push -- <path>` exits 0 and creates nothing when there is
-  // nothing to save; reporting a recovery route then would point at an
-  // unrelated, older entry.
-  const after = await stashTip(repo);
-  if (after === null || after === before) return null;
-  return describeStash(repo, after, paths, !keepIndex);
-}
-
-/**
- * Runs one phase — tracked or untracked — as as many pushes as its paths need.
+ * Order is the whole design: back up, hand the records to the caller, *then*
+ * remove. `onBackedUp` fires before the first destructive command, so a
+ * restore or a clean that fails halfway cannot take the only route back with
+ * it — the caller has already recorded the oids. Tracked files (and deleted
+ * ones) go back to their index version with `restore --worktree`, which keeps
+ * a staged snapshot exactly as it was; untracked files are removed with
+ * `clean`, a chunk at a time because `clean` cannot read a long list.
  *
- * One push per chunk (see `chunkPathspec`). `git stash push` cannot take a
- * long path list by any route: given one on stdin it still hands the paths as
- * arguments to the `git clean` and `git checkout` it runs underneath, and on
- * Windows that inner spawn fails with "Filename too long" *after* the entry
- * is written — the discard stops with the files still on disk, which is the
- * screenshot that found this. Each push is its own entry and its own route
- * back; a discard of four thousand files is twenty stashes and twenty
- * commands, which is ugly and honest. A failure keeps what earlier pushes
- * earned, so nothing already stashed loses its oid to the exception.
- */
-async function stashAway(
-  repo: string,
-  paths: string[],
-  label: string,
-  keepIndex: boolean,
-  gate: { confirmed: true },
-): Promise<StashedPhase[]> {
-  const chunks = chunkPathspec(paths);
-  const done: StashedPhase[] = [];
-  for (const [index, chunk] of chunks.entries()) {
-    const part =
-      chunks.length === 1
-        ? label
-        : `${label} (${String(index + 1)}/${String(chunks.length)})`;
-    try {
-      const phase = await stashOnce(repo, chunk, part, keepIndex, gate);
-      if (phase !== null) done.push(phase);
-    } catch (error) {
-      if (error instanceof StashedButFailed) {
-        throw new StashedButFailed([...done, ...error.phases], error.cause);
-      }
-      if (done.length > 0) throw new StashedButFailed(done, error);
-      throw error;
-    }
-  }
-  return done;
-}
-
-/** Carries every stash a failed discard made out of the failure, so the undo routes survive. */
-class StashedButFailed extends Error {
-  readonly phases: StashedPhase[];
-  /** What actually went wrong, in git's words. */
-  override readonly cause: unknown;
-
-  constructor(phases: StashedPhase[], cause: unknown) {
-    super('The discard failed after stashing');
-    this.name = 'StashedButFailed';
-    this.phases = phases;
-    this.cause = cause;
-  }
-}
-
-function collectRecovery(phase: StashedPhase): { commands: string[]; notes: string[] } {
-  const plan = recoveryFor(phase.sourceOid, phase.requestedPaths, phase.presentPaths);
-  const note = unrecoverableNote(phase.stashOid, plan.unrecoverable);
-  return { commands: plan.commands, notes: note === null ? [] : [note] };
-}
-
-/**
- * Discards working-tree changes for the given paths.
- *
- * `--keep-index` on the tracked half protects a staged snapshot: without it the
- * stash reverts staged content to HEAD too, and nothing puts that back. Git
- * 2.39 rejects that flag together with an untracked pathspec, so untracked
- * paths go into their own stash — they have no index entry to protect anyway.
+ * No stash. The earlier design stashed and printed a `git restore` command;
+ * every discard left an entry in the stash list and a node on the graph, and
+ * a stash push cannot take a long path list at all (ADR-0044). The blob route
+ * is invisible, byte-exact, and undone with a button (ADR-0045).
  */
 export async function discardPaths(
   repo: string,
   paths: string[],
   confirmation: Confirmation,
+  hooks: { onBackedUp?: (backups: DiscardBackupRecord[]) => void } = {},
 ): Promise<DiscardResult> {
   const gate = approved(confirmation);
-  const stashLabel = `krakenless: discarded ${new Date().toISOString()}`;
   const plan = await planDiscard(repo, paths);
-
-  const undoCommands: string[] = [];
-  const notes: string[] = [];
-  const absorb = (phase: StashedPhase): void => {
-    const recovery = collectRecovery(phase);
-    undoCommands.push(...recovery.commands);
-    notes.push(...recovery.notes);
-  };
-
-  try {
-    for (const phase of await stashAway(repo, plan.tracked, stashLabel, true, gate)) {
-      absorb(phase);
-    }
-    for (const phase of await stashAway(repo, plan.untracked, stashLabel, false, gate)) {
-      absorb(phase);
-    }
-  } catch (error) {
-    // Work may already be off disk. Whatever went wrong, the routes back that
-    // earlier pushes earned must travel with the error, not be dropped with it.
-    const cause = error instanceof StashedButFailed ? error.cause : error;
-    if (error instanceof StashedButFailed) error.phases.forEach(absorb);
-    if (undoCommands.length === 0 && notes.length === 0) throw cause;
-
-    throw new GitError(
-      'command-failed',
-      [
-        'The discard failed partway, and some changes are already in a stash.',
-        `git said: ${cause instanceof Error ? cause.message : String(cause)}.`,
-        ...undoCommands.map((command) => `Recover with: ${command}`),
-        ...notes,
-      ].join(' '),
-      { args: ['stash', 'push'] },
-    );
+  const present = [...plan.tracked, ...plan.untracked];
+  if (present.length === 0 && plan.deleted.length === 0) {
+    return { discarded: false, backups: [], restoredFromIndex: [] };
   }
 
-  if (undoCommands.length === 0 && notes.length === 0) {
-    return { discarded: false, undoCommands: [] };
+  const backups = present.length === 0 ? [] : await backUp(repo, present);
+  hooks.onBackedUp?.(backups);
+
+  const toRestore = [...plan.tracked, ...plan.deleted];
+  if (toRestore.length > 0) {
+    await runGit(repo, buildRestoreWorktreeCommand(toRestore), gate);
   }
-  return { discarded: true, stashLabel, undoCommands, notes };
+  for (const chunk of chunkPathspec(plan.untracked)) {
+    await runGit(repo, buildRemoveUntrackedCommand(chunk), gate);
+  }
+
+  return { discarded: true, backups, restoredFromIndex: plan.deleted };
 }

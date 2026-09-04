@@ -1,4 +1,4 @@
-import { assertRevision, pathspec, pathspecInput } from '../argsafety';
+import { assertPath, assertRevision, pathspec, pathspecInput } from '../argsafety';
 import { GitError } from '../errors';
 import type { GitCommand } from '../types';
 
@@ -146,48 +146,67 @@ export function buildCommitCommand(options: CommitOptions): GitCommand {
 }
 
 /**
- * Discards working-tree changes for specific paths *by stashing them*.
+ * Writes the current bytes of several files into the object store.
  *
- * A path-limited `stash push` reverts exactly those paths and keeps the changes
- * recoverable — verified against git 2.39: other files' edits and untracked
- * files outside the pathspec are left alone. `git restore` would do the same
- * job with no way back, which fails the safety bar.
- *
- * `--keep-index` is load-bearing. Without it the stash reverts the *staged*
- * content to HEAD too, and no `stash pop` puts that snapshot back — discarding
- * an unstaged edit would silently destroy a staged one. With it, discard means
- * "drop my unstaged edits", which is exactly `git restore <path>` semantics.
+ * One oid per path on stdout, in the order the paths were given. This is the
+ * backup a whole-file discard takes *before* it removes anything (ADR-0045):
+ * a loose blob on no ref, named only by the record the app keeps, and the
+ * same route the hunk discard has used since ADR-0032. `--no-filters` stores
+ * the bytes exactly as they are on disk, so the restore is byte-exact.
+ * `--stdin-paths` reads one path per line — a path containing a newline
+ * would be read as two, so it is refused here rather than half-backed-up.
  */
-export function buildDiscardCommand(
-  paths: string[],
-  label: string,
-  options: { keepIndex: boolean },
-): GitCommand {
-  const { args: paths_, stdin } = pathspecInput(paths);
+export function buildBackupBlobsCommand(paths: string[]): GitCommand {
+  if (paths.length === 0) {
+    throw new GitError('bad-argument', 'backup needs at least one path', {
+      args: ['hash-object'],
+    });
+  }
+  for (const path of paths) {
+    assertPath(path);
+    if (path.includes('\n') || path.includes('\r')) {
+      throw new GitError(
+        'bad-argument',
+        `path contains a line break: ${JSON.stringify(path)}`,
+        {
+          args: ['hash-object'],
+        },
+      );
+    }
+  }
   return {
-    ...(stdin === undefined ? {} : { stdin }),
-    args: [
-      'stash',
-      'push',
-      // Only for tracked paths: git 2.39 restores the index side with
-      // `checkout-index`, which fails outright on an untracked path
-      // ("did not match any file(s) known to git"). An untracked file has no
-      // index entry to protect anyway.
-      //
-      // The two flags are mutually exclusive by construction: the tracked
-      // phase must not ask for untracked content, because `--include-untracked`
-      // makes git stage the pathspec itself, and a *tracked* path that sits
-      // under an ignored directory (committed once with `add -f`, then ignored)
-      // makes that step fail with "paths are ignored by one of your .gitignore
-      // files" — after the stash entry exists, leaving the discard half done.
-      ...(options.keepIndex ? ['--keep-index'] : ['--include-untracked']),
-      '--message',
-      label,
-      ...paths_,
-    ],
-    destructive: true,
-    timeoutMs: 120_000,
+    args: ['hash-object', '-w', '--no-filters', '--stdin-paths'],
+    stdin: `${paths.join('\n')}\n`,
   };
+}
+
+/**
+ * Puts tracked paths back to their index version, on disk only.
+ *
+ * This is the discard itself for a tracked file: the staged snapshot, if any,
+ * is what the working tree becomes, which is exactly "drop my unstaged edits".
+ * A deleted file comes back the same way. Unrecoverable on its own — which is
+ * why `discardPaths` only runs it after `buildBackupBlobsCommand` succeeded.
+ */
+export function buildRestoreWorktreeCommand(paths: string[]): GitCommand {
+  const { args, stdin } = pathspecInput(paths);
+  return {
+    args: ['restore', '--worktree', ...args],
+    destructive: true,
+    ...(stdin === undefined ? {} : { stdin }),
+  };
+}
+
+/**
+ * Removes untracked files from disk — the discard for a file git never had.
+ *
+ * `clean` has no `--pathspec-from-file`, so the caller chunks a long list
+ * (`chunkPathspec`); unlike a stash there is no half-done state between
+ * chunks. No `-d`: the paths are files, and a directory would only be reached
+ * through one of them being wrong.
+ */
+export function buildRemoveUntrackedCommand(paths: string[]): GitCommand {
+  return { args: ['clean', '--force', ...pathspec(paths)], destructive: true };
 }
 
 /** Lists stash entries in a machine-stable format. */

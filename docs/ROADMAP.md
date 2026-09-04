@@ -86,10 +86,10 @@ after 2 more weeks → proceed to v0.2. Else: keep as personal tool, stop invest
 
 ## Backlog (ideas parking lot — not scheduled)
 
-**A chunked discard leaves many stash entries.** ADR-0044: a discard of
-thousands of files is one stash push per 8,000 characters of paths, each
-labelled `(k/N)`. A "drop all parts of this discard" control on the stash list
-would tidy that in one click.
+**Discard backups do not survive the app closing by name.** ADR-0045: the
+blobs do (two weeks before `git gc` touches them), but the list that names
+them is in memory. Persisting "Recent discards" per repository would make the
+Undo button outlive a restart.
 
 **Delete should move the file to the OS trash, not remove it.** ADR-0041 ships
 a real delete with a confirmation that says what it costs; the recoverable form

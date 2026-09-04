@@ -231,6 +231,109 @@ pub fn worktree_write(
     Ok(stamp_of(contents.as_bytes()))
 }
 
+/// Resolves a path for a write that may *create* the file.
+///
+/// The same component checks as `resolve`, then: an existing target is
+/// resolved exactly as for a write; a missing one has its parent created and
+/// canonicalized, and must land inside the repository. A restore of an
+/// untracked file a discard removed is the case — `git clean` may have taken
+/// the directory with it.
+fn resolve_for_create(repo: &str, path: &str) -> Result<PathBuf, WorktreeError> {
+    match resolve(repo, path) {
+        Err(WorktreeError::NotFound(_)) => {}
+        other => return other,
+    }
+
+    let root = Path::new(repo)
+        .canonicalize()
+        .map_err(|e| WorktreeError::NotFound(format!("{repo}: {e}")))?;
+    let relative = Path::new(path);
+    let joined = root.join(relative);
+    let parent = joined
+        .parent()
+        .ok_or_else(|| WorktreeError::BadRequest(format!("{path} has no parent directory")))?;
+    std::fs::create_dir_all(parent)
+        .map_err(|e| WorktreeError::WriteFailed(format!("{path}: {e}")))?;
+    let parent = parent
+        .canonicalize()
+        .map_err(|e| WorktreeError::NotFound(format!("{path}: {e}")))?;
+    if !parent.starts_with(&root) {
+        return Err(WorktreeError::OutsideRepo(path.into()));
+    }
+    let name = relative
+        .file_name()
+        .ok_or_else(|| WorktreeError::BadRequest(format!("{path} has no file name")))?;
+    Ok(parent.join(name))
+}
+
+/// Writes bytes to `resolved` through a temporary file in the same directory.
+fn write_atomically(resolved: &Path, path: &str, bytes: &[u8]) -> Result<(), WorktreeError> {
+    let directory = resolved
+        .parent()
+        .ok_or_else(|| WorktreeError::WriteFailed(format!("{path} has no parent directory")))?;
+    let temp = directory.join(format!(".krakenless-{}.tmp", std::process::id()));
+    let write = || -> std::io::Result<()> {
+        let mut file = std::fs::File::create(&temp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        if let Ok(meta) = std::fs::metadata(resolved) {
+            std::fs::set_permissions(&temp, meta.permissions())?;
+        }
+        std::fs::rename(&temp, resolved)
+    };
+    if let Err(e) = write() {
+        let _ = std::fs::remove_file(&temp);
+        return Err(WorktreeError::WriteFailed(format!("{path}: {e}")));
+    }
+    Ok(())
+}
+
+/// Puts a backup blob back as a working-tree file, byte for byte.
+///
+/// The blob is read with `git cat-file blob` here, in Rust, and written as
+/// bytes: the TypeScript runner decodes git's output as text and refuses what
+/// is not UTF-8, which is fine for a diff and wrong for a restore — the backup
+/// of a PNG is bytes, and a restore that could not put a PNG back is not a
+/// restore. The file may not exist (an untracked file a discard removed), so
+/// the path is resolved for creation.
+#[tauri::command]
+pub fn worktree_restore_blob(
+    repo: String,
+    path: String,
+    blob_oid: String,
+) -> Result<(), WorktreeError> {
+    // Exactly a sha1 or a sha256 oid: nothing else may reach `cat-file`.
+    let hex = blob_oid.len() == 40 || blob_oid.len() == 64;
+    if !hex || !blob_oid.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(WorktreeError::BadRequest(format!("not an object id: {blob_oid}")));
+    }
+    let resolved = resolve_for_create(&repo, &path)?;
+
+    let mut command = std::process::Command::new("git");
+    crate::git_runner::scrub_git_env(&mut command);
+    command
+        .args(["--no-pager", "cat-file", "blob", &blob_oid])
+        .current_dir(&repo)
+        .stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    let output = command
+        .output()
+        .map_err(|e| WorktreeError::ReadFailed(format!("git cat-file: {e}")))?;
+    if !output.status.success() {
+        return Err(WorktreeError::ReadFailed(format!(
+            "git cat-file {blob_oid}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+
+    write_atomically(&resolved, &path, &output.stdout)
+}
+
 /// Deletes a working-tree file.
 ///
 /// The same `resolve` guards as a write, for the same reason and one more: this
@@ -589,6 +692,109 @@ mod tests {
         assert!(dir.join("src").is_dir());
 
         std::fs::remove_file(&outside).ok();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A real repository, because the restore reads the blob through git.
+    fn git_repo(name: &str) -> PathBuf {
+        let dir = temp_repo(name);
+        std::fs::remove_dir_all(dir.join(".git")).unwrap();
+        let run = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?} failed");
+        };
+        run(&["init", "--quiet"]);
+        dir
+    }
+
+    /// Writes bytes into the object store and returns their oid.
+    fn blob_of(dir: &Path, bytes: &[u8]) -> String {
+        let mut child = std::process::Command::new("git")
+            .args(["hash-object", "-w", "--stdin"])
+            .current_dir(dir)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(bytes).unwrap();
+        let out = child.wait_with_output().unwrap();
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    }
+
+    #[test]
+    fn restores_a_blob_over_an_existing_file_byte_for_byte() {
+        let dir = git_repo("restore-over");
+        let bytes: &[u8] = &[0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0x0d, 0x0a];
+        let oid = blob_of(&dir, bytes);
+        write(&dir.join("logo.png"), "replaced\n");
+
+        worktree_restore_blob(repo_arg(&dir), "logo.png".into(), oid).unwrap();
+
+        // A binary, not text: the whole reason the restore is done here and
+        // not through the editor's UTF-8 path.
+        assert_eq!(std::fs::read(dir.join("logo.png")).unwrap(), bytes);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn restores_a_blob_as_a_file_that_no_longer_exists() {
+        // An untracked file a discard removed — `git clean` may have taken the
+        // directory with it.
+        let dir = git_repo("restore-missing");
+        let oid = blob_of(&dir, b"my notes\n");
+
+        worktree_restore_blob(repo_arg(&dir), "notes/deep/todo.txt".into(), oid).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(dir.join("notes").join("deep").join("todo.txt")).unwrap(),
+            "my notes\n"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn restore_refuses_what_a_write_refuses_even_for_a_missing_file() {
+        let dir = git_repo("restore-guards");
+        let oid = blob_of(&dir, b"x\n");
+        let outside = dir.parent().unwrap().join("krakenless-outside-restore.txt");
+        let _ = std::fs::remove_file(&outside);
+
+        for path in [".git/HEAD", ".GIT/config", "../krakenless-outside-restore.txt", ""] {
+            let err =
+                worktree_restore_blob(repo_arg(&dir), path.into(), oid.clone()).unwrap_err();
+            assert!(
+                matches!(err, WorktreeError::BadRequest(_)),
+                "{path} gave {err:?}"
+            );
+        }
+        assert!(!outside.exists(), "a path outside the repository was written");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn restore_refuses_anything_that_is_not_an_oid() {
+        let dir = git_repo("restore-oid");
+        for bad in ["HEAD", "main", "abc", "--help", &"g".repeat(40)] {
+            let err = worktree_restore_blob(repo_arg(&dir), "a.txt".into(), bad.into())
+                .unwrap_err();
+            assert!(matches!(err, WorktreeError::BadRequest(_)), "{bad} gave {err:?}");
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn restore_reports_a_blob_git_does_not_have() {
+        let dir = git_repo("restore-unknown");
+        let err = worktree_restore_blob(repo_arg(&dir), "a.txt".into(), "0".repeat(40))
+            .unwrap_err();
+        assert!(matches!(err, WorktreeError::ReadFailed(_)), "{err:?}");
+        assert!(!dir.join("a.txt").exists());
         std::fs::remove_dir_all(&dir).ok();
     }
 

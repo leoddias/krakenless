@@ -6,7 +6,6 @@ import {
   buildDiscardHunkCheckCommand,
   buildDiscardHunkCommand,
   buildCommitCommand,
-  buildDiscardCommand,
   buildStageCommand,
   buildStashApplyCommand,
   buildStashDropCommand,
@@ -108,64 +107,6 @@ describe('buildCommitCommand', () => {
     expect(buildCommitCommand({ message: 'x', allowEmpty: true }).args).toContain(
       '--allow-empty',
     );
-  });
-});
-
-describe('buildDiscardCommand', () => {
-  it('discards a tracked path by stashing, keeping the staged snapshot', () => {
-    // Without --keep-index the stash also reverts staged content to HEAD, and
-    // nothing brings that back.
-    expect(buildDiscardCommand(['a.txt'], 'label', { keepIndex: true }).args).toEqual([
-      'stash',
-      'push',
-      '--keep-index',
-      '--message',
-      'label',
-      '--',
-      'a.txt',
-    ]);
-  });
-
-  it('never asks for untracked content on the tracked phase', () => {
-    // With --include-untracked git stages the pathspec itself, and a tracked
-    // path under an ignored directory makes that step fail *after* the stash
-    // exists — the discard stops half done and the recovery notice fires.
-    expect(
-      buildDiscardCommand(['a.txt'], 'label', { keepIndex: true }).args,
-    ).not.toContain('--include-untracked');
-  });
-
-  it('asks for untracked content on the untracked phase', () => {
-    // Without it there is nothing to stash: an untracked file has no index
-    // entry, so a plain `stash push` saves nothing and the file stays put.
-    expect(
-      buildDiscardCommand(['new.txt'], 'label', { keepIndex: false }).args,
-    ).toContain('--include-untracked');
-  });
-
-  it('drops --keep-index for untracked paths, which git rejects with it', () => {
-    // Verified against git 2.39: --keep-index with an untracked pathspec fails
-    // with "did not match any file(s) known to git".
-    expect(
-      buildDiscardCommand(['new.txt'], 'label', { keepIndex: false }).args,
-    ).not.toContain('--keep-index');
-  });
-
-  it('never builds a plain restore of the working tree', () => {
-    // `git restore --worktree` would be unrecoverable; that is the whole point.
-    expect(
-      buildDiscardCommand(['a.txt'], 'label', { keepIndex: true }).args,
-    ).not.toContain('restore');
-  });
-
-  it('requires confirmation', () => {
-    const command = buildDiscardCommand(['a.txt'], 'label', { keepIndex: true });
-    expect(command.destructive).toBe(true);
-    expect(isDestructive(command.args)).toBe(true);
-  });
-
-  it('refuses an empty path list, which would discard the whole tree', () => {
-    expect(() => buildDiscardCommand([], 'label', { keepIndex: true })).toThrow(GitError);
   });
 });
 

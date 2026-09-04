@@ -133,9 +133,8 @@ beforeEach(() => {
   unstageMock.mockReset().mockResolvedValue(undefined);
   discardMock.mockReset().mockResolvedValue({
     discarded: true,
-    stashLabel: 'krakenless: discarded now',
-    undoCommands: ['git restore --source=abc123 --worktree -- "a.ts"'],
-    notes: [],
+    backups: [{ path: 'a.ts', blobOid: 'abc123'.padEnd(40, '0') }],
+    restoredFromIndex: [],
   });
   commitMock.mockReset().mockResolvedValue(undefined);
   refreshMock.mockReset().mockResolvedValue(undefined);
@@ -457,7 +456,7 @@ describe('discard confirmation', () => {
       ['a.ts'],
       expect.stringContaining('Discard changes to'),
     );
-    await screen.findByText(/git restore --source=/);
+    await screen.findByText(/Recent discards/);
   });
 
   it('re-asks instead of discarding when the working tree moved underneath', () => {
@@ -499,30 +498,24 @@ describe('discard confirmation', () => {
     );
   });
 
-  it('keeps the recovery command on screen after the discard', async () => {
-    discardMock.mockResolvedValue({
-      discarded: true,
-      stashLabel: 'krakenless: discarded 2026-08-20',
-      undoCommands: ['git restore --source=abc123 --worktree -- "a.ts"'],
-      notes: [],
-    });
+  it('keeps the recovery notice on screen after the discard', async () => {
     const store = renderOneUnstaged();
     fireEvent.click(screen.getByRole('button', { name: 'Discard a.ts' }));
     confirm();
 
     const notice = await screen.findByRole('status');
-    // The command must be shown verbatim: it is the only route back, and it
-    // carries the stash oid the user cannot reconstruct.
-    expect(notice).toHaveTextContent('git restore --source=abc123 --worktree');
+    // The route back is a button in "Recent discards"; the notice says so and
+    // names the file, and never prints a command.
+    expect(notice).toHaveTextContent('Recent discards');
     expect(notice).toHaveTextContent('staged version');
+    expect(notice).not.toHaveTextContent('git restore');
     expect(within(notice).getByText('a.ts')).toBeInTheDocument();
 
-    // It survives whatever the status panel does next — including failing —
-    // because it carries the only instructions for getting the work back.
+    // It survives whatever the status panel does next — including failing.
     act(() =>
       store.dispatch({ type: 'status/failed', message: 'fatal: index.lock exists' }),
     );
-    expect(screen.getByRole('status')).toHaveTextContent('git restore --source=');
+    expect(screen.getByRole('status')).toHaveTextContent('Recent discards');
 
     fireEvent.click(
       within(screen.getByRole('status')).getByRole('button', { name: 'Dismiss' }),
@@ -548,9 +541,9 @@ describe('discard confirmation', () => {
     confirm();
 
     const alert = await screen.findByRole('alert');
-    // An interrupted `git stash push` can have written the entry anyway, so the
-    // message must not promise the working tree is untouched.
-    expect(alert).toHaveTextContent('Check `git stash list` before retrying');
+    // The backups were recorded before anything was removed, so the message
+    // points at them rather than promising the working tree is untouched.
+    expect(alert).toHaveTextContent('backup in Recent discards');
     expect(alert).toHaveTextContent('fatal: cannot save the current worktree');
   });
 });
@@ -905,51 +898,11 @@ describe('discard notices over time', () => {
     expect(screen.queryByText(/no longer have unstaged changes/)).not.toBeInTheDocument();
   });
 
-  it('shows what the recovery command cannot bring back', async () => {
-    // The model layer computes this sentence; a view that drops it shows one
-    // command above a path list it does not cover, which reads as "this
-    // restores all of them". That is exactly what went wrong once already.
-    discardMock.mockResolvedValue({
-      discarded: true,
-      stashLabel: 'krakenless: mixed',
-      undoCommands: ['git restore --source=abc123 --worktree -- "a.ts"'],
-      notes: [
-        'The stash abc123 also holds "gone.ts", which this command cannot restore.',
-      ],
-    });
-    renderWithEntries([entry({ path: 'a.ts', worktree: 'modified' })]);
-    fireEvent.click(screen.getByRole('button', { name: 'Discard a.ts' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Discard 1 file' }));
-
-    const notice = await screen.findByRole('status');
-    expect(notice).toHaveTextContent('also holds "gone.ts"');
-    expect(notice).toHaveTextContent('git restore --source=abc123');
-  });
-
-  it('does not promise a command when there is none to run', async () => {
-    // Discarding a deletion creates a stash but yields no runnable restore.
-    // A heading over an empty block claims a route the code declined to offer.
-    discardMock.mockResolvedValue({
-      discarded: true,
-      stashLabel: 'krakenless: deletion',
-      undoCommands: [],
-      notes: ['The stash abc123 also holds "a.ts", which this command cannot restore.'],
-    });
-    renderWithEntries([entry({ path: 'a.ts', worktree: 'modified' })]);
-    fireEvent.click(screen.getByRole('button', { name: 'Discard a.ts' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Discard 1 file' }));
-
-    const notice = await screen.findByRole('status');
-    expect(notice).not.toHaveTextContent('Run this to bring them back');
-    expect(notice).toHaveTextContent('no single command that restores this one');
-  });
-
   it('keeps the earlier recovery notice when a second discard is confirmed', async () => {
     discardMock.mockResolvedValueOnce({
       discarded: true,
-      stashLabel: 'krakenless: first',
-      undoCommands: ['git restore --source=aaa111 --worktree -- "a.ts"'],
-      notes: [],
+      backups: [{ path: 'a.ts', blobOid: 'a'.repeat(40) }],
+      restoredFromIndex: [],
     });
     const store = renderWithEntries([
       entry({ path: 'a.ts', worktree: 'modified' }),
@@ -958,21 +911,20 @@ describe('discard notices over time', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Discard a.ts' }));
     fireEvent.click(screen.getByRole('button', { name: 'Discard 1 file' }));
-    await screen.findByText(/aaa111/);
+    await screen.findByText('a.ts', { selector: 'li' });
 
     discardMock.mockResolvedValueOnce({
       discarded: true,
-      stashLabel: 'krakenless: second',
-      undoCommands: ['git restore --source=bbb222 --worktree -- "b.ts"'],
-      notes: [],
+      backups: [{ path: 'b.ts', blobOid: 'b'.repeat(40) }],
+      restoredFromIndex: [],
     });
     setEntries(store, [entry({ path: 'b.ts', worktree: 'modified' })]);
     fireEvent.click(screen.getByRole('button', { name: 'Discard b.ts' }));
     fireEvent.click(screen.getByRole('button', { name: 'Discard 1 file' }));
 
-    await screen.findByText(/bbb222/);
-    // The first stash still exists; dropping its instructions would strand it.
-    expect(screen.getByText(/aaa111/)).toBeInTheDocument();
+    await screen.findByText('b.ts', { selector: 'li' });
+    // The first discard's notice is still there: two discards, two notices.
+    expect(screen.getAllByRole('status')).toHaveLength(2);
   });
 
   it('keeps the staged-side warning when the status stops being readable', () => {

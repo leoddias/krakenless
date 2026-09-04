@@ -57,8 +57,8 @@ import {
   groupEntries,
   pathsOf,
   pathsOfAll,
-  partialRecoveryMessage,
   recoveryMessage,
+  restoredMessage,
   STATE_LABELS,
   STATE_LETTERS,
 } from './labels';
@@ -66,15 +66,10 @@ import {
 interface Recovery {
   /** Local identity: two discards can share a label to the millisecond. */
   id: number;
-  /** Commands the git layer produced; shown verbatim so they can be copied. */
-  undoCommands: string[];
-  /**
-   * What those commands cannot bring back. Dropping these would show a command
-   * above a path list it does not cover, which reads as "this restores them
-   * all".
-   */
-  notes: string[];
-  paths: string[];
+  /** Files whose bytes were kept as backups, listed in "Recent discards". */
+  backedUp: string[];
+  /** Deleted files the discard brought back from git; nothing was lost. */
+  restored: string[];
 }
 
 /** Why the confirmation is being shown again instead of having run. */
@@ -230,18 +225,17 @@ export function ChangesView(): ReactNode {
       setRecoveries((previous) => [
         {
           id: nextRecoveryId.current,
-          undoCommands: result.undoCommands,
-          notes: result.notes ?? [],
-          paths: current.paths,
+          backedUp: result.backups.map((backup) => backup.path),
+          restored: result.restoredFromIndex,
         },
         ...previous,
       ]);
     } catch (error) {
-      // An interrupted `git stash push` can have written the entry and still
-      // reported failure. The error carries the recovery route in that case, so
-      // it is shown verbatim rather than replaced with a guess.
+      // The backups were recorded before anything was removed, so whatever
+      // was taken off disk is in "Recent discards" already; the message only
+      // has to say what git reported.
       setFailure(
-        `The discard did not finish. ${messageOf(error)} Check \`git stash list\` before retrying.`,
+        `The discard did not finish. ${messageOf(error)} Any file already removed has its backup in Recent discards.`,
       );
     }
   };
@@ -548,23 +542,14 @@ function RecoveryNotice({
   return (
     <div className={styles.recovery} role="status">
       <strong className={styles.noticeTitle}>Changes discarded — recoverable</strong>
-      <p className={styles.noticeText}>
-        {recovery.undoCommands.length === 0
-          ? partialRecoveryMessage()
-          : recoveryMessage()}
-      </p>
-      {recovery.undoCommands.map((command) => (
-        <pre key={command} className={styles.noticeCommand}>
-          <code>{command}</code>
-        </pre>
-      ))}
-      {recovery.notes.map((note) => (
-        <p key={note} className={styles.warning}>
-          {note}
-        </p>
-      ))}
+      {recovery.backedUp.length > 0 && (
+        <p className={styles.noticeText}>{recoveryMessage(recovery.backedUp.length)}</p>
+      )}
+      {recovery.restored.length > 0 && (
+        <p className={styles.noticeText}>{restoredMessage(recovery.restored.length)}</p>
+      )}
       <ul className={styles.pathList}>
-        {recovery.paths.map((path) => (
+        {[...recovery.backedUp, ...recovery.restored].map((path) => (
           <li key={path} className={styles.path}>
             {path}
           </li>
@@ -620,8 +605,8 @@ function DiscardConfirmation({
         </p>
       )}
       <p className={styles.noticeText}>
-        These working-tree changes will be removed from the files below. Krakenless
-        stashes them first and then shows you the exact command that brings them back.
+        These working-tree changes will be removed from the files below. Krakenless keeps
+        a backup of each file first; Undo in &quot;Recent discards&quot; puts it back.
       </p>
       {stagedToo.length > 0 && (
         <p className={styles.warning}>

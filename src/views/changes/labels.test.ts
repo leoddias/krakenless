@@ -184,12 +184,14 @@ describe('discard wording', () => {
     expect(discardQuestion(['a.ts', 'b.ts'])).toBe('Discard changes to 2 files?');
   });
 
-  it('says the staged version survived, since the discard keeps the index', () => {
-    // The exact command is produced by the git layer and rendered beside this
-    // text; the wording must not contradict what that command does.
-    const text = recoveryMessage();
-    expect(text).toContain('stashed');
-    expect(text).toContain('staged version');
-    expect(text).not.toContain('git stash pop');
+  it('says the staged version survived, and where the route back is', () => {
+    // `restore --worktree` puts the index version on disk, so a staged
+    // snapshot is exactly what is left; the wording must not contradict that.
+    const one = recoveryMessage(1);
+    expect(one).toContain('the file');
+    expect(one).toContain('Recent discards');
+    expect(one).toContain('staged version');
+    expect(one).not.toContain('stash');
+    expect(recoveryMessage(3)).toContain('each of the 3 files');
   });
 });

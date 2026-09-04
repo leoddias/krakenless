@@ -1194,3 +1194,47 @@ stash list can gain many entries from one click, all labelled as parts of one
 discard. Backlog: a "drop all parts" control for those. The untracked-file
 preview and the green success state on the remote toolbar shipped in the same
 session and are product changes, not decisions; PROGRESS has them.
+
+## ADR-0045 — A whole-file discard backs the bytes up as a blob and never stashes (supersedes the stash half of ADR-0044)
+
+**Date:** 2026-09-04 · **Status:** accepted
+
+**Decision:** discarding a file's working-tree changes no longer creates a
+stash. `discardPaths` writes every affected file's current bytes into the
+object store first (`hash-object -w --no-filters --stdin-paths`, one call for
+any number of files), hands the oids to the caller, and only then removes:
+`restore --worktree` for tracked files (which leaves a staged snapshot exactly
+as it was, and brings a deleted file back), `clean --force` for untracked ones,
+a chunk at a time. The records go into "Recent discards" — the panel the hunk
+discard has used since ADR-0032 — where Undo puts a file back and a discard of
+many files folds into one row with Undo all. The restore is done in Rust
+(`worktree_restore_blob`): `git cat-file blob` to bytes, written atomically,
+creating the file if `clean` removed it. `recovery.ts` and the printed
+`git restore --source=` command are gone.
+
+**Why:** "Cliquei em discard e criou um stash, isso não é necessário." Every
+discard left an entry in the stash list and a node on the graph, and the
+notice printed a shell command to paste. The safety bar asks for a recoverable
+form, not for a stash: the stash was the recoverable form that happened to be
+chosen first, and it had grown three costs since. It is visible where the user
+did not put it. It cannot take a long path list at all — ADR-0044 chunked it
+into twenty entries for one click. And its way back was a command in a notice,
+which on Windows PowerShell 5.1 would have corrupted a binary had anyone
+adapted it to one. A loose blob is invisible, holds any number of files in one
+command, and comes back through a button that writes bytes.
+
+**What the blob route does not have.** A stash entry survives the app closing;
+a blob survives too (`git gc` leaves unreferenced objects alone for two weeks),
+but its *name* lives only in the app's memory — the oid is printed on the row
+for that reason, and the row cap is five thousand so a build-directory discard
+keeps every record. `git fsck --lost-found` finds the rest.
+
+**Consequences:** the discard's git layer is `status` → `hash-object` →
+`restore`/`clean`, all of which take or chunk a long list, so "Discard all"
+over thousands of files is one backup and a few cleans. The confirmation and
+the notice say "backup" and "Recent discards" instead of "stash" and a
+command. `DiscardBackup.at` is now the discard's identity: every file of one
+click shares it, and the panel groups on it. The runner-level `stdin` and the
+`clean` chunking from ADR-0044 stay; the stash chunking and its labels are
+deleted along with `recovery.ts`. Backlog item "a chunked discard leaves many
+stash entries" is moot and removed.

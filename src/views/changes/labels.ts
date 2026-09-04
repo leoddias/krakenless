@@ -150,10 +150,13 @@ export function discardQuestion(paths: readonly string[]): string {
  * path, say, which the stash records as a deletion. Claiming a route back would
  * be the same lie as offering an empty command.
  */
-export function partialRecoveryMessage(): string {
-  return 'Krakenless stashed what it could before discarding. There is no single command that restores this one — the note below says where to look:';
+export function recoveryMessage(count: number): string {
+  return `Krakenless kept a backup of ${count === 1 ? 'the file' : `each of the ${String(count)} files`} before discarding. Use Undo in "Recent discards", at the top of the window, to bring one back — your staged version was left untouched.`;
 }
 
-export function recoveryMessage(): string {
-  return 'Krakenless stashed your unstaged changes before discarding them. Run this to bring them back — your staged version was left untouched:';
+/** For files that were deleted on disk: the discard put them back from git. */
+export function restoredMessage(count: number): string {
+  return count === 1
+    ? 'One deleted file was restored from git; there was nothing on disk to back up.'
+    : `${String(count)} deleted files were restored from git; there was nothing on disk to back up.`;
 }

@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PATHSPEC_ARGV_LIMIT, pathspecInput } from './argsafety';
-import {
-  buildDiscardCommand,
-  buildStageCommand,
-  buildUnstageCommand,
-} from './commands/stage';
+import { buildStageCommand, buildUnstageCommand } from './commands/stage';
 import { isDestructive } from './destructive';
 import { GitError } from './errors';
 
@@ -79,27 +75,5 @@ describe('the builders that take a path list', () => {
     expect(command.stdin).toBe(paths.join('\0'));
     expect(command.destructive).toBe(true);
     expect(isDestructive(command.args)).toBe(true);
-  });
-
-  it('discard carries the list on stdin, after the flags git wants first', () => {
-    const command = buildDiscardCommand(paths, 'label', { keepIndex: false });
-    expect(command.args).toEqual([
-      'stash',
-      'push',
-      '--include-untracked',
-      '--message',
-      'label',
-      '--pathspec-from-file=-',
-      '--pathspec-file-nul',
-    ]);
-    expect(command.stdin).toBe(paths.join('\0'));
-    expect(isDestructive(command.args)).toBe(true);
-  });
-
-  it('leaves a short list exactly as before', () => {
-    expect(buildStageCommand(['a.txt'])).toEqual({ args: ['add', '--', 'a.txt'] });
-    expect(
-      buildDiscardCommand(['a.txt'], 'l', { keepIndex: true }).stdin,
-    ).toBeUndefined();
   });
 });
