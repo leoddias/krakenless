@@ -15,7 +15,10 @@
 .head {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  /* No gap: the draggable edges between the labels are exactly the width of
+     the gap the rows use (see .columnEdge), so the header stays over its
+     columns without a second set of numbers to keep in step. */
+  gap: 0;
   /* The right padding also covers the scroll gutter the list below reserves,
      so every header sits over its own column instead of drifting by the width
      of a scrollbar. */
@@ -23,6 +26,29 @@
   height: 22px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
+}
+
+/*
+ * The edge between two column labels: the rows' 0.5rem gap, made draggable.
+ *
+ * Quiet until pointed at — six permanent bars across the header would draw the
+ * eye to the one thing on it that is not information. The last edge sits over
+ * the scroll gutter, where the rows have no gap; it keeps the same width so the
+ * date column ends where the label does.
+ */
+.columnEdge {
+  flex: none;
+  width: 0.5rem;
+  height: 100%;
+}
+
+.columnEdge > [role='separator'] {
+  background: transparent;
+}
+
+.columnEdge > [role='separator']:hover,
+.columnEdge > [role='separator']:focus-visible {
+  background: var(--accent);
 }
 
 .columnLabel {
@@ -43,7 +69,10 @@
   justify-content: flex-end;
   align-items: center;
   gap: 0.25rem;
-  width: 176px;
+  /* Every fixed column takes its width from the saved layout, set as a custom
+     property on the panel; the fallback is the width the stylesheet used to
+     hard-code, so a stylesheet-only render still lines up. */
+  width: var(--column-refs, 176px);
   overflow: hidden;
 }
 
@@ -51,8 +80,8 @@
   flex: none;
   display: flex;
   align-items: center;
-  /* Wide enough for the lanes the graph reserves; see MAX_RESERVED_LANES. */
-  width: 72px;
+  /* Defaults to the lanes the graph reserves; see MAX_RESERVED_LANES. */
+  width: var(--column-graph, 72px);
   overflow: hidden;
 }
 
@@ -71,7 +100,7 @@
 
 .columnAuthor {
   flex: none;
-  width: 13ch;
+  width: var(--column-author, 13ch);
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -85,7 +114,7 @@
      repository, so the column holds the widest it hands us rather than
      cutting a hash mid-way — a clipped oid cannot be matched against a
      terminal, which is the only reason it is on the row. */
-  width: 12ch;
+  width: var(--column-oid, 12ch);
   overflow: hidden;
   color: var(--faint);
   font-family: var(--font-mono);
@@ -95,7 +124,7 @@
 .columnDate {
   flex: none;
   /* Fits the longest relative form ("14 minutes ago") without wrapping. */
-  width: 14ch;
+  width: var(--column-date, 14ch);
   /* "14 minutes ago" must stay on one line: wrapping doubles the row height
      and breaks the virtualized list's fixed-height assumption. */
   white-space: nowrap;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  HISTORY_COLUMN_BOUNDS,
   HISTORY_LIMIT_BOUNDS,
   HISTORY_LIMIT_CHOICES,
   LAYOUT_BOUNDS,
@@ -254,7 +255,7 @@ describe('layout', () => {
     expect(
       parseConfig('{"layout":{"sidebarWidth":320,"detailWidth":420,"historyRatio":0.4}}')
         .layout,
-    ).toEqual({ sidebarWidth: 320, detailWidth: 420, historyRatio: 0.4 });
+    ).toMatchObject({ sidebarWidth: 320, detailWidth: 420, historyRatio: 0.4 });
   });
 
   it('pulls a size from outside the bounds back inside them', () => {
@@ -293,7 +294,12 @@ describe('layout', () => {
 
   it('survives a round trip through the file', () => {
     const config = defaultConfig();
-    config.layout = { sidebarWidth: 300, detailWidth: 400, historyRatio: 0.5 };
+    config.layout = {
+      ...config.layout,
+      sidebarWidth: 300,
+      detailWidth: 400,
+      historyRatio: 0.5,
+    };
     expect(parseConfig(serializeConfig(config)).layout).toEqual(config.layout);
   });
 });
@@ -301,7 +307,12 @@ describe('layout', () => {
 describe('clampLayout', () => {
   it('is the same rule the file is read with, so the screen cannot disagree', () => {
     expect(
-      clampLayout({ sidebarWidth: 1, detailWidth: 99999, historyRatio: -3 }),
+      clampLayout({
+        ...defaultConfig().layout,
+        sidebarWidth: 1,
+        detailWidth: 99999,
+        historyRatio: -3,
+      }),
     ).toEqual(
       parseConfig('{"layout":{"sidebarWidth":1,"detailWidth":99999,"historyRatio":-3}}')
         .layout,
@@ -343,5 +354,78 @@ describe('autoUpdateCheck', () => {
   it('survives a round trip through the file', () => {
     const config = { ...defaultConfig(), autoUpdateCheck: false };
     expect(parseConfig(serializeConfig(config)).autoUpdateCheck).toBe(false);
+  });
+});
+
+describe('layout — history columns and the diff file list', () => {
+  it('starts every draggable width at the size the stylesheet used to fix', () => {
+    const { historyColumns, diffFilesWidth } = defaultConfig().layout;
+    expect(historyColumns).toEqual({
+      refs: 176,
+      graph: 72,
+      author: 110,
+      oid: 100,
+      date: 118,
+    });
+    expect(diffFilesWidth).toBe(272);
+  });
+
+  it('reads column widths the user dragged', () => {
+    const layout = parseConfig(
+      '{"layout":{"diffFilesWidth":300,"historyColumns":{"refs":200,"graph":90,"author":80,"oid":70,"date":130}}}',
+    ).layout;
+    expect(layout.diffFilesWidth).toBe(300);
+    expect(layout.historyColumns).toEqual({
+      refs: 200,
+      graph: 90,
+      author: 80,
+      oid: 70,
+      date: 130,
+    });
+  });
+
+  it('pulls a column back inside its bounds, one column at a time', () => {
+    // A column dragged to nothing is a column the user cannot grab again; a
+    // column wider than the window hides the commit message behind it.
+    const layout = parseConfig(
+      '{"layout":{"historyColumns":{"refs":0,"graph":9000,"author":"wide"}}}',
+    ).layout;
+    expect(layout.historyColumns.refs).toBe(HISTORY_COLUMN_BOUNDS.refs.min);
+    expect(layout.historyColumns.graph).toBe(HISTORY_COLUMN_BOUNDS.graph.max);
+    expect(layout.historyColumns.author).toBe(
+      defaultConfig().layout.historyColumns.author,
+    );
+    // The neighbours the file did not mention keep their defaults.
+    expect(layout.historyColumns.oid).toBe(defaultConfig().layout.historyColumns.oid);
+  });
+
+  it('keeps the defaults when the columns are not an object at all', () => {
+    const defaults = defaultConfig().layout.historyColumns;
+    expect(parseConfig('{"layout":{"historyColumns":[]}}').layout.historyColumns).toEqual(
+      defaults,
+    );
+    expect(parseConfig('{"layout":{"historyColumns":7}}').layout.historyColumns).toEqual(
+      defaults,
+    );
+  });
+
+  it('clamps a dragged layout the same way it clamps the file', () => {
+    const dragged = clampLayout({
+      ...defaultConfig().layout,
+      diffFilesWidth: 5,
+      historyColumns: { ...defaultConfig().layout.historyColumns, date: 5000 },
+    });
+    expect(dragged.diffFilesWidth).toBe(LAYOUT_BOUNDS.diffFilesWidth.min);
+    expect(dragged.historyColumns.date).toBe(HISTORY_COLUMN_BOUNDS.date.max);
+  });
+});
+
+describe('diffFileList', () => {
+  it('is a flat list unless the file says tree', () => {
+    expect(defaultConfig().diffFileList).toBe('flat');
+    expect(parseConfig('{"diffFileList":"tree"}').diffFileList).toBe('tree');
+    expect(parseConfig('{"diffFileList":"flat"}').diffFileList).toBe('flat');
+    expect(parseConfig('{"diffFileList":"grid"}').diffFileList).toBe('flat');
+    expect(parseConfig('{"diffFileList":true}').diffFileList).toBe('flat');
   });
 });

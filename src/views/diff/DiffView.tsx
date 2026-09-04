@@ -14,12 +14,23 @@
  * whichever file it points at, and nothing else exists in the DOM.
  */
 
-import { memo, useCallback, useMemo, useState, type ReactNode } from 'react';
+import {
+  memo,
+  useCallback,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
+import { LAYOUT_BOUNDS, type FileListMode } from '../../config/schema';
 import type { DiffLine, FileDiff } from '../../git/types';
 import { discardHunk, stageHunks } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
 import { isBusy } from '../../state/store';
+import { Splitter } from '../shell/Splitter';
+import { edgeHandlers, rememberConfig, useLayout } from '../shell/useLayout';
 import { FileEditor } from './FileEditor';
+import { buildFileTree, type TreeNode } from './fileTree';
 import {
   discardHunkQuestion,
   hunkActionBlocker,
@@ -116,6 +127,12 @@ export function DiffView(): ReactNode {
    */
   const activePath = selectedPath ?? plans[0]?.file.newPath ?? null;
 
+  const config = useAppState((state) => state.config);
+  const layout = useLayout();
+  const setMode = (mode: FileListMode): void => {
+    if (mode !== config.diffFileList) rememberConfig({ ...config, diffFileList: mode });
+  };
+
   return (
     <section className={styles.panel} aria-label="Diff">
       {diff.state === 'idle' && (
@@ -135,8 +152,33 @@ export function DiffView(): ReactNode {
       )}
 
       {diff.state === 'ready' && diff.value.length > 0 && (
-        <div className={styles.body}>
-          <FileList plans={plans} activePath={activePath} onSelect={selectPath} />
+        <div
+          className={styles.body}
+          style={
+            {
+              '--files-width': `${String(layout.layout.diffFilesWidth)}px`,
+            } as CSSProperties
+          }
+        >
+          <FileList
+            plans={plans}
+            activePath={activePath}
+            mode={config.diffFileList}
+            onMode={setMode}
+            onSelect={selectPath}
+          />
+          <Splitter
+            orientation="vertical"
+            label="Resize the file list"
+            value={layout.layout.diffFilesWidth}
+            min={LAYOUT_BOUNDS.diffFilesWidth.min}
+            max={LAYOUT_BOUNDS.diffFilesWidth.max}
+            {...edgeHandlers(
+              layout,
+              (current) => current.diffFilesWidth,
+              (current, value) => ({ ...current, diffFilesWidth: value }),
+            )}
+          />
           <FileDiffs
             plans={plans}
             activePath={activePath}
@@ -195,51 +237,198 @@ function Notice({
 const FileList = memo(function FileList({
   plans,
   activePath,
+  mode,
+  onMode,
   onSelect,
 }: {
   plans: FilePlan[];
   /** The file the body is showing — which is what the list marks as current. */
   activePath: string | null;
+  mode: FileListMode;
+  onMode: (mode: FileListMode) => void;
   onSelect: (path: string | null) => void;
 }): ReactNode {
+  const tree = useMemo(
+    () => (mode === 'tree' ? buildFileTree(plans) : []),
+    [mode, plans],
+  );
+  // Folded directories, by path. Local to the list: which folders are open is
+  // a property of *this* diff, and the next commit starts with all of them
+  // open, which is the state that shows the most.
+  const [folded, setFolded] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleFolded = (path: string): void => {
+    setFolded((current) => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
   return (
     <nav className={styles.files} aria-label="Changed files">
-      {/*
-        A count, not a control. "All files" used to be the first row here, and
-        choosing it mounted every file's diff at once — the thing that made
-        walking the history of a large commit unusable.
-      */}
-      <p className={styles.fileCount}>
-        {plans.length === 1 ? '1 changed file' : `${plans.length} changed files`}
-      </p>
-      <ul className={styles.fileList}>
-        {plans.map(({ file, key, added, deleted }) => (
-          <li key={key}>
-            <button
-              type="button"
-              className={styles.fileButton}
-              aria-current={activePath === file.newPath ? 'true' : undefined}
-              onClick={() => onSelect(file.newPath)}
-            >
-              <span className={styles.filePath}>{displayPath(file)}</span>
-              <span className={styles.fileKind}>{CHANGE_KIND_LABELS[file.kind]}</span>
-              {/*
-                The worktree and cached diffs are concatenated, so the same path
-                can be listed twice. Without this the two rows are identical and
-                the user cannot tell which one their buttons will act on.
-              */}
-              <span className={styles.fileSide}>{DIFF_SIDE_LABELS[file.side]}</span>
-              <span className={styles.counts}>
-                <span className={styles.added}>{`+${added}`}</span>
-                <span className={styles.deleted}>{`-${deleted}`}</span>
-              </span>
-            </button>
-          </li>
-        ))}
-      </ul>
+      <div className={styles.fileHead}>
+        {/*
+          A count, not a control. "All files" used to be the first row here, and
+          choosing it mounted every file's diff at once — the thing that made
+          walking the history of a large commit unusable.
+        */}
+        <p className={styles.fileCount}>
+          {plans.length === 1 ? '1 changed file' : `${plans.length} changed files`}
+        </p>
+        <div className={styles.modeToggle} role="group" aria-label="File list layout">
+          <button
+            type="button"
+            className={styles.modeButton}
+            aria-pressed={mode === 'flat'}
+            title="Show each file with its full path"
+            onClick={() => onMode('flat')}
+          >
+            List
+          </button>
+          <button
+            type="button"
+            className={styles.modeButton}
+            aria-pressed={mode === 'tree'}
+            title="Group files by directory"
+            onClick={() => onMode('tree')}
+          >
+            Tree
+          </button>
+        </div>
+      </div>
+      {mode === 'tree' ? (
+        <ul className={styles.treeList} role="tree">
+          {tree.map((node) => (
+            <TreeRow
+              key={node.kind === 'dir' ? `dir:${node.path}` : node.plan.key}
+              node={node}
+              activePath={activePath}
+              folded={folded}
+              onToggle={toggleFolded}
+              onSelect={onSelect}
+            />
+          ))}
+        </ul>
+      ) : (
+        <ul className={styles.fileList}>
+          {plans.map((plan) => (
+            <li key={plan.key}>
+              <FileRow
+                plan={plan}
+                label={displayPath(plan.file)}
+                activePath={activePath}
+                onSelect={onSelect}
+              />
+            </li>
+          ))}
+        </ul>
+      )}
     </nav>
   );
 });
+
+/**
+ * One file in the list, in either shape.
+ *
+ * The `title` carries the full path in both: a list narrow enough to clip the
+ * name is the ordinary case for a deep path, and the tooltip is what says the
+ * rest without the user having to drag the edge first.
+ */
+function FileRow({
+  plan,
+  label,
+  activePath,
+  onSelect,
+}: {
+  plan: FilePlan;
+  /** What the row shows: the full path in the list, the file name in the tree. */
+  label: string;
+  activePath: string | null;
+  onSelect: (path: string | null) => void;
+}): ReactNode {
+  const { file, added, deleted } = plan;
+  return (
+    <button
+      type="button"
+      className={styles.fileButton}
+      aria-current={activePath === file.newPath ? 'true' : undefined}
+      title={displayPath(file)}
+      onClick={() => onSelect(file.newPath)}
+    >
+      <span className={styles.filePath}>{label}</span>
+      <span className={styles.fileKind}>{CHANGE_KIND_LABELS[file.kind]}</span>
+      {/*
+        The worktree and cached diffs are concatenated, so the same path
+        can be listed twice. Without this the two rows are identical and
+        the user cannot tell which one their buttons will act on.
+      */}
+      <span className={styles.fileSide}>{DIFF_SIDE_LABELS[file.side]}</span>
+      <span className={styles.counts}>
+        <span className={styles.added}>{`+${added}`}</span>
+        <span className={styles.deleted}>{`-${deleted}`}</span>
+      </span>
+    </button>
+  );
+}
+
+function TreeRow({
+  node,
+  activePath,
+  folded,
+  onToggle,
+  onSelect,
+}: {
+  node: TreeNode;
+  activePath: string | null;
+  folded: ReadonlySet<string>;
+  onToggle: (path: string) => void;
+  onSelect: (path: string | null) => void;
+}): ReactNode {
+  if (node.kind === 'file') {
+    return (
+      <li role="treeitem" aria-selected={activePath === node.plan.file.newPath}>
+        <FileRow
+          plan={node.plan}
+          label={node.name}
+          activePath={activePath}
+          onSelect={onSelect}
+        />
+      </li>
+    );
+  }
+  const open = !folded.has(node.path);
+  return (
+    <li role="treeitem" aria-expanded={open} aria-selected={false}>
+      <button
+        type="button"
+        className={styles.treeDir}
+        aria-expanded={open}
+        title={node.path}
+        onClick={() => onToggle(node.path)}
+      >
+        <span className={styles.treeChevron} aria-hidden="true">
+          ▾
+        </span>
+        <span className={styles.treeDirName}>{node.name}</span>
+      </button>
+      {open && (
+        <ul className={styles.treeChildren} role="group">
+          {node.children.map((child) => (
+            <TreeRow
+              key={child.kind === 'dir' ? `dir:${child.path}` : child.plan.key}
+              node={child}
+              activePath={activePath}
+              folded={folded}
+              onToggle={onToggle}
+              onSelect={onSelect}
+            />
+          ))}
+        </ul>
+      )}
+    </li>
+  );
+}
 
 function FileDiffs({
   plans,

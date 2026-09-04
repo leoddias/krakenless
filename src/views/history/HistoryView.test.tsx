@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -13,6 +14,7 @@ import { mergeRefInto, selectCommit } from '../../state/actions';
 import { StoreProvider } from '../../state/hooks';
 import { createStore, type Store } from '../../state/store';
 import { subscribeOpenRequests } from '../../state/openRequests';
+import { registerStore, resetStoreRegistry } from '../../state/stores';
 import { HistoryView, ROW_HEIGHT } from './HistoryView';
 import { resetAvatarCache } from './avatarCache';
 import { sha256Hex } from './remoteAvatar';
@@ -704,5 +706,75 @@ describe('another checkout on the timeline', () => {
     // Asking git about `worktree:C:/repos/app-wiki` is asking about a sha that
     // does not exist, so the click moves nothing.
     expect(selectCommitMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('column widths', () => {
+  afterEach(() => {
+    resetStoreRegistry();
+  });
+
+  it('gives every fixed column a draggable edge', () => {
+    renderWithCommits([]);
+
+    const edges = screen
+      .getAllByRole('separator')
+      .map((edge) => edge.getAttribute('aria-label'));
+    expect(edges).toEqual([
+      'Resize the branch and tag column',
+      'Resize the graph column',
+      'Resize the commit message column',
+      'Resize the author column',
+      'Resize the commit column',
+      'Resize the when column',
+    ]);
+  });
+
+  it('starts from the saved widths and reports them to assistive technology', () => {
+    renderWithCommits([]);
+
+    expect(
+      screen.getByRole('separator', { name: 'Resize the branch and tag column' }),
+    ).toHaveAttribute(
+      'aria-valuenow',
+      String(defaultConfig().layout.historyColumns.refs),
+    );
+  });
+
+  it('widens a column from the keyboard and remembers it', () => {
+    const store = renderHistory((s) => {
+      registerStore(s);
+      s.dispatch({ type: 'commits/loaded', commits: [] });
+    });
+    const edge = screen.getByRole('separator', {
+      name: 'Resize the branch and tag column',
+    });
+
+    act(() => {
+      fireEvent.keyDown(edge, { key: 'ArrowRight' });
+    });
+
+    const panel = screen.getByRole('region', { name: 'History' });
+    expect(panel.style.getPropertyValue('--column-refs')).toBe('192px');
+    expect(store.getState().config.layout.historyColumns.refs).toBe(192);
+  });
+
+  it('narrows the author column when the message edge is dragged right', () => {
+    // The message takes what is left, so that edge cannot size it; moving the
+    // boundary is what the eye asked for, and the author column is what moves.
+    const store = renderHistory((s) => {
+      registerStore(s);
+      s.dispatch({ type: 'commits/loaded', commits: [] });
+    });
+    const before = store.getState().config.layout.historyColumns.author;
+
+    act(() => {
+      fireEvent.keyDown(
+        screen.getByRole('separator', { name: 'Resize the commit message column' }),
+        { key: 'ArrowRight' },
+      );
+    });
+
+    expect(store.getState().config.layout.historyColumns.author).toBe(before - 16);
   });
 });

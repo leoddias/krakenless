@@ -9,13 +9,8 @@ import {
 } from 'react';
 import './index.css';
 import './app.css';
-import {
-  clampLayout,
-  LAYOUT_BOUNDS,
-  type AppConfig,
-  type LayoutConfig,
-} from './config/schema';
-import { loadConfig, saveConfig } from './config/store';
+import { LAYOUT_BOUNDS, type AppConfig } from './config/schema';
+import { loadConfig } from './config/store';
 import { closeRepo, openRepo, refreshAllPanels } from './state/actions';
 import { useAppState, useStore } from './state/hooks';
 import { createStore, isBusy, type AppState, type Store } from './state/store';
@@ -34,6 +29,7 @@ import { resolveShortcut } from './views/shell/shortcuts';
 import { RemoteBar } from './views/remote';
 import { DiscardBackups, NoticeBar } from './views/shell';
 import { CheckoutPicker } from './views/shell/CheckoutPicker';
+import { useLayout } from './views/shell/useLayout';
 import {
   ChevronRightIcon,
   CloseIcon,
@@ -304,54 +300,6 @@ function repoName(root: string): string {
   // repository opened over a UNC path mixes the two.
   const parts = root.split('/').flatMap((part) => part.split('\\'));
   return parts.filter(Boolean).pop() ?? root;
-}
-
-/**
- * The panel sizes, and the machinery for dragging them.
- *
- * The size on screen comes from the config while nothing is being dragged, and
- * from a local draft while something is: writing every mouse-move to disk would
- * be hundreds of file writes per drag. The draft is discarded when the drag
- * ends and the result is saved once. A failed save costs the user a panel size,
- * never the session, so it is swallowed rather than surfaced.
- */
-function useLayout(): {
-  layout: LayoutConfig;
-  beginDrag: () => void;
-  setLayout: (next: LayoutConfig) => void;
-  endDrag: () => void;
-  startRef: React.RefObject<LayoutConfig>;
-} {
-  const config = useAppState((state) => state.config);
-  const [draft, setDraft] = useState<LayoutConfig | null>(null);
-  const layout = draft ?? config.layout;
-  // The layout as it was when the current drag started; every delta is applied
-  // to this, so a drag cannot compound its own output.
-  const startRef = useRef<LayoutConfig>(layout);
-
-  const beginDrag = useCallback(() => {
-    startRef.current = layout;
-  }, [layout]);
-
-  const setLayout = useCallback((next: LayoutConfig) => {
-    setDraft(clampLayout(next));
-  }, []);
-
-  const endDrag = useCallback(() => {
-    setDraft((current) => {
-      if (current === null) return null;
-      const updated = { ...config, layout: current };
-      // Every open tab, not just this one: the panel sizes are one setting.
-      publishConfig(updated);
-      void saveConfig(updated).catch(() => {
-        // The size is already on screen; failing to remember it is not worth
-        // an alert over the repository.
-      });
-      return null;
-    });
-  }, [config]);
-
-  return { layout, beginDrag, setLayout, endDrag, startRef };
 }
 
 /** True when the event came from somewhere the user is typing. */

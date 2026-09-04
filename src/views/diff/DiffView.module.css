@@ -13,9 +13,125 @@
 
 .body {
   display: grid;
-  grid-template-columns: minmax(11rem, 17rem) minmax(0, 1fr);
+  /* The list, its draggable edge, the diff. The list's width is set inline
+     from the saved layout; only the 5px edge is fixed here. */
+  grid-template-columns: var(--files-width, 17rem) 5px minmax(0, 1fr);
   min-height: 0;
   height: 100%;
+}
+
+/* --- the file list's header: the count, and the shape of the list ---------- */
+
+.fileHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0 0.35rem 0 0.6rem;
+  min-height: 24px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.modeToggle {
+  display: inline-flex;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.modeButton {
+  padding: 0 0.4rem;
+  min-height: 18px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.625rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.modeButton + .modeButton {
+  border-left: 1px solid var(--border);
+}
+
+.modeButton:hover {
+  background: var(--surface-hover);
+}
+
+.modeButton:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* The pressed half is filled, not just recoloured, so it reads at a glance. */
+.modeButton[aria-pressed='true'] {
+  background: var(--selected);
+  color: var(--fg-strong);
+}
+
+/* --- the tree ---------------------------------------------------------------- */
+
+.treeList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Each level steps in by one unit; the unit is a custom property so a deep
+   tree in a narrow column can be tightened in one place. */
+.treeChildren {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 var(--tree-indent, 0.9rem);
+}
+
+.treeDir {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  width: 100%;
+  min-height: 24px;
+  padding: 0 0.6rem;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.treeDir:hover {
+  background: var(--surface-hover);
+}
+
+.treeDir:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.treeChevron {
+  flex: none;
+  display: inline-block;
+  width: 0.8em;
+  color: var(--faint);
+  transition: transform 0.1s ease-in-out;
+}
+
+.treeDir[aria-expanded='false'] .treeChevron {
+  transform: rotate(-90deg);
+}
+
+.treeDirName {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* --- notices --------------------------------------------------------------- */

@@ -98,6 +98,12 @@ export interface AppConfig {
    */
   historyLimit: number;
   layout: LayoutConfig;
+  /**
+   * Flat paths or a directory tree in the changed-file list beside a diff.
+   * A view preference rather than a size, so it lives beside the theme instead
+   * of inside `layout`.
+   */
+  diffFileList: FileListMode;
 }
 
 /** What Settings offers for {@link AppConfig.historyLimit}. */
@@ -125,6 +131,20 @@ export const AUTO_FETCH_CHOICES = [0, 1, 5, 15, 30] as const;
  */
 export const AUTO_FETCH_BOUNDS = { min: 1, max: 1440 } as const;
 
+/**
+ * Widths of the history table's fixed columns, in pixels.
+ *
+ * The commit message has no entry: it is the column that takes whatever is
+ * left, so the table always fills its panel and never scrolls sideways.
+ */
+export interface HistoryColumns {
+  refs: number;
+  graph: number;
+  author: number;
+  oid: number;
+  date: number;
+}
+
 /** Sizes of the resizable panels, in the units the shell lays them out with. */
 export interface LayoutConfig {
   /** Width of the refs sidebar, in pixels. */
@@ -133,7 +153,13 @@ export interface LayoutConfig {
   detailWidth: number;
   /** Share of the centre column's height given to the graph, 0 to 1. */
   historyRatio: number;
+  /** Width of the changed-file list beside a diff, in pixels. */
+  diffFilesWidth: number;
+  historyColumns: HistoryColumns;
 }
+
+/** How the changed-file list beside a diff is arranged. */
+export type FileListMode = 'flat' | 'tree';
 
 /**
  * What each panel may be dragged to.
@@ -147,7 +173,24 @@ export const LAYOUT_BOUNDS = {
   sidebarWidth: { min: 180, max: 560 },
   detailWidth: { min: 240, max: 680 },
   historyRatio: { min: 0.15, max: 0.9 },
+  diffFilesWidth: { min: 120, max: 720 },
 } as const;
+
+/**
+ * What each history column may be dragged to. The floors are one or two
+ * glyphs — enough to see that a column exists and drag it back open — and the
+ * ceilings stop one column from pushing the commit message off the screen.
+ */
+export const HISTORY_COLUMN_BOUNDS: Record<
+  keyof HistoryColumns,
+  { min: number; max: number }
+> = {
+  refs: { min: 24, max: 640 },
+  graph: { min: 24, max: 480 },
+  author: { min: 24, max: 400 },
+  oid: { min: 24, max: 320 },
+  date: { min: 24, max: 320 },
+};
 
 export const MAX_RECENT_REPOS = 20;
 
@@ -164,7 +207,16 @@ export function defaultConfig(): AppConfig {
     autoUpdateCheck: true,
     autoFetchMinutes: 1,
     historyLimit: 200,
-    layout: { sidebarWidth: 264, detailWidth: 340, historyRatio: 0.62 },
+    layout: {
+      sidebarWidth: 264,
+      detailWidth: 340,
+      historyRatio: 0.62,
+      diffFilesWidth: 272,
+      // The widths the stylesheet used to hard-code, so an existing install
+      // looks exactly as it did before the columns became draggable.
+      historyColumns: { refs: 176, graph: 72, author: 110, oid: 100, date: 118 },
+    },
+    diffFileList: 'flat',
   };
 }
 
@@ -192,23 +244,51 @@ function asBounded(
  * disagree about what is allowed.
  */
 export function clampLayout(layout: LayoutConfig): LayoutConfig {
+  return readLayout(layout, layout.historyColumns);
+}
+
+/** The layout's keys with nothing promised about their values yet. */
+type LayoutFields = { [K in keyof LayoutConfig]?: unknown };
+
+/**
+ * One reader for both the file and the drag: every size goes through the same
+ * bounds whether it was typed into the config by hand or dragged on screen.
+ * A field that is missing or not a number falls back to its default, and a
+ * neighbour that is broken does not take the others down with it.
+ */
+function readLayout(fields: LayoutFields, columns: unknown): LayoutConfig {
   const defaults = defaultConfig().layout;
+  const columnFields = isObject(columns) ? columns : {};
+  const historyColumns = {} as HistoryColumns;
+  for (const key of Object.keys(HISTORY_COLUMN_BOUNDS) as (keyof HistoryColumns)[]) {
+    historyColumns[key] = asBounded(
+      columnFields[key],
+      defaults.historyColumns[key],
+      HISTORY_COLUMN_BOUNDS[key],
+    );
+  }
   return {
     sidebarWidth: asBounded(
-      layout.sidebarWidth,
+      fields['sidebarWidth'],
       defaults.sidebarWidth,
       LAYOUT_BOUNDS.sidebarWidth,
     ),
     detailWidth: asBounded(
-      layout.detailWidth,
+      fields['detailWidth'],
       defaults.detailWidth,
       LAYOUT_BOUNDS.detailWidth,
     ),
     historyRatio: asBounded(
-      layout.historyRatio,
+      fields['historyRatio'],
       defaults.historyRatio,
       LAYOUT_BOUNDS.historyRatio,
     ),
+    diffFilesWidth: asBounded(
+      fields['diffFilesWidth'],
+      defaults.diffFilesWidth,
+      LAYOUT_BOUNDS.diffFilesWidth,
+    ),
+    historyColumns,
   };
 }
 
@@ -242,25 +322,13 @@ export function asHistoryLimit(value: unknown): number {
 }
 
 function asLayout(value: unknown): LayoutConfig {
-  const defaults = defaultConfig().layout;
-  if (!isObject(value)) return defaults;
-  return clampLayout({
-    sidebarWidth: asBounded(
-      value['sidebarWidth'],
-      defaults.sidebarWidth,
-      LAYOUT_BOUNDS.sidebarWidth,
-    ),
-    detailWidth: asBounded(
-      value['detailWidth'],
-      defaults.detailWidth,
-      LAYOUT_BOUNDS.detailWidth,
-    ),
-    historyRatio: asBounded(
-      value['historyRatio'],
-      defaults.historyRatio,
-      LAYOUT_BOUNDS.historyRatio,
-    ),
-  });
+  if (!isObject(value)) return defaultConfig().layout;
+  return readLayout(value, value['historyColumns']);
+}
+
+/** `flat` unless the file says `tree`; anything else is the default. */
+function asFileListMode(value: unknown): FileListMode {
+  return value === 'tree' ? 'tree' : 'flat';
 }
 
 /**
@@ -352,6 +420,7 @@ export function parseConfig(text: string | null): AppConfig {
     autoFetchMinutes: asAutoFetchMinutes(raw['autoFetchMinutes']),
     historyLimit: asHistoryLimit(raw['historyLimit']),
     layout: asLayout(raw['layout']),
+    diffFileList: asFileListMode(raw['diffFileList']),
   };
 }
 

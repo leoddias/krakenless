@@ -4,6 +4,7 @@ import type { FileDiff, Hunk } from '../../git/types';
 import { discardHunk, stageHunks } from '../../state/actions';
 import { StoreProvider } from '../../state/hooks';
 import { createStore, type Store } from '../../state/store';
+import { registerStore, resetStoreRegistry } from '../../state/stores';
 import { DiffView } from './DiffView';
 
 // Only the two hunk actions are replaced: the editor tests below drive the
@@ -728,5 +729,109 @@ describe('DiffView — a truncated hunk withholds its actions', () => {
     expect(lineRows().length).toBe(1_500);
     expect(screen.getByRole('button', { name: /Stage Hunk/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Discard Hunk/ })).toBeInTheDocument();
+  });
+});
+
+describe('the file list: its width, and its shape', () => {
+  const files = [
+    fileDiff({
+      oldPath: 'src/views/a.ts',
+      newPath: 'src/views/a.ts',
+      hunks: [sampleHunk],
+    }),
+    fileDiff({
+      oldPath: 'src/views/b.ts',
+      newPath: 'src/views/b.ts',
+      hunks: [sampleHunk],
+    }),
+    fileDiff({ oldPath: 'README.md', newPath: 'README.md', hunks: [sampleHunk] }),
+  ];
+
+  afterEach(() => {
+    resetStoreRegistry();
+  });
+
+  it('has a draggable edge, so a deep path is never stuck behind an ellipsis', () => {
+    renderView((store) => store.dispatch({ type: 'diff/loaded', files }));
+
+    const edge = screen.getByRole('separator', { name: 'Resize the file list' });
+    expect(edge).toHaveAttribute('aria-valuenow', '272');
+  });
+
+  it('carries the full path on every row, for the tooltip a narrow list needs', () => {
+    renderView((store) => store.dispatch({ type: 'diff/loaded', files }));
+
+    // Scoped to the list: the hunk buttons in the body name the file too.
+    const list = screen.getByRole('navigation', { name: 'Changed files' });
+    expect(
+      within(list).getByRole('button', { name: /src\/views\/a\.ts/ }),
+    ).toHaveAttribute('title', 'src/views/a.ts');
+  });
+
+  it('lists full paths by default and offers the tree', () => {
+    renderView((store) => store.dispatch({ type: 'diff/loaded', files }));
+
+    expect(screen.getByRole('button', { name: 'List' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(screen.getByRole('button', { name: 'Tree' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+    expect(screen.queryByRole('tree')).toBeNull();
+  });
+
+  it('groups the files by directory in tree mode, and remembers the choice', () => {
+    const store = renderView((s) => {
+      registerStore(s);
+      s.dispatch({ type: 'diff/loaded', files });
+    });
+
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'Tree' }));
+    });
+
+    // One row for the collapsed `src/views`, the file names on their own.
+    const tree = screen.getByRole('tree');
+    expect(within(tree).getByRole('button', { name: 'src/views' })).toBeInTheDocument();
+    expect(within(tree).getByRole('button', { name: /^a\.ts/ })).toBeInTheDocument();
+    expect(within(tree).getByRole('button', { name: /^README\.md/ })).toBeInTheDocument();
+    expect(store.getState().config.diffFileList).toBe('tree');
+  });
+
+  it('still selects a file from the tree', () => {
+    const store = renderView((s) => {
+      s.dispatch({
+        type: 'config/loaded',
+        config: { ...s.getState().config, diffFileList: 'tree' },
+      });
+      s.dispatch({ type: 'diff/loaded', files });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^b\.ts/ }));
+
+    expect(store.getState().selection.path).toBe('src/views/b.ts');
+    expect(screen.getByRole('article', { name: 'src/views/b.ts' })).toBeInTheDocument();
+  });
+
+  it('folds a directory out of the way and opens it again', () => {
+    renderView((s) => {
+      s.dispatch({
+        type: 'config/loaded',
+        config: { ...s.getState().config, diffFileList: 'tree' },
+      });
+      s.dispatch({ type: 'diff/loaded', files });
+    });
+    const folder = screen.getByRole('button', { name: 'src/views' });
+
+    fireEvent.click(folder);
+    expect(folder).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('button', { name: /^a\.ts/ })).toBeNull();
+    // The rest of the tree is untouched.
+    expect(screen.getByRole('button', { name: /^README\.md/ })).toBeInTheDocument();
+
+    fireEvent.click(folder);
+    expect(screen.getByRole('button', { name: /^a\.ts/ })).toBeInTheDocument();
   });
 });

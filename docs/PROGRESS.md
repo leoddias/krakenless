@@ -35,7 +35,12 @@
   that case is read from the output and reported as a warning, because
   otherwise a "successful" rebase leaves conflict markers and a stash nobody
   mentioned.
-- **Test status:** `npm test` 2079 passing (96 files), `cargo test` 103 passing;
+- **Every column edge is draggable** (2026-09-04, ADR-0043): the history
+  table's fixed columns and the changed-file list beside a diff, saved in
+  `layout` like the panel sizes. The file list has a List / Tree switch
+  (`diffFileList`). `useLayout` now lives in `views/shell/useLayout.ts`. Not
+  yet used by hand in the running app.
+- **Test status:** `npm test` 2105 passing (97 files), `cargo test` 103 passing;
   oxlint, prettier and clippy clean. `cargo fmt` is *not* clean and never has
   been — see `docs/ROADMAP.md` § Backlog.
 - **Git no longer runs on the UI thread** (ADR-0028). Every git command used to
@@ -193,6 +198,22 @@
   until `buildPushCommand` emits a `<local>:<upstream>` refspec.
 
 ## Session log
+
+### 2026-09-04 — every edge drags, and the file list can be a tree
+
+A file list showing `docs/busi…` with no way to widen it, and a history header
+whose graph column is 72px whether the repository has one lane or six. Both
+widths were fixed in the stylesheet (ADR-0043 has the full reasoning).
+
+The history columns take their widths from custom properties on the panel, so
+a drag re-renders the header and moves every virtualised row without touching
+them. The header's edges *are* the rows' gap, made draggable and invisible
+until pointed at. Boundary rule: dragging the edge between two columns grows
+the one on its left; the commit message column is flexible, so its trailing
+edge narrows the author column instead. `useLayout` moved out of `App.tsx` and
+`edgeHandlers` builds an edge's three closures from a getter, a setter and a
+sign. The diff's file list gained the same edge plus a List / Tree switch;
+`fileTree.ts` collapses single-child directory chains and is tested on its own.
 
 ### 2026-09-03 (later) — a rebase no longer sends you to a terminal
 

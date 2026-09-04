@@ -27,6 +27,9 @@ import { isBusy, type Loadable } from '../../state/store';
 import { formatAbsoluteDate, formatRelativeDate } from './relativeTime';
 import { GraphCell } from './GraphCell';
 import { useAuthorPictures } from './avatarCache';
+import { HISTORY_COLUMN_BOUNDS, type HistoryColumns } from '../../config/schema';
+import { Splitter } from '../shell/Splitter';
+import { edgeHandlers, useLayout, type LayoutHandle } from '../shell/useLayout';
 import { avatarIdentity } from './remoteAvatar';
 import { buildGraph, type GraphRow } from './graph';
 import { CommitActions, DialogHost, type CommitMenuTarget } from './CommitActions';
@@ -67,21 +70,98 @@ const FALLBACK_VIEWPORT_HEIGHT = 480;
 /** The history panel. Reads `state.commits` and owns no state of its own. */
 export function HistoryView(): ReactNode {
   const commits = useAppState((state) => state.commits);
+  const layout = useLayout();
+  const columns = layout.layout.historyColumns;
   return (
-    <section className={styles.panel} aria-label="History">
+    <section
+      className={styles.panel}
+      aria-label="History"
+      // The saved widths reach every row through the stylesheet, so a drag
+      // re-renders the header and moves a thousand rows without touching them.
+      style={
+        {
+          '--column-refs': `${String(columns.refs)}px`,
+          '--column-graph': `${String(columns.graph)}px`,
+          '--column-author': `${String(columns.author)}px`,
+          '--column-oid': `${String(columns.oid)}px`,
+          '--column-date': `${String(columns.date)}px`,
+        } as React.CSSProperties
+      }
+    >
       <div className={styles.head}>
         <h2 className={styles.srOnly}>History</h2>
         <span className={`${styles.columnRefs} ${styles.columnLabel}`}>Branch / Tag</span>
+        <ColumnEdge
+          layout={layout}
+          column="refs"
+          label="Resize the branch and tag column"
+        />
         <span className={`${styles.columnGraph} ${styles.columnLabel}`}>Graph</span>
+        <ColumnEdge layout={layout} column="graph" label="Resize the graph column" />
         <span className={`${styles.columnSubject} ${styles.columnLabel}`}>
           Commit message
         </span>
+        {/*
+          The message takes whatever is left, so its trailing edge cannot size
+          it: dragging that edge right narrows the author column instead, which
+          is what the eye expects a boundary between two columns to do.
+        */}
+        <ColumnEdge
+          layout={layout}
+          column="author"
+          direction={-1}
+          label="Resize the commit message column"
+        />
         <span className={`${styles.columnAuthor} ${styles.columnLabel}`}>Author</span>
+        <ColumnEdge layout={layout} column="author" label="Resize the author column" />
         <span className={`${styles.columnOid} ${styles.columnLabel}`}>Commit</span>
+        <ColumnEdge layout={layout} column="oid" label="Resize the commit column" />
         <span className={`${styles.columnDate} ${styles.columnLabel}`}>When</span>
+        <ColumnEdge layout={layout} column="date" label="Resize the when column" />
       </div>
       <Body commits={commits} />
     </section>
+  );
+}
+
+/**
+ * The draggable boundary after a column label.
+ *
+ * `direction` is which way the named column grows when the pointer moves
+ * right: `1` when the edge is on its trailing side, `-1` when the edge is on
+ * its leading side and dragging right makes it narrower.
+ */
+function ColumnEdge({
+  layout,
+  column,
+  label,
+  direction = 1,
+}: {
+  layout: LayoutHandle;
+  column: keyof HistoryColumns;
+  label: string;
+  direction?: 1 | -1;
+}): ReactNode {
+  const bounds = HISTORY_COLUMN_BOUNDS[column];
+  return (
+    <span className={styles.columnEdge}>
+      <Splitter
+        orientation="vertical"
+        label={label}
+        value={layout.layout.historyColumns[column]}
+        min={bounds.min}
+        max={bounds.max}
+        {...edgeHandlers(
+          layout,
+          (current) => current.historyColumns[column],
+          (current, value) => ({
+            ...current,
+            historyColumns: { ...current.historyColumns, [column]: value },
+          }),
+          direction,
+        )}
+      />
+    </span>
   );
 }
 

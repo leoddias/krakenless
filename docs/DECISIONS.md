@@ -1107,3 +1107,48 @@ confirmation string is still the token the git layer records, so the autostash
 sentence is conditional: it has to be true of the command that runs. Cherry-pick
 and revert are untouched — git has no `--autostash` for them — and `git merge`
 does support one, which is a separate decision nobody has needed yet.
+
+## ADR-0043 — Every column and list edge is draggable, and the diff's file list can be a tree
+
+**Date:** 2026-09-04 · **Status:** accepted
+
+**Decision:** the history table's five fixed columns (branch/tag, graph,
+author, commit, when) and the changed-file list beside a diff get draggable
+edges, saved in `layout` next to the panel sizes (`historyColumns`,
+`diffFilesWidth`, with bounds in `HISTORY_COLUMN_BOUNDS` / `LAYOUT_BOUNDS`).
+The commit message column has no saved width: it takes whatever is left, so
+the table always fills its panel. The file list gets a List / Tree switch,
+saved as `diffFileList`; the tree collapses single-child directory chains into
+one row and folds on click. `useLayout` moves out of `App.tsx` into
+`views/shell/useLayout.ts` so every panel remembers sizes through one path,
+and `edgeHandlers` builds the three drag closures an edge needs from a getter,
+a setter and a sign — the sign was the part that got hand-copied wrong.
+
+**Why:** a screenshot of a file list showing `docs/busi…` beside a diff of
+`docs/business/marketing/guia-streamers.html`, with no way to widen it. The
+widths were fixed in the stylesheet on the assumption that a 17rem list and a
+13ch author column suit everyone; a monorepo path and a long name each prove
+otherwise in the first minute. The same request covered the history header:
+the graph column is 72px whether the repository has one lane or six.
+
+**How the widths reach the rows.** As custom properties on the panel
+(`--column-refs` and so on), read by the same `.columnX` classes the header
+and every row already share. A drag re-renders the header and moves a
+thousand virtualised rows without touching them. The header's edges are the
+rows' `0.5rem` gap made draggable, invisible until pointed at, so the header
+stays over its columns with no second set of numbers to keep in step.
+
+**The boundary rule.** Dragging the edge between two columns grows the column
+on its left — unless that column is the flexible message, in which case it
+narrows the column on its right. That is what a boundary between two columns
+does in every table people have used, and the alternative (an edge that does
+nothing) reads as broken.
+
+**Consequences:** the config schema grows five column widths, one list width
+and one enum, all clamped the same way the panel sizes are, so a hand-edited
+file cannot leave a column at zero (the floor is 24px — enough to grab back).
+An existing install looks exactly as before: the defaults are the widths the
+stylesheet used to hard-code. `ConflictResolver` keeps its own local share
+state for now; moving it onto `useLayout` is a small follow-up. A header
+column's edge is a `separator` with a `tabindex`, so the widths are reachable
+from the keyboard like the panel edges are (ADR-0020).
