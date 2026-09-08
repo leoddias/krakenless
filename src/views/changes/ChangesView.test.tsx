@@ -23,6 +23,7 @@ import { deleteWorktreeFile } from '../../fs/file';
 import { copyText } from '../shell/clipboard';
 import { StoreProvider } from '../../state/hooks';
 import { createStore, type Store } from '../../state/store';
+import { registerStore, resetStoreRegistry } from '../../state/stores';
 import { ChangesView } from './ChangesView';
 
 vi.mock('../../state/actions', () => ({
@@ -1375,5 +1376,183 @@ describe('the file context menu', () => {
     expect(menu).toHaveTextContent(/no unstaged changes/i);
     choose(menu, /^Discard changes$/);
     expect(screen.queryByRole('alertdialog', { name: 'Confirm discard' })).toBeNull();
+  });
+});
+
+describe('flat list or directory tree', () => {
+  /** Deep paths in two directories, plus one at the root. */
+  function nested(): StatusEntry[] {
+    return [
+      entry({ path: 'src/views/a.ts', worktree: 'modified' }),
+      entry({ path: 'src/views/b.ts', worktree: 'modified' }),
+      entry({ path: 'src/git/c.ts', worktree: 'modified' }),
+      entry({ path: 'README.md', worktree: 'modified' }),
+    ];
+  }
+
+  function inTree(entries: StatusEntry[] = nested()): Store {
+    return renderChanges((store) => {
+      openRepo(store);
+      store.dispatch({
+        type: 'config/loaded',
+        config: { ...store.getState().config, changesFileList: 'tree' },
+      });
+      store.dispatch({ type: 'status/loaded', status: statusOf(entries) });
+    });
+  }
+
+  afterEach(resetStoreRegistry);
+
+  it('lists full paths by default and offers the tree', () => {
+    renderWithEntries(nested());
+
+    const unstaged = section('Unstaged');
+    expect(within(unstaged).getByRole('button', { name: 'List' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(within(unstaged).getByText('src/views/a.ts')).toBeInTheDocument();
+    expect(within(unstaged).queryByRole('tree')).toBeNull();
+  });
+
+  it('groups the files by directory in tree mode, and remembers the choice', () => {
+    const store = renderChanges((s) => {
+      registerStore(s);
+      openRepo(s);
+      s.dispatch({ type: 'status/loaded', status: statusOf(nested()) });
+    });
+
+    act(() => {
+      fireEvent.click(within(section('Unstaged')).getByRole('button', { name: 'Tree' }));
+    });
+
+    // The row shows the segment; `src` holds two directories, so it is not
+    // collapsed into either of them.
+    const tree = within(section('Unstaged')).getByRole('tree');
+    expect(within(tree).getByRole('button', { name: 'src' })).toBeInTheDocument();
+    expect(within(tree).getByRole('button', { name: 'git' })).toBeInTheDocument();
+    expect(within(tree).getByRole('button', { name: /^a\.ts$/ })).toBeInTheDocument();
+    expect(store.getState().config.changesFileList).toBe('tree');
+  });
+
+  it('switches both lists at once, because they are two halves of one panel', () => {
+    renderChanges((s) => {
+      registerStore(s);
+      openRepo(s);
+      s.dispatch({
+        type: 'status/loaded',
+        status: statusOf([
+          entry({ path: 'src/a.ts', worktree: 'modified' }),
+          entry({ path: 'src/b.ts', index: 'modified' }),
+        ]),
+      });
+    });
+
+    act(() => {
+      fireEvent.click(within(section('Unstaged')).getByRole('button', { name: 'Tree' }));
+    });
+
+    expect(within(section('Staged')).getByRole('tree')).toBeInTheDocument();
+    expect(
+      within(section('Staged')).getByRole('button', { name: 'Tree' }),
+    ).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('keeps the row working: the diff and the row actions', () => {
+    const store = inTree();
+
+    fireEvent.click(within(section('Unstaged')).getByRole('button', { name: /^c\.ts$/ }));
+
+    expect(store.getState().selection.path).toBe('src/git/c.ts');
+    // The row's own buttons name the full path, not the leaf: "Discard c.ts"
+    // would be an ambiguous thing to have agreed to.
+    expect(
+      within(section('Unstaged')).getByRole('button', { name: 'Discard src/git/c.ts' }),
+    ).toBeInTheDocument();
+  });
+
+  it('folds a directory away without deselecting what is inside it', () => {
+    inTree();
+    const unstaged = section('Unstaged');
+    fireEvent.click(within(unstaged).getByRole('button', { name: /^a\.ts$/ }));
+    fireEvent.click(within(unstaged).getByRole('button', { name: /^b\.ts$/ }), {
+      shiftKey: true,
+    });
+    const folder = within(unstaged).getByRole('button', { name: 'views' });
+
+    act(() => {
+      fireEvent.click(folder);
+    });
+
+    expect(folder).toHaveAttribute('aria-expanded', 'false');
+    expect(within(unstaged).queryByRole('button', { name: /^a\.ts$/ })).toBeNull();
+
+    // Hidden, not dropped: opening the folder again brings the selection back
+    // rather than making the user rebuild it.
+    act(() => {
+      fireEvent.click(folder);
+    });
+    expect(
+      within(unstaged).getByRole('button', { name: 'Stage 2 selected' }),
+    ).toBeInTheDocument();
+  });
+
+  it('measures a shift-range down the rows as drawn, not down the flat list', async () => {
+    // The flat order is views/a, views/b, git/c, README — git's order. The tree
+    // draws git before views, so a range from `c.ts` to `b.ts` is those two and
+    // what the tree puts between them, and never README.
+    const store = inTree();
+    const unstaged = section('Unstaged');
+
+    fireEvent.click(within(unstaged).getByRole('button', { name: /^c\.ts$/ }));
+    fireEvent.click(within(unstaged).getByRole('button', { name: /^b\.ts$/ }), {
+      shiftKey: true,
+    });
+
+    await act(async () => {
+      fireEvent.click(within(unstaged).getByRole('button', { name: 'Stage 3 selected' }));
+    });
+
+    expect(stageMock).toHaveBeenCalledWith(store, [
+      'src/git/c.ts',
+      'src/views/a.ts',
+      'src/views/b.ts',
+    ]);
+  });
+
+  it('never acts on a row a folded directory is hiding', async () => {
+    // A range built while a folder was open, then folded shut, must not stage
+    // the files the user can no longer see. The rows are drawn git, views,
+    // README, so this range starts as all four.
+    const store = inTree();
+    const unstaged = section('Unstaged');
+    fireEvent.click(within(unstaged).getByRole('button', { name: /^c\.ts$/ }));
+    fireEvent.click(within(unstaged).getByRole('button', { name: /^README\.md$/ }), {
+      shiftKey: true,
+    });
+
+    act(() => {
+      fireEvent.click(within(unstaged).getByRole('button', { name: 'views' }));
+    });
+    await act(async () => {
+      fireEvent.click(within(unstaged).getByRole('button', { name: 'Stage 2 selected' }));
+    });
+
+    expect(stageMock).toHaveBeenCalledWith(store, ['src/git/c.ts', 'README.md']);
+  });
+
+  it('names both halves of a rename, and acts on both paths', async () => {
+    const store = inTree([
+      entry({ path: 'src/new.ts', origPath: 'src/old.ts', index: 'renamed' }),
+    ]);
+    const staged = section('Staged');
+
+    expect(within(staged).getByText('old.ts → new.ts')).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(within(staged).getByRole('button', { name: 'Unstage all' }));
+    });
+
+    expect(unstageMock).toHaveBeenCalledWith(store, ['src/old.ts', 'src/new.ts']);
   });
 });

@@ -30,9 +30,9 @@ import { discardHunk, stageHunks } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
 import { isBusy } from '../../state/store';
 import { Splitter } from '../shell/Splitter';
+import { buildPathTree, type PathNode } from '../shell/pathTree';
 import { edgeHandlers, rememberConfig, useLayout } from '../shell/useLayout';
 import { FileEditor } from './FileEditor';
-import { buildFileTree, type TreeNode } from './fileTree';
 import {
   discardHunkQuestion,
   hunkActionBlocker,
@@ -270,7 +270,7 @@ const FileList = memo(function FileList({
   onSelect: (path: string | null) => void;
 }): ReactNode {
   const tree = useMemo(
-    () => (mode === 'tree' ? buildFileTree(plans) : []),
+    () => (mode === 'tree' ? buildPathTree(plans, (plan) => plan.file.newPath) : []),
     [mode, plans],
   );
   // Folded directories, by path. Local to the list: which folders are open is
@@ -322,7 +322,7 @@ const FileList = memo(function FileList({
         <ul className={styles.treeList} role="tree">
           {tree.map((node) => (
             <TreeRow
-              key={node.kind === 'dir' ? `dir:${node.path}` : node.plan.key}
+              key={node.kind === 'dir' ? `dir:${node.path}` : node.item.key}
               node={node}
               activePath={activePath}
               folded={folded}
@@ -400,7 +400,7 @@ function TreeRow({
   onToggle,
   onSelect,
 }: {
-  node: TreeNode;
+  node: PathNode<FilePlan>;
   activePath: string | null;
   folded: ReadonlySet<string>;
   onToggle: (path: string) => void;
@@ -408,9 +408,9 @@ function TreeRow({
 }): ReactNode {
   if (node.kind === 'file') {
     return (
-      <li role="treeitem" aria-selected={activePath === node.plan.file.newPath}>
+      <li role="treeitem" aria-selected={activePath === node.path}>
         <FileRow
-          plan={node.plan}
+          plan={node.item}
           label={node.name}
           activePath={activePath}
           onSelect={onSelect}
@@ -437,7 +437,7 @@ function TreeRow({
         <ul className={styles.treeChildren} role="group">
           {node.children.map((child) => (
             <TreeRow
-              key={child.kind === 'dir' ? `dir:${child.path}` : child.plan.key}
+              key={child.kind === 'dir' ? `dir:${child.path}` : child.item.key}
               node={child}
               activePath={activePath}
               folded={folded}

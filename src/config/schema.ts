@@ -104,6 +104,13 @@ export interface AppConfig {
    * of inside `layout`.
    */
   diffFileList: FileListMode;
+  /**
+   * Flat paths or a directory tree in the working-tree lists.
+   *
+   * One setting for both Unstaged and Staged: they are two halves of one panel,
+   * and a user who asks for a tree is asking it of the panel, not of one list.
+   */
+  changesFileList: FileListMode;
 }
 
 /** What Settings offers for {@link AppConfig.historyLimit}. */
@@ -158,7 +165,7 @@ export interface LayoutConfig {
   historyColumns: HistoryColumns;
 }
 
-/** How the changed-file list beside a diff is arranged. */
+/** How a list of changed files is arranged. */
 export type FileListMode = 'flat' | 'tree';
 
 /**
@@ -217,6 +224,7 @@ export function defaultConfig(): AppConfig {
       historyColumns: { refs: 176, graph: 72, author: 110, oid: 100, date: 118 },
     },
     diffFileList: 'flat',
+    changesFileList: 'flat',
   };
 }
 
@@ -421,6 +429,7 @@ export function parseConfig(text: string | null): AppConfig {
     historyLimit: asHistoryLimit(raw['historyLimit']),
     layout: asLayout(raw['layout']),
     diffFileList: asFileListMode(raw['diffFileList']),
+    changesFileList: asFileListMode(raw['changesFileList']),
   };
 }
 

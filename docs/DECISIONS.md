@@ -1238,3 +1238,51 @@ click shares it, and the panel groups on it. The runner-level `stdin` and the
 `clean` chunking from ADR-0044 stay; the stash chunking and its labels are
 deleted along with `recovery.ts`. Backlog item "a chunked discard leaves many
 stash entries" is moot and removed.
+
+## ADR-0046 — The working-tree lists get the same List / Tree switch, over one shared tree builder (extends ADR-0043)
+
+**Date:** 2026-09-08 · **Status:** accepted
+
+**Decision:** Unstaged and Staged carry the List / Tree switch the diff's file
+list has, saved as `changesFileList` — **one** setting for both lists, not one
+each. The tree builder moves out of `views/diff/fileTree.ts` into
+`views/shell/pathTree.ts`, generic over what a row carries (`PathNode<T>`,
+`buildPathTree(items, pathOf)`), and both panels use it. The diff panel's rows
+are unchanged; its file node's payload is now `item` rather than `plan`.
+
+**Why:** the same complaint the diff list produced — a truncated
+`services/website/project.inlang/cache/plugins/…` in a narrow panel — applies
+to the panel where files are actually staged, and that panel is the one a user
+looks at all day. Two builders for the same shape would have been the greater
+cost: the collapsing rule and the sort order are the part that goes subtly
+wrong, and one implementation means one place to be wrong in.
+
+**One setting for two lists.** Unstaged and Staged are two halves of one panel,
+and the same file crosses between them on every stage — a panel that redrew
+one half as a tree and left the other flat would say the two lists are
+different kinds of thing. Both headers carry the switch because that is where
+a user reaches for it; either one flips both.
+
+**Ranges follow the rows as drawn.** A shift-click selects the rows between two
+points *on screen*, so in tree mode the order comes from the tree, skipping
+what a folded directory hides (`visiblePaths`). Measuring in the flat order
+instead would build a selection out of files the user can see nothing of, and
+the next "Stage n selected" would act on them. Folding hides rows, it does not
+deselect them: the selection is pruned against every row in the section, so
+opening a folder gives back the selection that was there.
+
+**Rows versus paths.** The selection now holds one path per row — the entry's
+own — and expands to the paths an action names only at the point of acting
+(`pathsOf`, which for a rename is the old name and the new one). The old code
+measured ranges over the expanded list, where a rename's old name is a path no
+row can be clicked on; a range across one silently carried it. A selection of a
+rename now stages both halves, which is what the row's own button already did.
+
+**Consequences:** `changesFileList` joins `diffFileList` in the config, read the
+same way and defaulting to `flat`, so an existing install looks exactly as it
+did. `displayName` in `labels.ts` gives the tree its labels — a rename reads
+`old.ts → new.ts` by name, with the full paths in the row's tooltip and in the
+label of every action button, because "Discard c.ts" is an ambiguous thing to
+have agreed to. `fileTree.ts` and its tests are gone, replaced by
+`pathTree.ts` and `pathTree.test.ts`. The conflicted list stays flat: its rows
+open a resolver rather than being staged, and it is short by nature.

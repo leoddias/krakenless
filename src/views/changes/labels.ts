@@ -57,6 +57,25 @@ function sourcePath(entry: StatusEntry): string | null {
 }
 
 /**
+ * What a row shows once its directory has been shown — the tree's label.
+ *
+ * A rename keeps both halves (`old.ts → new.ts`), by name only: the tree
+ * already says where the file is now, and the whole point of the tree is that
+ * the directory is not repeated on every row. The full paths stay in the row's
+ * tooltip, because a rename across directories is exactly the case where the
+ * name alone does not tell the story.
+ */
+export function displayName(entry: StatusEntry): string {
+  const source = sourcePath(entry);
+  const name = baseName(entry.path);
+  return source === null ? name : `${baseName(source)} → ${name}`;
+}
+
+function baseName(path: string): string {
+  return path.slice(path.lastIndexOf('/') + 1);
+}
+
+/**
  * Every path an action on this entry has to name.
  *
  * A rename is two paths in git's eyes: the removal of the old one and the

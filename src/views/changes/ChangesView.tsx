@@ -15,8 +15,16 @@
  * mid-message must not lose it.
  */
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+} from 'react';
 import { revealPath } from '../../config/launch';
+import type { FileListMode } from '../../config/schema';
 import { deleteWorktreeFile } from '../../fs/file';
 import { readHeadMessage } from '../../git/log';
 import type { RepoStatus, StatusEntry } from '../../git/types';
@@ -33,6 +41,8 @@ import { useAppState, useStore } from '../../state/hooks';
 import { isBusy } from '../../state/store';
 import type { Loadable } from '../../state/store';
 import { ContextMenu, type MenuSection } from '../shell/ContextMenu';
+import { buildPathTree, visiblePaths, type PathNode } from '../shell/pathTree';
+import { rememberConfig } from '../shell/useLayout';
 import { copyText } from '../shell/clipboard';
 import { OperationPanel } from './OperationPanel';
 import {
@@ -53,6 +63,7 @@ import styles from './ChangesView.module.css';
 import {
   conflictDescription,
   discardQuestion,
+  displayName,
   displayPath,
   groupEntries,
   pathsOf,
@@ -448,6 +459,16 @@ function ChangeLists({
   onShowDiff: (path: string) => void;
 }): ReactNode {
   const { staged, unstaged, conflicted } = groups;
+  const config = useAppState((state) => state.config);
+  /*
+    One setting for both lists. Unstaged and Staged are two halves of one panel
+    — the same file crosses between them on every stage — and a user who asks
+    for a tree is asking it of the panel, not of one of its halves.
+  */
+  const mode = config.changesFileList;
+  const setMode = (next: FileListMode): void => {
+    if (next !== mode) rememberConfig({ ...config, changesFileList: next });
+  };
   const operation = useAppState((state) => state.operation);
   const nothingToShow =
     staged.length === 0 && unstaged.length === 0 && conflicted.length === 0;
@@ -476,6 +497,8 @@ function ChangeLists({
         bulkLabel="Stage all"
         selectionLabel="Stage"
         busy={busy}
+        mode={mode}
+        onMode={setMode}
         onBulk={onStage}
         secondaryBulk={{
           label: 'Discard all',
@@ -499,6 +522,8 @@ function ChangeLists({
         bulkLabel="Unstage all"
         selectionLabel="Unstage"
         busy={busy}
+        mode={mode}
+        onMode={setMode}
         onBulk={onUnstage}
         rowActions={(entry) => [
           { label: 'Unstage', run: () => onUnstage(pathsOf(entry)) },
@@ -802,6 +827,8 @@ function FileSection({
   selectionLabel,
   secondaryBulk,
   busy,
+  mode,
+  onMode,
   onBulk,
   rowActions,
   onOpenMenu,
@@ -817,6 +844,8 @@ function FileSection({
   selectionLabel: string;
   secondaryBulk?: { label: string; danger?: boolean; run: (paths: string[]) => void };
   busy: boolean;
+  mode: FileListMode;
+  onMode: (mode: FileListMode) => void;
   onBulk: (paths: string[]) => void;
   rowActions: (entry: StatusEntry) => RowAction[];
   onOpenMenu: (target: FileMenuTarget) => void;
@@ -828,20 +857,102 @@ function FileSection({
   const label = `${title} (${entries.length})`;
 
   const [selection, setSelection] = useState<Selection>(EMPTY_SELECTION);
+  // Folded directories, by path. Local to the section and to this repository
+  // state: a file that is staged leaves the list, and the next status is drawn
+  // with every folder open, which is the state that shows the most.
+  const [folded, setFolded] = useState<ReadonlySet<string>>(() => new Set());
+  const tree = useMemo(
+    () => (mode === 'tree' ? buildPathTree(entries, (entry) => entry.path) : []),
+    [mode, entries],
+  );
+
+  /*
+    Two different path lists, and confusing them is how a bulk action touches a
+    file nobody chose.
+
+    `rowPaths` are the *rows*: one path per entry, which is what a click selects
+    and what the selection holds. `paths` is what an action has to name, which
+    for a rename is two paths — the old name and the new one — and the old name
+    is not a row anybody can click. Ranges are measured over rows, in the order
+    the rows are drawn (the tree's order when there is a tree, skipping what is
+    folded away), and expanded to action paths only at the point of acting.
+  */
+  const rowPaths = entries.map((entry) => entry.path);
+  const order = mode === 'tree' ? visiblePaths(tree, folded) : rowPaths;
   // Pruned on the way out rather than in an effect: the list changes under the
   // selection constantly — staging moves a file to the other section — and a
   // selection holding rows nobody can see must never reach a bulk action.
   // `pruneSelection` returns the same object when nothing changed, so this is
-  // free on the ordinary render.
-  const live = pruneSelection(paths, selection);
-  const chosen = selectedInOrder(paths, live);
-  const multiple = chosen.length > 1;
+  // free on the ordinary render. Pruned against every row, not the visible
+  // ones: folding a directory hides rows, it does not deselect them.
+  const live = pruneSelection(rowPaths, selection);
+  const chosenRows = selectedInOrder(order, live);
+  const multiple = chosenRows.length > 1;
+  const byPath = new Map(entries.map((entry) => [entry.path, entry]));
+  const chosen = chosenRows.flatMap((path) => {
+    const entry = byPath.get(path);
+    return entry === undefined ? [] : pathsOf(entry);
+  });
+
+  const toggleFolded = (path: string): void => {
+    setFolded((current) => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
+  /**
+   * What a click on a row does, whichever shape the list is in.
+   *
+   * The diff follows the row that was clicked, whatever the modifiers did to
+   * the selection: it is the one the user just pointed at.
+   */
+  const pickRow = (entry: StatusEntry, event: MouseEvent): void => {
+    setSelection(
+      nextSelection(order, live, {
+        path: entry.path,
+        shift: event.shiftKey,
+        toggle: event.ctrlKey || event.metaKey,
+      }),
+    );
+    onShowDiff(entry.path);
+  };
+
+  /*
+    Right-click acts on the selection when the clicked row is part of it, and on
+    that row alone otherwise — the rule every file list uses. Acting on the
+    selection regardless would let a right-click on an unselected file delete
+    files elsewhere in the list; replacing the selection would throw away work
+    the user spent ten shift-clicks building.
+  */
+  const openMenu = (entry: StatusEntry, event: MouseEvent): void => {
+    event.preventDefault();
+    const target =
+      live.paths.has(entry.path) && live.paths.size > 1
+        ? entries.filter((candidate) => live.paths.has(candidate.path))
+        : [entry];
+    onOpenMenu({ entries: target, x: event.clientX, y: event.clientY });
+  };
+
+  const rowProps = (entry: StatusEntry): ChangeRowProps => ({
+    entry,
+    side,
+    busy,
+    selected: live.paths.has(entry.path) || entry.path === selectedPath,
+    current: entry.path === selectedPath,
+    actions: rowActions(entry),
+    onPick: (event) => pickRow(entry, event),
+    onMenu: (event) => openMenu(entry, event),
+  });
 
   return (
     <section className={styles.section} aria-label={title}>
       <header className={styles.sectionHeader}>
         <h2 className={styles.sectionTitle}>{label}</h2>
         <div className={styles.sectionActions}>
+          <ListModeToggle title={title} mode={mode} onMode={onMode} />
           <button
             type="button"
             className={styles.button}
@@ -863,7 +974,7 @@ function FileSection({
                 setSelection(EMPTY_SELECTION);
               }}
             >
-              {`${selectionLabel} ${String(chosen.length)} selected`}
+              {`${selectionLabel} ${String(chosenRows.length)} selected`}
             </button>
           )}
           {secondaryBulk !== undefined && (
@@ -881,82 +992,184 @@ function FileSection({
 
       {entries.length === 0 ? (
         <p className={styles.empty}>{emptyText}</p>
+      ) : mode === 'tree' ? (
+        <ul className={styles.list} role="tree" aria-label={`${title} files`}>
+          {tree.map((node) => (
+            <ChangeTreeRow
+              key={node.kind === 'dir' ? `dir:${node.path}` : node.path}
+              node={node}
+              folded={folded}
+              onToggle={toggleFolded}
+              rowProps={rowProps}
+            />
+          ))}
+        </ul>
       ) : (
         <ul className={styles.list}>
           {entries.map((entry) => (
-            <li
-              key={entry.path}
-              className={
-                live.paths.has(entry.path) || entry.path === selectedPath
-                  ? `${styles.row} ${styles.rowSelected}`
-                  : styles.row
-              }
-              /*
-                Right-click acts on the selection when the clicked row is part
-                of it, and on that row alone otherwise — the rule every file
-                list uses. Acting on the selection regardless would let a
-                right-click on an unselected file delete files elsewhere in the
-                list; replacing the selection would throw away work the user
-                spent ten shift-clicks building.
-              */
-              onContextMenu={(event) => {
-                event.preventDefault();
-                const target =
-                  live.paths.has(entry.path) && live.paths.size > 1
-                    ? entries.filter((candidate) => live.paths.has(candidate.path))
-                    : [entry];
-                onOpenMenu({ entries: target, x: event.clientX, y: event.clientY });
-              }}
-            >
-              <span className={styles.state} title={STATE_LABELS[entry[side]]}>
-                {STATE_LETTERS[entry[side]]}
-              </span>
-              {/* The path is the way into the diff, not decoration: clicking a
-                  file here is how a user asks "what changed in this one?", and
-                  before this it was a label you could not press. */}
-              <button
-                type="button"
-                className={styles.path}
-                aria-current={entry.path === selectedPath ? 'true' : undefined}
-                title={`Show the diff for ${entry.path}. Shift-click to select a range; Ctrl or Cmd click to add one.`}
-                onClick={(event) => {
-                  setSelection(
-                    nextSelection(paths, live, {
-                      path: entry.path,
-                      shift: event.shiftKey,
-                      toggle: event.ctrlKey || event.metaKey,
-                    }),
-                  );
-                  // The diff follows the row that was clicked, whatever the
-                  // modifiers did to the selection: it is the one the user
-                  // just pointed at.
-                  onShowDiff(entry.path);
-                }}
-              >
-                {displayPath(entry)}
-              </button>
-              <span className={styles.stateLabel}>{STATE_LABELS[entry[side]]}</span>
-              <span className={styles.rowActions}>
-                {rowActions(entry).map((action) => (
-                  <button
-                    key={action.label}
-                    type="button"
-                    className={`${styles.button} ${action.danger === true ? styles.danger : ''}`}
-                    disabled={busy}
-                    onClick={action.run}
-                  >
-                    <span aria-hidden="true">{action.label}</span>
-                    <span className={styles.srOnly}>
-                      {`${action.label} ${displayPath(entry)}`}
-                    </span>
-                  </button>
-                ))}
-              </span>
-            </li>
+            <ChangeRow key={entry.path} {...rowProps(entry)} />
           ))}
         </ul>
       )}
     </section>
+  );
+}
+
+/** The List / Tree switch, the same control the diff panel's file list has. */
+function ListModeToggle({
+  title,
+  mode,
+  onMode,
+}: {
+  title: string;
+  mode: FileListMode;
+  onMode: (mode: FileListMode) => void;
+}): ReactNode {
+  return (
+    <div
+      className={styles.modeToggle}
+      role="group"
+      aria-label={`${title} file list layout`}
+    >
+      <button
+        type="button"
+        className={styles.modeButton}
+        aria-pressed={mode === 'flat'}
+        title="Show each file with its full path"
+        onClick={() => onMode('flat')}
+      >
+        List
+      </button>
+      <button
+        type="button"
+        className={styles.modeButton}
+        aria-pressed={mode === 'tree'}
+        title="Group files by directory"
+        onClick={() => onMode('tree')}
+      >
+        Tree
+      </button>
+    </div>
+  );
+}
+
+interface ChangeRowProps {
+  entry: StatusEntry;
+  side: 'index' | 'worktree';
+  busy: boolean;
+  /** Part of the multi-file selection, or the file the diff is showing. */
+  selected: boolean;
+  /** The file the diff panel is narrowed to — `aria-current` on the button. */
+  current: boolean;
+  actions: RowAction[];
+  onPick: (event: MouseEvent) => void;
+  onMenu: (event: MouseEvent) => void;
+}
+
+/**
+ * One file row, in either shape.
+ *
+ * The label is the difference: the full path in the flat list, the file's own
+ * name under its directory in the tree. The `title` carries the full path in
+ * both, because a narrow panel clips a deep path either way and the tooltip is
+ * what says the rest.
+ */
+function ChangeRow({
+  entry,
+  side,
+  busy,
+  selected,
+  current,
+  actions,
+  onPick,
+  onMenu,
+  tree = false,
+}: ChangeRowProps & { tree?: boolean }): ReactNode {
+  const full = displayPath(entry);
+  return (
+    <li
+      className={selected ? `${styles.row} ${styles.rowSelected}` : styles.row}
+      role={tree ? 'treeitem' : undefined}
+      aria-selected={tree ? current : undefined}
+      onContextMenu={onMenu}
+    >
+      <span className={styles.state} title={STATE_LABELS[entry[side]]}>
+        {STATE_LETTERS[entry[side]]}
+      </span>
+      {/* The path is the way into the diff, not decoration: clicking a
+          file here is how a user asks "what changed in this one?", and
+          before this it was a label you could not press. */}
+      <button
+        type="button"
+        className={styles.path}
+        aria-current={current ? 'true' : undefined}
+        title={`Show the diff for ${full}. Shift-click to select a range; Ctrl or Cmd click to add one.`}
+        onClick={onPick}
+      >
+        {tree ? displayName(entry) : full}
+      </button>
+      <span className={styles.stateLabel}>{STATE_LABELS[entry[side]]}</span>
+      <span className={styles.rowActions}>
+        {actions.map((action) => (
+          <button
+            key={action.label}
+            type="button"
+            className={`${styles.button} ${action.danger === true ? styles.danger : ''}`}
+            disabled={busy}
+            onClick={action.run}
+          >
+            <span aria-hidden="true">{action.label}</span>
+            <span className={styles.srOnly}>{`${action.label} ${full}`}</span>
+          </button>
+        ))}
+      </span>
+    </li>
+  );
+}
+
+/** A directory and everything under it, or one file row. */
+function ChangeTreeRow({
+  node,
+  folded,
+  onToggle,
+  rowProps,
+}: {
+  node: PathNode<StatusEntry>;
+  folded: ReadonlySet<string>;
+  onToggle: (path: string) => void;
+  rowProps: (entry: StatusEntry) => ChangeRowProps;
+}): ReactNode {
+  if (node.kind === 'file') return <ChangeRow {...rowProps(node.item)} tree />;
+
+  const open = !folded.has(node.path);
+  return (
+    <li role="treeitem" aria-expanded={open} aria-selected={false}>
+      <button
+        type="button"
+        className={styles.treeDir}
+        aria-expanded={open}
+        title={node.path}
+        onClick={() => onToggle(node.path)}
+      >
+        <span className={styles.treeChevron} aria-hidden="true">
+          ▾
+        </span>
+        <span className={styles.treeDirName}>{node.name}</span>
+      </button>
+      {open && (
+        <ul className={styles.treeChildren} role="group">
+          {node.children.map((child) => (
+            <ChangeTreeRow
+              key={child.kind === 'dir' ? `dir:${child.path}` : child.path}
+              node={child}
+              folded={folded}
+              onToggle={onToggle}
+              rowProps={rowProps}
+            />
+          ))}
+        </ul>
+      )}
+    </li>
   );
 }
 

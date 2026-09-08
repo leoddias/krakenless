@@ -53,12 +53,19 @@
 - **An untracked file shows its contents in the diff panel** as every line
   added, read through the editor's door (`openWorktreeFile`), no hunk buttons,
   also when the rest of the diff is empty.
+- **The working-tree lists can be a directory tree** (2026-09-08, ADR-0046):
+  Unstaged and Staged carry the same List / Tree switch the diff's file list
+  has, over one shared builder (`views/shell/pathTree.ts`, generic
+  `PathNode<T>`; `views/diff/fileTree.ts` is gone). One setting for both lists
+  (`changesFileList`). Shift-ranges follow the rows as drawn and never reach
+  into a folded directory; the selection now holds rows and expands to action
+  paths at the point of acting, so a selected rename stages both halves.
 - **The remote toolbar shows success in green**: the button that just
   finished gets a check, a green tint and one pulse (none under
   `prefers-reduced-motion`), and goes back to normal after five seconds while
   the outcome line — green, with a check — stays. Announced through
   `data-done` too.
-- **Test status:** `npm test` 2130 passing (101 files), `cargo test` 108 passing;
+- **Test status:** `npm test` 2141 passing (101 files), `cargo test` 108 passing;
   oxlint, prettier and clippy clean. `cargo fmt` is *not* clean and never has
   been — see `docs/ROADMAP.md` § Backlog.
 - **Git no longer runs on the UI thread** (ADR-0028). Every git command used to
@@ -216,6 +223,26 @@
   until `buildPushCommand` emits a `<local>:<upstream>` refspec.
 
 ## Session log
+
+### 2026-09-08 — the working-tree lists get the tree too
+
+"Quero a mesma feature de LIST e TREE que colocamos na área de diff para a área
+de Staged e Unstaged." Both sections now carry the switch, over the diff's tree
+builder made generic and moved to `views/shell/pathTree.ts` — two builders for
+one shape is the kind of duplication that makes a sort order drift. One setting
+for both lists: they are two halves of one panel.
+
+Two things the tree forced open. A shift-range has to be measured down the rows
+*as drawn*, or a range in tree mode selects files the user cannot see —
+including files inside a folded directory, which is how "Stage 3 selected"
+would touch work nobody looked at; `visiblePaths` answers that, and folding
+hides rows without deselecting them. And the selection now holds one path per
+row, expanding to the paths an action names (`pathsOf`) only at the point of
+acting: it used to range over the expanded list, where a rename's *old* name is
+a path with no row, so a range across one carried it silently. A selected
+rename now stages both halves, as the row's own button always did.
+
+Not used by hand in the running app yet. `npm test` 2141 passing.
 
 ### 2026-09-04 (evening) — the discard stops stashing
 
