@@ -69,6 +69,11 @@
   goes back into the block, so `assemble` is still the only thing that builds
   the file). Add/add has no base and still asks about everything. Not used by
   hand in the running app yet.
+- **A branch is deleted from the commit row it is on** (2026-09-09, ADR-0050):
+  one item per name on the row, local and remote, over the refs panel's own
+  questions and recovery push. `-d` first, `-D` only behind a second, armed
+  question; the checked-out branch is disabled with the reason and
+  `<remote>/HEAD` is never offered. Not used by hand yet.
 - **A remote branch can be deleted from its row** (2026-09-08, ADR-0048):
   `push <remote> --delete refs/heads/<branch>` behind a confirmation that says
   it goes for everyone, with `git push <remote> <oid>:refs/heads/<branch>` kept
@@ -251,9 +256,11 @@
 
 ## Session log
 
-### 2026-09-09 — the conflict screen learns what a conflict is
+### 2026-09-09 — the conflict screen learns what a conflict is, and a branch is deleted from its row
 
-"A tela de resolução de conflitos precisa ser mais
+Two asks, both from screenshots.
+
+**The resolver.** "A tela de resolução de conflitos precisa ser mais
 inteligente" — over a file where four of the four blocks were checkboxes beside
 the words *nothing on this side*. The screen was asking about every
 *difference* between stages 2 and 3, not about every *conflict*: stage 1 was
@@ -267,8 +274,15 @@ place — double-click, or Enter on it — with the text written back into the
 block it came from, so `assemble` stays the only thing that builds the file.
 An add/add conflict has no ancestor and still asks about everything.
 
-Not used by hand in the running app yet. `npm test` 2247 passing, lint, format
-and build clean.
+**Deleting a branch.** "este commit ficou orfão e fica muito ruim de procurar o
+nome de branch na lista" — the commit menu now carries one delete item per name
+on the row, local and remote (ADR-0050), reusing the refs panel's questions,
+actions and recovery push. The local one is still `-d` first, with the `-D`
+question arriving behind an arming checkbox; the checked-out branch is offered
+disabled rather than hidden, and `<remote>/HEAD` is not offered at all.
+
+Neither is used by hand in the running app yet. `npm test` 2260 passing, lint,
+format and build clean.
 
 ### 2026-09-08 (later still) — deleting a branch on the remote
 

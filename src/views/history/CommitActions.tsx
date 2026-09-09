@@ -16,7 +16,8 @@
  * dialog, and HEAD can move in between.
  */
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import type { DeleteBranchOutcome } from '../../git/refs';
 import { hasTrackedChanges } from '../../git/status';
 import type { Commit, StashEntry } from '../../git/types';
 import {
@@ -26,6 +27,8 @@ import {
   createTagAt,
   pushTagTo,
   rebaseBranchOnto,
+  removeBranch,
+  removeRemoteBranch,
   removeStash,
   resetBranchTo,
   restoreStash,
@@ -39,9 +42,13 @@ import { BRANCH_NOUN, TAG_NOUN, refNameError, type RefNoun } from '../shell/refN
 import { trapTab } from '../shell/trapTab';
 import {
   applyStashQuestion,
+  deleteBranchQuestion,
+  deleteRemoteBranchQuestion,
   dropRecoveryCommand,
   dropStashQuestion,
+  forceDeleteBranchQuestion,
   popStashQuestion,
+  remoteDeleteRecovery,
 } from '../refs/labels';
 import {
   buildCommitMenu,
@@ -101,9 +108,34 @@ export interface ConfirmDialog {
   title: string;
   /** The consequence, in the words that become the confirmation reason. */
   question: string;
+  /**
+   * What the user needs to know that is not part of the reason they agree to —
+   * git's own warning, usually. Kept out of `question` so the token the git
+   * layer validates stays the one sentence the app minted for it.
+   */
+  detail?: string;
   confirmLabel: string;
   danger: boolean;
+  /**
+   * Label of a checkbox the confirming button waits for.
+   *
+   * Only for a question that arrives *in place of* another one: the dangerous
+   * button appears where the harmless one just was, and a click already on its
+   * way must not land on it. The refs panel arms its forced delete the same
+   * way.
+   */
+  arm?: string;
   run: (reason: string) => Promise<unknown>;
+  /**
+   * The question that replaces this one, given what `run` returned, or `null`
+   * when the interaction is over.
+   *
+   * A safe branch delete that git refuses is not a failure, it is a second
+   * question — with git's warning in view and a different reason attached, so
+   * the token the forced delete records is the one the user gave *after*
+   * reading it.
+   */
+  escalate?: (result: unknown) => ConfirmDialog | null;
 }
 
 type Dialog = NameDialog | ConfirmDialog;
@@ -238,11 +270,69 @@ export function CommitActions({
             resetBranchTo(store, action.branch, commit.oid, action.mode, reason),
         });
         return;
+      case 'delete-branch':
+        setDialog(deleteBranchDialog(action.name));
+        return;
+      case 'delete-remote-branch': {
+        const ref = { remote: action.remote, branch: action.branch };
+        setDialog({
+          kind: 'confirm',
+          title: `Delete "${action.branch}" on ${action.remote}?`,
+          question: deleteRemoteBranchQuestion(ref),
+          detail:
+            'The name disappears from the next fetch of everyone who uses that remote. The commits stay on the server until it collects them, which is what the recovery command below the notice pushes back.',
+          confirmLabel: `Delete on ${action.remote}`,
+          danger: true,
+          // The oid is the one this row was drawn at, captured before the
+          // delete: the refresh that follows prunes the ref it came from.
+          run: (reason) =>
+            removeRemoteBranch(store, ref, reason, remoteDeleteRecovery(ref, action.oid)),
+        });
+        return;
+      }
       case 'stash':
         setDialog(stashDialog(action.entry, action.op));
         return;
     }
   };
+
+  /**
+   * The safe branch delete, and the forced one it may turn into.
+   *
+   * Two steps and never one, and the second is a different question with a
+   * different reason: git's refusal names commits that exist nowhere else, and
+   * the token the `-D` records must be the yes the user gave *after* reading
+   * that. The question strings are the refs panel's own, so the two places that
+   * can delete a branch cannot describe it differently.
+   */
+  function deleteBranchDialog(name: string): ConfirmDialog {
+    return {
+      kind: 'confirm',
+      title: `Delete branch "${name}"?`,
+      question: deleteBranchQuestion(name),
+      detail:
+        'Commits that are merged elsewhere stay in the repository; git refuses this if any of them would be lost.',
+      confirmLabel: 'Delete Branch',
+      danger: true,
+      run: (reason) => removeBranch(store, name, reason, { force: false }),
+      escalate: (result) => {
+        const outcome = result as DeleteBranchOutcome | null;
+        if (outcome === null || outcome.deleted) return null;
+        const warning = outcome.unmergedWarning;
+        if (warning === undefined) return null;
+        return {
+          kind: 'confirm',
+          title: `Delete "${name}" anyway?`,
+          question: forceDeleteBranchQuestion(name),
+          detail: warning,
+          confirmLabel: 'Delete Branch',
+          danger: true,
+          arm: 'I understand those commits will be lost',
+          run: (reason) => removeBranch(store, name, reason, { force: true }),
+        };
+      },
+    };
+  }
 
   /**
    * The question a stash action asks, and what it runs.
@@ -348,7 +438,14 @@ export function CommitActions({
           }}
         />
       )}
-      {dialog !== null && <DialogHost dialog={dialog} onClose={onDismiss} busy={busy} />}
+      {dialog !== null && (
+        <DialogHost
+          dialog={dialog}
+          onClose={onDismiss}
+          busy={busy}
+          onReplace={setDialog}
+        />
+      )}
     </>
   );
 }
@@ -357,10 +454,17 @@ export function DialogHost({
   dialog,
   onClose,
   busy,
+  onReplace,
 }: {
   dialog: Dialog;
   onClose: () => void;
   busy: boolean;
+  /**
+   * Where a question that escalates into another one puts the second one. Hosts
+   * that have no escalating questions leave it out, and `escalate` is then not
+   * consulted at all.
+   */
+  onReplace?: (dialog: ConfirmDialog) => void;
 }): ReactNode {
   /**
    * True from the moment the answer is given until the command has resolved.
@@ -375,12 +479,28 @@ export function DialogHost({
 
   const finish = (result: Promise<unknown>): void => {
     setRunning(true);
-    void result.finally(() => {
-      setRunning(false);
-      // Whether it worked or not, the question has been answered. Failures
-      // arrive in the notice bar, which outlives this dialog.
-      onClose();
-    });
+    void result
+      .then((value) => {
+        // A question that turns into another question: git refused the safe
+        // form and said why, so the second one is asked with that in view
+        // rather than reported as a failure the user has to start over from.
+        const next =
+          dialog.kind === 'confirm' && onReplace !== undefined
+            ? (dialog.escalate?.(value) ?? null)
+            : null;
+        if (next !== null) {
+          onReplace?.(next);
+          return true;
+        }
+        return false;
+      })
+      .catch(() => false)
+      .then((replaced) => {
+        setRunning(false);
+        // Whether it worked or not, the question has been answered. Failures
+        // arrive in the notice bar, which outlives this dialog.
+        if (!replaced) onClose();
+      });
   };
 
   return (
@@ -401,7 +521,16 @@ export function DialogHost({
       >
         <h2 className={styles.title}>{dialog.title}</h2>
         {dialog.kind === 'confirm' ? (
-          <ConfirmBody dialog={dialog} locked={locked} onClose={onClose} onRun={finish} />
+          // Keyed on the question: a question replaced by another one is a
+          // fresh mount, so focus lands on Cancel again and an arming checkbox
+          // starts unticked.
+          <ConfirmBody
+            key={dialog.question}
+            dialog={dialog}
+            locked={locked}
+            onClose={onClose}
+            onRun={finish}
+          />
         ) : (
           <NameBody dialog={dialog} locked={locked} onClose={onClose} onRun={finish} />
         )}
@@ -423,6 +552,9 @@ function ConfirmBody({
 }): ReactNode {
   const confirmRef = useRef<HTMLButtonElement | null>(null);
   const cancelRef = useRef<HTMLButtonElement | null>(null);
+  const armId = useId();
+  /** False until the user ticks the box, for a question that asks for one. */
+  const [armed, setArmed] = useState(false);
 
   // Focus lands on Cancel, never on the button that does the thing: a stray
   // Enter after a right-click must not run a rebase.
@@ -435,6 +567,19 @@ function ConfirmBody({
       <p className={dialog.danger ? styles.questionDanger : styles.question}>
         {dialog.question}
       </p>
+      {dialog.detail !== undefined && <p className={styles.detail}>{dialog.detail}</p>}
+      {dialog.arm !== undefined && (
+        <label className={styles.arm} htmlFor={armId}>
+          <input
+            id={armId}
+            type="checkbox"
+            checked={armed}
+            disabled={locked}
+            onChange={(event) => setArmed(event.target.checked)}
+          />
+          {dialog.arm}
+        </label>
+      )}
       <div className={styles.actions}>
         <button
           type="button"
@@ -449,7 +594,7 @@ function ConfirmBody({
           type="button"
           className={dialog.danger ? styles.danger : styles.primary}
           ref={confirmRef}
-          disabled={locked}
+          disabled={locked || (dialog.arm !== undefined && !armed)}
           // The question is the reason: what the user read is what the git
           // layer receives as the token's justification.
           onClick={() => onRun(dialog.run(dialog.question))}

@@ -155,6 +155,84 @@ describe('the push-tag items', () => {
   });
 });
 
+describe('the delete items', () => {
+  const withRefs = (...refs: { kind: Commit['refs'][number]['kind']; name: string }[]) =>
+    ({ commit: commit({ refs }) }) as Partial<CommitMenuContext>;
+
+  it('offers nothing at all on a row with no names', () => {
+    expect(flatten(buildCommitMenu(context())).map((entry) => entry.id)).not.toContain(
+      'delete-branch-main',
+    );
+    // An empty section would draw a rule with nothing under it.
+    expect(buildCommitMenu(context()).map((section) => section.length)).toEqual([
+      1, 3, 5, 2,
+    ]);
+  });
+
+  it('offers each local branch on the row by name', () => {
+    const entry = item(
+      withRefs({ kind: 'branch', name: 'feat/quest-line' }),
+      'delete-branch-feat/quest-line',
+    );
+    expect(entry.label).toBe('Delete branch feat/quest-line');
+    expect(entry.disabled).toBeNull();
+    expect(entry.action).toEqual({ kind: 'delete-branch', name: 'feat/quest-line' });
+  });
+
+  it('will not offer to delete the branch that is checked out', () => {
+    // git refuses it, and the item is shown rather than hidden so the refusal
+    // is the app's answer instead of a missing feature.
+    const entry = item(
+      { ...withRefs({ kind: 'branch', name: 'main' }), branch: 'main' },
+      'delete-branch-main',
+    );
+    expect(entry.disabled).toContain('the branch you are on');
+    expect(entry.action).toBeUndefined();
+  });
+
+  it('offers a remote-tracking branch as the remote delete it really is', () => {
+    const entry = item(
+      withRefs({ kind: 'remote-branch', name: 'origin/feat/x' }),
+      'delete-remote-branch-origin/feat/x',
+    );
+    // The label says where it goes: this one reaches a server other people
+    // fetch from, and the local delete two rows up does not.
+    expect(entry.label).toBe('Delete feat/x on origin');
+    expect(entry.action).toEqual({
+      kind: 'delete-remote-branch',
+      remote: 'origin',
+      branch: 'feat/x',
+      // Captured before the delete: the refresh afterwards prunes the ref this
+      // row was drawn from, and the oid is the way back.
+      oid: OID,
+    });
+  });
+
+  it('never offers to delete <remote>/HEAD, which is not a branch', () => {
+    const ids = flatten(
+      buildCommitMenu(context(withRefs({ kind: 'remote-branch', name: 'origin/HEAD' }))),
+    ).map((entry) => entry.id);
+    expect(ids).not.toContain('delete-remote-branch-origin/HEAD');
+  });
+
+  it('leaves tags and HEAD out of it', () => {
+    const ids = flatten(
+      buildCommitMenu(
+        context(withRefs({ kind: 'tag', name: 'v1.0' }, { kind: 'head', name: 'HEAD' })),
+      ),
+    ).map((entry) => entry.id);
+    expect(ids.filter((id) => id.startsWith('delete-'))).toEqual([]);
+  });
+
+  it('is refused while another command is running, like everything else', () => {
+    const entry = item(
+      { ...withRefs({ kind: 'branch', name: 'old' }), busy: true },
+      'delete-branch-old',
+    );
+    expect(entry.disabled).toBe('Another git operation is already running.');
+  });
+});
+
 describe('the merge items', () => {
   const withRefs = (...names: string[]) => ({
     commit: commit({

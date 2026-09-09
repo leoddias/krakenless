@@ -16,6 +16,7 @@ import type { ResetMode } from '../../git/commits';
 import { commitWebUrl } from '../../git/remoteWeb';
 import type { Commit, CommitRef, Remote, StashEntry } from '../../git/types';
 import type { Loadable } from '../../state/store';
+import { splitRemoteBranch } from '../refs/labels';
 
 /** What a menu item does when it is chosen. */
 export type CommitAction =
@@ -33,6 +34,14 @@ export type CommitAction =
       autostash: boolean;
     }
   | { kind: 'reset'; branch: string; mode: ResetMode }
+  | { kind: 'delete-branch'; name: string }
+  | {
+      kind: 'delete-remote-branch';
+      remote: string;
+      branch: string;
+      /** The commit the row was drawn at — the way back, if it is wanted. */
+      oid: string;
+    }
   | { kind: 'copy'; text: string; what: string }
   /** Only ever produced by {@link buildStashMenu}. */
   | { kind: 'stash'; entry: StashEntry; op: 'apply' | 'pop' | 'drop' };
@@ -264,6 +273,61 @@ function pushTagItems(context: CommitMenuContext): CommitMenuItem[] {
   }));
 }
 
+/**
+ * The names on this row offered for deletion, local ones first.
+ *
+ * A branch is deleted by name, and finding that name in a list of two hundred
+ * is the slow way to do something the user is already pointing at: the row on
+ * screen *is* the branch. Every branch on the row gets an item and every
+ * remote-tracking branch gets one too — the two are different deletes with
+ * different blast radii, and they are labelled so.
+ *
+ * The checked-out branch is offered disabled rather than left out: git will not
+ * delete the branch you are on, and an item that vanishes reads as a feature
+ * this app does not have. `<remote>/HEAD` is skipped entirely — it is a symref,
+ * not a branch, and deleting a name the user misread is the mistake this must
+ * not make.
+ */
+function deleteRefItems(context: CommitMenuContext): CommitMenuItem[] {
+  const shared = blocked(context);
+  const items: CommitMenuItem[] = [];
+
+  for (const ref of context.commit.refs) {
+    if (ref.kind === 'branch') {
+      const current = ref.name === context.branch;
+      items.push({
+        id: `delete-branch-${ref.name}`,
+        label: `Delete branch ${ref.name}`,
+        disabled:
+          shared ??
+          (current
+            ? `"${ref.name}" is the branch you are on. Switch to another one first.`
+            : null),
+        ...(current
+          ? {}
+          : { action: { kind: 'delete-branch' as const, name: ref.name } }),
+      });
+      continue;
+    }
+    if (ref.kind !== 'remote-branch') continue;
+    const split = splitRemoteBranch(ref.name);
+    if (split === null) continue;
+    items.push({
+      id: `delete-remote-branch-${ref.name}`,
+      label: `Delete ${split.branch} on ${split.remote}`,
+      disabled: shared,
+      action: {
+        kind: 'delete-remote-branch' as const,
+        remote: split.remote,
+        branch: split.branch,
+        oid: context.commit.oid,
+      },
+    });
+  }
+
+  return items;
+}
+
 /** The whole menu for one commit, grouped into the sections it is drawn in. */
 export function buildCommitMenu(context: CommitMenuContext): CommitMenuSection[] {
   const shared = blocked(context);
@@ -275,7 +339,9 @@ export function buildCommitMenu(context: CommitMenuContext): CommitMenuSection[]
   const branch = typeof context.branch === 'string' ? context.branch : null;
   const link = linkTarget(context);
 
-  return [
+  // Empty sections are dropped rather than drawn: a rule with nothing under it
+  // reads as a menu that lost something.
+  const sections: CommitMenuSection[] = [
     [
       {
         id: 'checkout',
@@ -347,6 +413,7 @@ export function buildCommitMenu(context: CommitMenuContext): CommitMenuSection[]
         })),
       },
     ],
+    deleteRefItems(context),
     [
       {
         id: 'copy-sha',
@@ -361,6 +428,7 @@ export function buildCommitMenu(context: CommitMenuContext): CommitMenuSection[]
       copyLinkItem(link),
     ],
   ];
+  return sections.filter((section) => section.length > 0);
 }
 
 function copyLinkItem(link: LinkTarget): CommitMenuItem {

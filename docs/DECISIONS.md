@@ -1486,3 +1486,37 @@ faithful picture of stages 2 and 3 once a run is edited, which is what the
 `edited` tag on both halves is for. Twenty-eight tests over the new functions
 and the screen, including the add/add fallback and the both-sides-deleted case.
 
+## ADR-0050 — A branch is deleted from the commit row it is on, local or remote (extends ADR-0048)
+
+**Decision:** The commit context menu grows a section, one item per name on the
+row: "Delete branch &lt;name&gt;" for each local branch and "Delete &lt;branch&gt;
+on &lt;remote&gt;" for each remote-tracking one. Both reuse the refs panel's
+questions, actions and recovery strings — `deleteBranchQuestion`,
+`forceDeleteBranchQuestion`, `deleteRemoteBranchQuestion`,
+`remoteDeleteRecovery`, `removeBranch`, `removeRemoteBranch` — so the two places
+that can delete a branch cannot describe it differently or record a different
+confirmation reason. The local delete is still `-d` first and `-D` only after a
+second question carrying git's own warning, and that second question arrives
+disarmed behind a checkbox, exactly as the panel's does. The checked-out branch
+gets a disabled item saying why; `<remote>/HEAD` gets no item at all. An empty
+section is dropped rather than drawn.
+
+**Why:** The name is the handle git needs, and the row on screen already *is*
+the branch. Finding "feat/quest-line" in a list of two hundred to delete the
+thing the user is pointing at is the slow way round, and it is the moment the
+wrong name gets clicked. Nothing about the safety story changes by moving the
+entry point: the confirmation is still the gate, the reason string is still what
+the user read, and the git layer still validates the token.
+
+**Consequences:** `ConfirmDialog` grows three optional fields — `detail` (what
+the user needs to know, kept out of the sentence the git layer records), `arm`
+(the checkbox a replacing question waits for) and `escalate` (the question that
+replaces this one, given what `run` returned) — and `DialogHost` an optional
+`onReplace`. The confirm body is keyed on the question, so a replacement is a
+fresh mount: focus returns to Cancel and the checkbox starts unticked. Hosts
+with no escalating questions (`RemoteBar`, `HistoryView`) pass neither and are
+unaffected. `commitMenu.ts` now imports `splitRemoteBranch` from
+`views/refs/labels.ts`, which is where the parsing that refuses `<remote>/HEAD`
+already lives. The remote delete captures the row's oid as its recovery push
+before running, for the reason ADR-0048 gives: the refresh afterwards prunes the
+ref the oid came from.

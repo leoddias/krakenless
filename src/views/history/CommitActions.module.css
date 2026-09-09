@@ -48,6 +48,17 @@
   border-radius: 0 var(--radius) var(--radius) 0;
 }
 
+/* What the user needs to know, next to what they are agreeing to. Quieter than
+   the question itself: the question is the sentence the git layer records, and
+   this is the context around it — git's own refusal, usually. */
+.detail {
+  margin: -0.5rem 0 1rem;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
 .form {
   display: flex;
   flex-direction: column;
@@ -99,6 +110,14 @@
   align-items: center;
   gap: 0.5rem;
   color: var(--fg);
+}
+
+/* The gate on a question that arrived in place of another one. The dangerous
+   button appears where the harmless one just was, so it needs a gesture that
+   did not exist a moment ago. */
+.arm {
+  composes: checkbox;
+  margin: 0 0 1rem;
 }
 
 .fieldError {

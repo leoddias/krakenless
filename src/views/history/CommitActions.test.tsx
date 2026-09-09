@@ -14,7 +14,7 @@ function raw(stdout = '') {
   return { stdout, stderr: '', code: 0, timed_out: false, stdout_lossy: false };
 }
 
-function commit(): Commit {
+function commit(refs: Commit['refs'] = []): Commit {
   return {
     oid: OID,
     shortOid: 'a1b2c3d',
@@ -26,7 +26,7 @@ function commit(): Commit {
     committerDate: '2026-08-17T12:00:00Z',
     subject: 'fix the graph',
     body: '',
-    refs: [],
+    refs,
   };
 }
 
@@ -41,13 +41,15 @@ function status(overrides: Partial<RepoStatus> = {}): RepoStatus {
   };
 }
 
-function renderHistory(overrides: { status?: RepoStatus } = {}): Store {
+function renderHistory(
+  overrides: { status?: RepoStatus; refs?: Commit['refs'] } = {},
+): Store {
   const store = createStore();
   store.dispatch({
     type: 'repo/opened',
     repo: { root: 'C:/repo', gitDir: 'C:/repo/.git', bare: false, empty: false },
   });
-  store.dispatch({ type: 'commits/loaded', commits: [commit()] });
+  store.dispatch({ type: 'commits/loaded', commits: [commit(overrides.refs)] });
   store.dispatch({ type: 'status/loaded', status: overrides.status ?? status() });
   store.dispatch({
     type: 'remotes/loaded',
@@ -492,6 +494,109 @@ describe('the destructive items', () => {
       name: 'Checkout this commit',
     });
     expect(checkout.getAttribute('aria-disabled')).toBe('true');
+  });
+});
+
+describe('deleting a branch from the row it is on', () => {
+  const BRANCH_ROW = [{ kind: 'branch' as const, name: 'old' }];
+  const REMOTE_ROW = [{ kind: 'remote-branch' as const, name: 'origin/old' }];
+
+  /** Opens the menu and chooses the item whose label matches. */
+  function choose(label: RegExp): void {
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: label }));
+  }
+
+  it('asks before deleting a local branch, and runs the safe form', async () => {
+    renderHistory({ refs: BRANCH_ROW });
+    choose(/Delete branch old/);
+
+    expect(screen.getByRole('dialog', { name: 'Delete branch "old"?' })).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Delete Branch' }));
+    });
+
+    // `-d`, never `-D`: forcing is a separate decision with the warning in view.
+    expect(ran('branch', '-d', 'old')).toBe(true);
+    expect(ran('branch', '-D', 'old')).toBe(false);
+  });
+
+  it('does nothing when the question is cancelled', () => {
+    renderHistory({ refs: BRANCH_ROW });
+    choose(/Delete branch old/);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(invocations().some((args) => args[0] === 'branch')).toBe(false);
+  });
+
+  it('asks a second time when git refuses, and arms the forcing button', async () => {
+    renderHistory({ refs: BRANCH_ROW });
+    invoke.mockImplementation(async (_name: string, payload: { args: string[] }) =>
+      payload.args[0] === 'branch' && payload.args[1] === '-d'
+        ? {
+            stdout: '',
+            stderr: "error: the branch 'old' is not fully merged",
+            code: 1,
+            timed_out: false,
+            stdout_lossy: false,
+          }
+        : raw(),
+    );
+    choose(/Delete branch old/);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Delete Branch' }));
+    });
+
+    // A refusal is a second question, not a failure: git's warning is on
+    // screen, and the button that drops the commits starts disarmed.
+    expect(screen.getByRole('dialog', { name: 'Delete "old" anyway?' })).toBeTruthy();
+    expect(screen.getByText(/Deleting it will drop them/)).toBeTruthy();
+    const confirm = screen.getByRole('button', { name: 'Delete Branch' });
+    expect(confirm).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /commits will be lost/ }));
+    expect(confirm).toBeEnabled();
+    await act(async () => {
+      fireEvent.click(confirm);
+    });
+    expect(ran('branch', '-D', 'old')).toBe(true);
+  });
+
+  it('deletes a remote branch through a push, fully qualified', async () => {
+    renderHistory({ refs: REMOTE_ROW });
+    choose(/Delete old on origin/);
+
+    expect(screen.getByRole('dialog', { name: 'Delete "old" on origin?' })).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Delete on origin' }));
+    });
+
+    // `--delete refs/heads/old`, never the bare name: with only a same-named
+    // tag present, the short form deletes the tag.
+    expect(ran('push', '--progress', 'origin', '--delete', 'refs/heads/old')).toBe(true);
+  });
+
+  it('offers the push that puts a deleted remote branch back', async () => {
+    const store = renderHistory({ refs: REMOTE_ROW });
+    choose(/Delete old on origin/);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Delete on origin' }));
+    });
+
+    // The oid is only knowable before the delete — the refresh afterwards
+    // prunes the ref the row was drawn from.
+    expect(store.getState().notice?.undoHint).toBe(
+      `git push origin ${OID}:refs/heads/old`,
+    );
+  });
+
+  it('will not offer to delete the branch that is checked out', () => {
+    renderHistory({ refs: [{ kind: 'branch', name: 'main' }] });
+    openMenu();
+
+    const entry = screen.getByRole('menuitem', { name: /Delete branch main/ });
+    expect(entry).toHaveAttribute('aria-disabled', 'true');
   });
 });
 
