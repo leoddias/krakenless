@@ -1426,3 +1426,63 @@ with the rest of the panel's pure logic. The confirmed question is checked
 against the open repository before it runs, like every other question here:
 branch names collide across repositories, and the action layer resolves the
 root from current state.
+
+## ADR-0049 — The conflict screen is a real three-way merge, walks the conflicts, and its result is editable (amends ADR-0031)
+
+**Decision:** Four changes to the resolver ADR-0031 built.
+
+1. **The common ancestor is used.** Stage 1 was already read and thrown away;
+   the block list now comes from a diff3 over all three stages
+   (`buildMergedBlocks`). A run of lines only one side moved away from the base
+   is applied and its box is ticked, flagged `auto` and labelled "auto" in both
+   panes. Only runs both sides changed differently stay `choice: null`. When
+   stage 1 is absent — add/add — the old two-sided `buildBlocks` still runs and
+   every difference stays a question.
+2. **Previous / Next**, above the panes, walking `navigable` blocks: the ones
+   the merge did *not* decide. The screen opens standing on the first of them.
+3. **Green and blue**, one colour per side, from the "take all" buttons through
+   the pane headings and blocks to the runs of the Output, which are tinted by
+   the side each came from (`assembleSegments`).
+4. **The Output is editable in place.** Double-clicking a run (or Enter on it)
+   opens a textarea over exactly those lines; the text is written back into the
+   block it came from, and the block is flagged `edited` in both panes.
+
+**Why:** The screen ADR-0031 shipped asked the user about every *difference*
+between the two sides, not about every *conflict*. A file whose branch changed
+forty lines and whose incoming commit changed two produced forty-two questions,
+forty of them with the words "nothing on this side" under an empty pane — a
+checkbox whose only sensible answer is yes. That is not a resolution UI, it is
+`diff` with tickboxes. Git does not ask about those runs and neither should
+this: with the base in hand, "they edited this and we did not" is a fact, not a
+preference. ADR-0031's rule that *nothing is chosen until somebody chooses it*
+is kept where it means something — a genuine conflict still contributes no
+lines and still blocks Save — and dropped where it was ceremony.
+
+Automatic decisions are **shown, not hidden**: the block is still drawn, still
+ticked, still tickable the other way, and the header says how many were merged
+for the user. A merge the user cannot see is one they cannot disagree with, and
+"0 of 2 left" over a file where thirty other runs were quietly applied would be
+the screen lying about what it did.
+
+Editing lands in the block rather than beside it, so `assemble` stays the only
+thing that builds the file — the invariant ADR-0031 exists to protect. The
+alternative, a free-text box holding the whole result, forks the model in two
+(which copy wins?) and loses every colour on the way, which is the opposite of
+what the editing was asked for.
+
+Blue rather than the violet the Output first used: violet is the graph's colour
+for another worktree, and red — the other obvious pairing with green — is this
+app's colour for a deletion. Neither side of a conflict is the wrong one.
+
+**Consequences:** `resolve.ts` grows `alignment` and `buildMergedBlocks` (two
+more quadratic tables, so `tooLargeToCompare` now counts the base as well),
+`navigable`, `autoCount`, `editLines`, and `OutputSegment` carries the address
+(`blockIndex` + `part`) an edit is written back through. Blocks gain `auto` and
+`edited`. Unticking an `auto` block yields `neither`, not "undecided" — the
+same semantics a hand-made choice has had since ADR-0031 — so the lines vanish
+rather than the question returning; `navigable` still admits an undecided block
+so nothing that blocks Save can be unreachable. The two panes stop being a
+faithful picture of stages 2 and 3 once a run is edited, which is what the
+`edited` tag on both halves is for. Twenty-eight tests over the new functions
+and the screen, including the add/add fallback and the both-sides-deleted case.
+

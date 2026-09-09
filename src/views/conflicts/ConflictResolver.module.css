@@ -1,3 +1,20 @@
+/* One colour per side, from the top of the screen to the bottom of the result.
+
+   The two sides are told apart by the same green and blue in the "take all"
+   buttons, the pane headings, the blocks and the runs of the Output — so the
+   question "where did this line come from?" is answered by the colour it is
+   already wearing, without reading a label. Colour is never the only cue:
+   every one of those places is also named in words or carries `data-side`.
+
+   Green and blue rather than green and red: neither side of a conflict is the
+   wrong one, and red is this app's colour for a deletion. */
+.screen {
+  --ours: var(--added);
+  --ours-bg: var(--added-bg);
+  --theirs: var(--ref-branch-fg);
+  --theirs-bg: var(--ref-branch-bg);
+}
+
 /* A full-window screen, not a dialog box: resolving a conflict is the task,
    and every other panel is noise while it is happening. */
 .backdrop {
@@ -57,28 +74,113 @@
 
 .bulk {
   display: flex;
+  align-items: center;
   gap: 0.4rem;
   padding: 0.5rem 0.75rem;
   border-bottom: 1px solid var(--border-subtle);
 }
 
-/* The two sides, side by side. They scroll together with the page rather than
-   independently: a block is one decision, and its two halves must stay level. */
+/* Centred between the two "take all" buttons, because it belongs to neither
+   side: it walks the disagreements themselves. In a file with twenty-two of
+   them, finding the next one by eye is the slowest part of the job. */
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 auto;
+}
+
+/* The two "take all" buttons wear the colour of the side they take from. */
+.takeOurs {
+  box-shadow: inset 3px 0 0 var(--ours);
+}
+
+.takeTheirs {
+  box-shadow: inset 3px 0 0 var(--theirs);
+}
+
+.navButton {
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+.navButton:not(:disabled):hover {
+  border-color: var(--accent-line);
+}
+
+.navButton:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.navButton:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.navCount {
+  min-width: 12ch;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+/* Everything between the toolbar and the footer: the two sides, the edge that
+   sizes them against the result, and the result. */
+.body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* The two sides are one grid and one scroller.
+
+   Each block is placed on its own row, in its own column, so the two halves of
+   a decision are always level with each other — as two independent columns of
+   flowing content they drifted apart, and lining them up was the user's job.
+   One scroller means one wheel and one horizontal scrollbar for both sides: a
+   long line used to have to be scrolled twice to be read once.
+
+   The columns are at least half the width each and grow to their content, which
+   is what puts that horizontal scrollbar on the container instead of on every
+   individual code block. */
 .panes {
   display: grid;
   flex: 1 1 auto;
-  grid-template-columns: 1fr 1fr;
-  gap: 1px;
+  grid-template-columns: minmax(calc(50% - 0.5rem), max-content) minmax(
+      calc(50% - 0.5rem),
+      max-content
+    );
+  align-content: start;
+  column-gap: 1rem;
   min-height: 0;
-  background: var(--border-subtle);
+  background: var(--bg);
   overflow: auto;
 }
 
+/* No box of its own: the pane's children are items of the grid above, which is
+   what lets a block share a row with its other half. The element stays for its
+   accessible name — "take block 3 from this side" means nothing without it. */
 .pane {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  background: var(--bg);
+  display: contents;
+}
+
+.paneTitle[data-side='ours'] {
+  border-bottom-color: var(--ours);
+  color: var(--ours);
+}
+
+.paneTitle[data-side='theirs'] {
+  border-bottom-color: var(--theirs);
+  color: var(--theirs);
 }
 
 .paneTitle {
@@ -88,7 +190,7 @@
   margin: 0;
   padding: 0.35rem 0.6rem;
   background: var(--surface);
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 2px solid var(--border-subtle);
   color: var(--muted);
   font-size: 0.6875rem;
   font-weight: 600;
@@ -96,16 +198,11 @@
   text-transform: uppercase;
 }
 
-.paneBody {
-  padding: 0.25rem 0;
-}
-
 .context,
 .blockCode,
 .code {
   margin: 0;
   padding: 0.15rem 0.6rem;
-  overflow-x: auto;
   color: var(--fg);
   font-family: ui-monospace, 'Cascadia Mono', 'Consolas', monospace;
   font-size: 0.75rem;
@@ -125,11 +222,37 @@
   background: var(--surface);
 }
 
-/* Taken blocks are the ones that will be in the file. The tint is the answer
-   to "what am I about to save", read at a glance. */
-.blockTaken {
-  border-color: var(--accent-line);
-  background: var(--accent-soft);
+/* Where Previous and Next are standing. Marked on both halves at once, since
+   they are one decision, and by an outline rather than a fill so it does not
+   compete with the tint that means "this is going into the file". */
+.blockCurrent {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  scroll-margin: 2rem;
+}
+
+/* A block always carries a rail in its side's colour, faint until it is taken.
+   Taken blocks are the ones that will be in the file, and their tint is the one
+   the Output uses for those same lines — the answer to "what am I about to
+   save" is the same colour in both places. */
+.block[data-side='ours'] {
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--ours) 35%, transparent);
+}
+
+.block[data-side='theirs'] {
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--theirs) 35%, transparent);
+}
+
+.blockTaken[data-side='ours'] {
+  border-color: var(--ours);
+  background: var(--ours-bg);
+  box-shadow: inset 3px 0 0 var(--ours);
+}
+
+.blockTaken[data-side='theirs'] {
+  border-color: var(--theirs);
+  background: var(--theirs-bg);
+  box-shadow: inset 3px 0 0 var(--theirs);
 }
 
 .blockPick {
@@ -145,20 +268,37 @@
   font-size: 0.6875rem;
 }
 
+/* "auto" and "edited": why a box is ticked, or what happened to the lines
+   under it. Words rather than another colour — the two colours in this screen
+   already mean "which side", and a third would be read as a third side. */
+.blockTag {
+  padding: 0 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--surface-raised);
+  color: var(--faint);
+  font-size: 0.625rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .blockCode {
   border-top: 1px solid var(--border-subtle);
   padding-top: 0.3rem;
   padding-bottom: 0.3rem;
 }
 
-/* The result. Same height priority as one pane — it is the thing being built,
-   and a preview nobody can read is not a preview. */
+/* The result. Its height is dragged, not fixed: a file whose conflicts are
+   three lines each wants a different split from one where they are forty, and
+   a preview nobody can read is not a preview. `flex-basis` comes from the
+   component; `flex: 0 0 auto` here is what makes that basis the height. */
 .output {
   display: flex;
-  flex: 0 0 34%;
+  flex: 0 0 auto;
   flex-direction: column;
   min-height: 0;
-  border-top: 1px solid var(--border);
+  /* No border of its own: the draggable edge above it is the divider now, and
+     a border under it read as a six-pixel line. */
   background: var(--surface);
 }
 
@@ -185,10 +325,104 @@
   flex-direction: column;
   overflow: auto;
   background: var(--bg);
+  /* Follows the sides above by proportion, not by line: the output leaves out
+     every undecided block, so it is a shorter file than they are. */
+  scroll-behavior: auto;
 }
 
 .line {
   white-space: pre;
+}
+
+/* What a decision actually put in the file.
+
+   Agreed lines are left alone, so the tinted runs are exactly the ones a choice
+   produced — which is the question this pane is asked: "what did I change?".
+   The tint is a background plus a rail on the left, never colour alone, and the
+   two sides are told apart the way the rest of the app tells added from
+   deleted. `data-origin` carries the same fact for anything that cannot see a
+   colour at all. */
+.fromSame,
+.fromOurs,
+.fromTheirs {
+  display: flex;
+  flex-direction: column;
+}
+
+.fromOurs {
+  background: var(--ours-bg);
+  box-shadow: inset 3px 0 0 var(--ours);
+}
+
+.fromTheirs {
+  background: var(--theirs-bg);
+  box-shadow: inset 3px 0 0 var(--theirs);
+}
+
+/* The block Previous and Next are standing on, marked down here too, so the
+   pane says which of its runs the navigation is talking about. */
+.fromOurs[data-current='true'],
+.fromTheirs[data-current='true'] {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  scroll-margin: 2rem;
+}
+
+/* Every run of the result is editable, so every run says so on hover and can be
+   reached from the keyboard. The affordance is a tint, not a border: a box
+   drawn around each run would turn a readable file into a stack of cards. */
+.fromSame,
+.fromOurs,
+.fromTheirs {
+  cursor: text;
+}
+
+.fromSame:hover,
+.fromOurs:hover,
+.fromTheirs:hover {
+  background-image: linear-gradient(var(--surface-hover), var(--surface-hover));
+}
+
+.fromSame:focus-visible,
+.fromOurs:focus-visible,
+.fromTheirs:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Lines a person typed over. The run keeps the colour of the side it came from
+   — that is still where it came from — and gains a dashed rail, because the
+   panes above no longer show what the index said for these lines. */
+.editedRun {
+  box-shadow: inset 3px 0 0 var(--warning);
+}
+
+/* Editing happens in the run's own place, at the run's own size, so the result
+   does not jump under the caret. Transparent, so the tint of the side it came
+   from is still behind the text being typed. */
+.editor {
+  width: 100%;
+  padding: 0.15rem 0.6rem;
+  border: 1px solid var(--accent-line);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--fg-strong);
+  font-family: ui-monospace, 'Cascadia Mono', 'Consolas', monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  resize: vertical;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+.editor:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.hint {
+  color: var(--faint);
+  font-size: 0.6875rem;
 }
 
 .footer {

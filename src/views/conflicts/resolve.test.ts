@@ -2,12 +2,17 @@ import { describe, expect, it } from 'vitest';
 import {
   assemble,
   assembleLines,
+  assembleSegments,
+  autoCount,
   buildBlocks,
+  buildMergedBlocks,
   choose,
   chooseAll,
   conflictCount,
+  editLines,
   endsWithNewline,
   MAX_LINES,
+  navigable,
   toLines,
   tooLargeToCompare,
   undecided,
@@ -66,6 +71,166 @@ describe('buildBlocks', () => {
   it('handles one side being empty', () => {
     const blocks = blocksFor('', 'new\nfile\n');
     expect(conflicts(blocks)[0]).toMatchObject({ ours: [], theirs: ['new', 'file'] });
+  });
+});
+
+describe('buildMergedBlocks', () => {
+  /** The three stages, as lines. */
+  function merged(base: string, ours: string, theirs: string): Block[] {
+    return buildMergedBlocks(toLines(base), toLines(ours), toLines(theirs));
+  }
+
+  it('applies a change only theirs made, without asking', () => {
+    // Ours never touched the line. There is no choice to offer: "keep the
+    // version nobody edited" is not an answer anyone wants.
+    const blocks = merged('a\nb\nc\n', 'a\nb\nc\n', 'a\nB\nc\n');
+    const conflict = conflicts(blocks)[0];
+
+    expect(conflict).toMatchObject({ ours: ['b'], theirs: ['B'], choice: 'theirs' });
+    expect(conflict?.auto).toBe(true);
+    expect(assembleLines(blocks)).toEqual(['a', 'B', 'c']);
+    expect(undecided(blocks)).toHaveLength(0);
+  });
+
+  it('applies a change only ours made, without asking', () => {
+    const blocks = merged('a\nb\nc\n', 'a\nB\nc\n', 'a\nb\nc\n');
+    expect(conflicts(blocks)[0]).toMatchObject({ choice: 'ours', auto: true });
+    expect(assembleLines(blocks)).toEqual(['a', 'B', 'c']);
+  });
+
+  it('leaves a line both sides changed differently undecided', () => {
+    // This is the only thing git calls a conflict, and the only thing a person
+    // has to read.
+    const blocks = merged('a\nb\nc\n', 'a\nmine\nc\n', 'a\nyours\nc\n');
+    expect(conflicts(blocks)[0]).toMatchObject({ choice: null });
+    expect(conflicts(blocks)[0]?.auto).toBeUndefined();
+    expect(undecided(blocks)).toHaveLength(1);
+    expect(assembleLines(blocks)).toEqual(['a', 'c']);
+  });
+
+  it('keeps a change both sides made identically, once', () => {
+    const blocks = merged('a\nb\nc\n', 'a\nB\nc\n', 'a\nB\nc\n');
+    expect(assembleLines(blocks)).toEqual(['a', 'B', 'c']);
+    expect(undecided(blocks)).toHaveLength(0);
+  });
+
+  it('applies an insertion one side made', () => {
+    const blocks = merged('a\nb\n', 'a\nb\n', 'a\nnew\nb\n');
+    expect(conflicts(blocks)[0]).toMatchObject({
+      ours: [],
+      theirs: ['new'],
+      choice: 'theirs',
+      auto: true,
+    });
+    expect(assembleLines(blocks)).toEqual(['a', 'new', 'b']);
+  });
+
+  it('applies a deletion one side made', () => {
+    const blocks = merged('a\ngone\nb\n', 'a\nb\n', 'a\ngone\nb\n');
+    expect(assembleLines(blocks)).toEqual(['a', 'b']);
+    expect(undecided(blocks)).toHaveLength(0);
+  });
+
+  it('drops lines both sides deleted, and asks nothing', () => {
+    const blocks = merged('a\ngone\nb\n', 'a\nb\n', 'a\nb\n');
+    expect(assembleLines(blocks)).toEqual(['a', 'b']);
+    expect(conflictCount(blocks)).toBe(0);
+  });
+
+  it('mixes automatic and real decisions in one file', () => {
+    const blocks = merged(
+      'a\nb1\nb\nb2\nc\nb3\nd\n',
+      'a\nmine1\nb\nmine2\nc\nb3\nd\n',
+      'a\nb1\nb\nyours2\nc\nb3\nd\n',
+    );
+
+    expect(conflictCount(blocks)).toBe(2);
+    expect(autoCount(blocks)).toBe(1);
+    // Only the block both sides moved is put to the user, and it is the only
+    // one Previous/Next will stop on.
+    expect(undecided(blocks)).toHaveLength(1);
+    expect(navigable(blocks).map((block) => block.id)).toEqual([1]);
+  });
+
+  it('keeps the untouched text out of the decisions entirely', () => {
+    const blocks = merged('a\nb\nc\n', 'a\nb\nc\n', 'a\nb\nc\n');
+    expect(blocks).toEqual([{ kind: 'same', lines: ['a', 'b', 'c'] }]);
+  });
+
+  it('handles a side that deleted the whole file', () => {
+    const blocks = merged('a\nb\n', '', 'a\nb\n');
+    expect(assembleLines(blocks)).toEqual([]);
+    expect(undecided(blocks)).toHaveLength(0);
+  });
+
+  it('asks about everything when the ancestor shares nothing with either side', () => {
+    // No anchor anywhere: the whole file is one disagreement, which is the
+    // truthful answer rather than a pile of invented small ones.
+    const blocks = merged('x\ny\n', 'a\nb\n', 'c\nd\n');
+    expect(conflictCount(blocks)).toBe(1);
+    expect(undecided(blocks)).toHaveLength(1);
+  });
+
+  it('numbers its conflicts from zero, like the two-sided build', () => {
+    const blocks = merged('a\nb1\nb\nb2\nc\n', 'a\nm1\nb\nm2\nc\n', 'a\ny1\nb\ny2\nc\n');
+    expect(conflicts(blocks).map((block) => block.id)).toEqual([0, 1]);
+  });
+});
+
+describe('navigable', () => {
+  it('walks past what the merge already decided', () => {
+    const blocks = buildMergedBlocks(
+      toLines('a\nb\nc\n'),
+      toLines('a\nB\nc\n'),
+      toLines('a\nb\nc\n'),
+    );
+    expect(navigable(blocks)).toHaveLength(0);
+  });
+
+  it('offers every block when nothing was decided for the user', () => {
+    const blocks = blocksFor('a\nx\nb\n', 'a\nX\nb\n');
+    expect(navigable(blocks).map((block) => block.id)).toEqual([0]);
+  });
+});
+
+describe('editing a run of the result', () => {
+  it('replaces the lines and says the block was touched', () => {
+    const blocks = choose(blocksFor('one\nmine\ntwo\n', 'one\nyours\ntwo\n'), 0, 'ours');
+    const index = blocks.findIndex((block) => block.kind === 'conflict');
+
+    const after = editLines(blocks, index, 'ours', ['neither', 'but this']);
+
+    // The edit goes into the block, so `assemble` stays the one thing that
+    // builds the file — there is no second copy of the result to drift.
+    expect(assembleLines(after)).toEqual(['one', 'neither', 'but this', 'two']);
+    expect(conflicts(after)[0]?.edited).toBe(true);
+  });
+
+  it('can rewrite lines both sides agreed on', () => {
+    const blocks = choose(blocksFor('one\nmine\ntwo\n', 'one\nyours\ntwo\n'), 0, 'ours');
+    const after = editLines(blocks, 0, 'lines', ['ONE']);
+    expect(assembleLines(after)).toEqual(['ONE', 'mine', 'two']);
+  });
+
+  it('lets a run be emptied, and never mutates what it was given', () => {
+    const blocks = choose(blocksFor('one\nmine\ntwo\n', 'one\nyours\ntwo\n'), 0, 'ours');
+    const index = blocks.findIndex((block) => block.kind === 'conflict');
+
+    expect(assembleLines(editLines(blocks, index, 'ours', []))).toEqual(['one', 'two']);
+    expect(conflicts(blocks)[0]?.ours).toEqual(['mine']);
+  });
+
+  it('addresses runs by exactly what the output pane hands back', () => {
+    // The segment carries the address; a mismatch here would write an edit into
+    // a different part of the file than the one on screen.
+    const blocks = choose(blocksFor('one\nmine\ntwo\n', 'one\nyours\ntwo\n'), 0, 'both');
+    const segments = assembleSegments(blocks);
+    const theirs = segments.find((segment) => segment.origin === 'theirs');
+
+    const after = editLines(blocks, theirs?.blockIndex ?? -1, theirs?.part ?? 'lines', [
+      'typed',
+    ]);
+    expect(assembleLines(after)).toEqual(['one', 'mine', 'typed', 'two']);
   });
 });
 

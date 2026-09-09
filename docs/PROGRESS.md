@@ -60,6 +60,15 @@
   (`changesFileList`). Shift-ranges follow the rows as drawn and never reach
   into a folded directory; the selection now holds rows and expands to action
   paths at the point of acting, so a selected rename stages both halves.
+- **The conflict screen is a three-way merge** (2026-09-09, ADR-0049): stage 1
+  is no longer read and discarded — a run only one side moved away from the
+  ancestor is applied and ticked (`auto`), and only what both sides changed is
+  a question. Previous / Next walk those, and the screen opens on the first.
+  Green for ours and blue for theirs, from the buttons through the panes to the
+  runs of the Output, and any run of the Output is editable in place (the text
+  goes back into the block, so `assemble` is still the only thing that builds
+  the file). Add/add has no base and still asks about everything. Not used by
+  hand in the running app yet.
 - **A remote branch can be deleted from its row** (2026-09-08, ADR-0048):
   `push <remote> --delete refs/heads/<branch>` behind a confirmation that says
   it goes for everyone, with `git push <remote> <oid>:refs/heads/<branch>` kept
@@ -241,6 +250,25 @@
   until `buildPushCommand` emits a `<local>:<upstream>` refspec.
 
 ## Session log
+
+### 2026-09-09 — the conflict screen learns what a conflict is
+
+"A tela de resolução de conflitos precisa ser mais
+inteligente" — over a file where four of the four blocks were checkboxes beside
+the words *nothing on this side*. The screen was asking about every
+*difference* between stages 2 and 3, not about every *conflict*: stage 1 was
+being read and thrown away. It is now a real three-way merge (ADR-0049,
+`buildMergedBlocks`): a run only one side moved away from the base is applied,
+ticked and labelled `auto`; only runs both sides changed differently stay
+undecided. Previous / Next walk exactly those, and the screen opens standing on
+the first one. The two sides are green and blue from the buttons through the
+panes to the runs of the Output, and any run of the Output can be edited in
+place — double-click, or Enter on it — with the text written back into the
+block it came from, so `assemble` stays the only thing that builds the file.
+An add/add conflict has no ancestor and still asks about everything.
+
+Not used by hand in the running app yet. `npm test` 2247 passing, lint, format
+and build clean.
 
 ### 2026-09-08 (later still) — deleting a branch on the remote
 
