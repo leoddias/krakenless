@@ -60,12 +60,24 @@
   (`changesFileList`). Shift-ranges follow the rows as drawn and never reach
   into a folded directory; the selection now holds rows and expands to action
   paths at the point of acting, so a selected rename stages both halves.
+- **A force push exists** (2026-09-08, ADR-0047): offered only on a branch
+  whose upstream has commits it does not, behind a danger confirmation, and
+  always `--force-with-lease=refs/heads/<branch>:<oid>` with the oid the branch
+  list held — never the bare flag (this app's own background fetch would renew
+  that lease) and never `--force`. A refused lease is its own error kind,
+  `stale-info`, and the success notice carries the oid as the way back. The
+  lease oid and the count in the question come from **one** `for-each-ref`
+  read (`leaseRead`), and the button refuses while that read and the status
+  disagree — the safety review caught them being refreshed at different
+  moments by the auto-fetch, which now re-reads the status after fetching too.
+  Proven against the real binary in `src/git/forcepush.integration.test.ts`.
+  Not used by hand yet.
 - **The remote toolbar shows success in green**: the button that just
   finished gets a check, a green tint and one pulse (none under
   `prefers-reduced-motion`), and goes back to normal after five seconds while
   the outcome line — green, with a check — stays. Announced through
   `data-done` too.
-- **Test status:** `npm test` 2141 passing (101 files), `cargo test` 108 passing;
+- **Test status:** `npm test` 2190 passing (102 files), `cargo test` 108 passing;
   oxlint, prettier and clippy clean. `cargo fmt` is *not* clean and never has
   been — see `docs/ROADMAP.md` § Backlog.
 - **Git no longer runs on the UI thread** (ADR-0028). Every git command used to
@@ -223,6 +235,43 @@
   until `buildPushCommand` emits a `<local>:<upstream>` refspec.
 
 ## Session log
+
+### 2026-09-08 (later) — the force push, and the lease that makes it allowed
+
+"Eu deveria poder fazer git push force --with-lease", over a screenshot of a
+branch 1 ahead and 1 behind with Push greyed out. The toolbar now grows a
+Force push button in exactly that state (ADR-0047).
+
+The part that took the thinking is the lease. Git's bare `--force-with-lease`
+leases against the local remote-tracking ref — which this app's own five-minute
+background fetch updates, silently renewing the lease over commits the user
+never saw. So the lease carries an explicit oid, the one the branch list held
+when the question was asked, and when that oid is unknown the button is refused
+rather than falling back to the bare flag. `PushOptions.forceWithLease` is
+`{ expect }` now, guarded by a new `assertOid`, and the old builder comment
+that said "not safe to expose until the lease carries an explicit oid" is
+finally answered.
+
+Four integration tests against the real binary, because none of this is
+assertable from an argument array: that git accepts the explicit lease form at
+all, that a moved remote makes it refuse and leaves the other clone's commit
+where it was, that the refusal says "stale info" (now its own error kind, so
+the user is not told to "pull first" after asking to overwrite), and that the
+recovery — fetch, look, lease against what arrived — goes through.
+
+The `safety-reviewer` earned its place in the loop here: it found that the
+lease oid (branch list, refreshed *after* the background fetch) and the "n
+behind" in the question (status, refreshed *before* it) came from two reads a
+fetch could land between — a dialog saying "dropping 1 commit" over a lease
+that matched a remote holding four. Both now come from one `for-each-ref`
+read, the button refuses while the two reads disagree, the auto-fetch re-reads
+the status after fetching, the confirmed intent is re-derived at click time in
+case the branch moved while the dialog was open, and the success notice keeps
+the oid as `git branch recovered-…`.
+
+Not used by hand in the running app yet. `npm test` 2190 passing. oxlint has
+one new warning (`react(refs)` on the gate ref the re-check reads), the same
+shape ChangesView already carries.
 
 ### 2026-09-08 — the working-tree lists get the tree too
 

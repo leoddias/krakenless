@@ -218,6 +218,13 @@ export interface Gate {
   branchesState: Loadable<Branch[]>['state'];
   /** Remote chosen for publishing a branch that has no upstream, if any. */
   publishRemote: string | null;
+  /**
+   * The branch list's own answer to "where is the upstream, and how far apart
+   * are we" — one read, so the oid a force push leases against and the count
+   * its question names cannot come from different moments. `null` means "not
+   * known", and a force push is refused rather than leased against a guess.
+   */
+  lease: LeaseRead | null;
 }
 
 /**
@@ -396,6 +403,163 @@ export function pushIntent(gate: Gate): PushIntent | null {
   }
   if (gate.upstream.kind !== 'tracking') return null;
   return { remote: gate.upstream.upstream.remote, branch: gate.upstream.branch };
+}
+
+/**
+ * One read of the branch list, holding both halves a force push needs.
+ *
+ * The oid and the counts have to come from the *same* git invocation, and this
+ * is the type that makes that structural rather than a promise in a comment.
+ */
+export interface LeaseRead {
+  /** Where the remote branch was: the value the push is leased against. */
+  oid: string;
+  /** Commits this branch has that the remote does not, from the same read. */
+  ahead: number;
+  /** Commits the remote has that this branch does not, from the same read. */
+  behind: number;
+}
+
+/**
+ * What a force push would lease against, read entirely from the branch list.
+ *
+ * `git for-each-ref` reports the remote branch's oid and the local branch's
+ * ahead/behind in one invocation, and taking both from it is the point. The
+ * first version of this read the oid here and the counts from `git status`,
+ * which are refreshed at different moments: the background fetch (ADR-0025)
+ * re-reads the status *before* it fetches and the branch list *after*, so a
+ * tick that brought three commits left the app holding a fresh oid and a count
+ * that predated them. The lease would then match the remote exactly — renewed
+ * by this app's own fetch, over commits the user was told did not exist, which
+ * is precisely the failure the explicit oid exists to prevent.
+ *
+ * `null` whenever either half is missing: an unread branch list, a
+ * remote-tracking ref that is gone, an upstream this panel could not parse, or
+ * a local branch git reported no counts for. A force push is refused then,
+ * never leased against a guess.
+ */
+export function leaseRead(
+  branches: Loadable<Branch[]>,
+  upstream: UpstreamState,
+): LeaseRead | null {
+  if (branches.state !== 'ready' || upstream.kind !== 'tracking') return null;
+
+  const name = `${upstream.upstream.remote}/${upstream.upstream.branch}`;
+  const remote = branches.value.find(
+    (branch) => branch.remote && branch.name === name && branch.oid.length > 0,
+  );
+  if (remote === undefined) return null;
+
+  // The local branch from the same read, for the counts. Matched on `current`
+  // as well as the name: a branch called `main` in a repository whose HEAD is
+  // elsewhere would contribute counts about a branch nobody is pushing.
+  const local = branches.value.find(
+    (branch) => !branch.remote && branch.current && branch.name === upstream.branch,
+  );
+  if (local === undefined) return null;
+
+  return { oid: remote.oid, ahead: local.ahead, behind: local.behind };
+}
+
+/**
+ * Why a force push cannot be offered right now, or `null` when it can.
+ *
+ * Offered only where an ordinary push is refused for the one reason a force
+ * push answers: the remote has commits this branch does not. Everything else
+ * that blocks a push blocks this too — and two conditions are its own. The
+ * upstream oid has to be known, because the lease is the entire safety story
+ * and a push without one is a `--force` wearing a longer name. And the branch
+ * has to have commits of its own: pushing an ancestor over the remote deletes
+ * work and adds nothing, which is a `git push --delete` written the hard way.
+ */
+export function forcePushBlock(gate: Gate): string | null {
+  const shared = sharedBlock(gate);
+  if (shared !== null) return shared;
+
+  if (gate.upstream.kind !== 'tracking') {
+    return 'A force push replaces a branch on its remote, so it needs a branch that tracks one.';
+  }
+  const { branch, upstream, ahead, behind } = gate.upstream;
+  if (upstream.branch !== branch) {
+    return `This branch tracks ${upstream.remote}/${upstream.branch}, which has a different name. Krakenless only pushes a branch to its own name.`;
+  }
+  if (ahead === undefined || behind === undefined) {
+    return 'Git did not report how this branch compares to its upstream, and Krakenless will not overwrite a remote on an unknown comparison. Fetch first.';
+  }
+  if (behind === 0) {
+    return 'The upstream has nothing this branch is missing, so an ordinary push is enough.';
+  }
+  if (gate.lease === null) {
+    return `Krakenless does not know where ${upstream.remote}/${upstream.branch} is, so it cannot lease the push against it. Fetch, then try again.`;
+  }
+  // Two reads of the same question, and they disagree. The status is re-read
+  // on a different schedule from the branch list, so this is what a fetch
+  // landing between them looks like — and while it lasts, the counts on screen
+  // are not the counts the lease belongs to. Refusing costs a click; agreeing
+  // would be a confirmation given over a panel that is lying.
+  if (gate.lease.behind !== behind || gate.lease.ahead !== ahead) {
+    return 'Krakenless has two different answers for how far apart this branch and its upstream are, which means something moved between two reads. Fetch, look at the counts again, then decide.';
+  }
+  if (ahead === 0) {
+    return `This branch has no commits ${upstream.remote}/${upstream.branch} does not, so a force push would only delete work. Nothing here would replace it.`;
+  }
+  return null;
+}
+
+/** Exactly what a force push would send, or `null` when it must not run. */
+export interface ForcePushIntent {
+  remote: string;
+  branch: string;
+  /** The remote-tracking oid the lease is taken against. */
+  expect: string;
+  /**
+   * Commits the remote has that this branch does not — what the push drops.
+   * Carried on the intent, from the same read as `expect`, so the question and
+   * the lease cannot describe two different moments.
+   */
+  behind: number;
+}
+
+/**
+ * The force-push decision, re-derived from the gate for the reason
+ * {@link pushIntent} is: the button's `disabled` attribute is a rendering
+ * detail, and the refusals behind it are the difference between overwriting a
+ * branch the user was shown and overwriting another one.
+ */
+export function forcePushIntent(gate: Gate): ForcePushIntent | null {
+  if (forcePushBlock(gate) !== null) return null;
+  if (gate.upstream.kind !== 'tracking' || gate.lease === null) return null;
+  return {
+    remote: gate.upstream.upstream.remote,
+    branch: gate.upstream.branch,
+    expect: gate.lease.oid,
+    behind: gate.lease.behind,
+  };
+}
+
+/**
+ * The question a force push asks, and the confirmation reason it mints.
+ *
+ * It has to say the three things the user is agreeing to, because this is the
+ * one operation in the app that can destroy work belonging to *other people*:
+ * how many of their commits stop being on that branch, that the replacement is
+ * this branch as it stands, and that the lease means a remote which moved
+ * since the last fetch is a refusal rather than a wider overwrite. The oid is
+ * spelled out — abbreviated for reading — because it is what the lease is
+ * taken against and what `git cat-file` needs afterwards to find the commits
+ * again.
+ */
+export function forcePushQuestion(intent: ForcePushIntent): string {
+  const remoteRef = `${intent.remote}/${intent.branch}`;
+  const commits = intent.behind === 1 ? '1 commit' : `${intent.behind} commits`;
+  return (
+    `Replace ${remoteRef} with your ${intent.branch}, dropping ${commits} that ` +
+    `${remoteRef} has and yours does not. Those commits stay in your repository for now ` +
+    `— ${intent.expect.slice(0, 10)} is where that branch was — but anyone who has ` +
+    `already pulled them will have to reconcile by hand, and on the remote they are ` +
+    `off the branch. Krakenless leases the push against ${intent.expect.slice(0, 10)}: ` +
+    `if ${remoteRef} has moved since the last fetch, git refuses and nothing is overwritten.`
+  );
 }
 
 function sharedBlock(gate: Gate): string | null {

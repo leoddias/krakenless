@@ -140,7 +140,7 @@ export async function push(
   options: PushOptions,
   confirmation?: Confirmation,
 ): Promise<unknown> {
-  if (options.forceWithLease === true) {
+  if (options.forceWithLease !== undefined) {
     if (confirmation === undefined) {
       throw new GitError(
         'needs-confirmation',

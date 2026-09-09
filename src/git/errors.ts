@@ -63,6 +63,16 @@ const NON_FAST_FORWARD = [
   /updates were rejected because the (tip of your current branch is behind|remote contains work)/i,
 ];
 
+/**
+ * A lease push git refused: the remote is not where the app said it was.
+ *
+ * This is the whole point of `--force-with-lease`, so it gets its own kind and
+ * its own sentence. Reported as `command-failed` it would arrive as
+ * "error: failed to push some refs", which reads like a network problem
+ * instead of "somebody else pushed, and Krakenless did not overwrite them".
+ */
+const STALE_INFO = [/\[rejected\][^\n]*\(stale info\)/i];
+
 const CONFLICT = [
   /^CONFLICT \(/m,
   /automatic merge failed/i,
@@ -100,6 +110,16 @@ export function classifyFailure(args: string[], output: GitOutput): GitError {
     return new GitError(
       'diverged',
       'This branch and its upstream have diverged: both have commits the other does not. A fast-forward pull is impossible — merge the upstream to combine them.',
+      context,
+    );
+  }
+  // Before the non-fast-forward check: a refused lease is also a rejection,
+  // and "pull first, then push again" is the wrong advice for it — the user
+  // asked to overwrite, and what changed is that somebody else pushed.
+  if (STALE_INFO.some((pattern) => pattern.test(announced))) {
+    return new GitError(
+      'stale-info',
+      'The remote has moved since Krakenless last read it, so the force push was refused and nothing was overwritten. Fetch, look at what arrived, and decide again.',
       context,
     );
   }

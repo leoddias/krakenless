@@ -205,3 +205,32 @@ describe('classifyFailure', () => {
     );
   });
 });
+
+describe('classifyFailure — a refused lease', () => {
+  // Git's own wording, from the integration test that pushes over a moved
+  // remote. It is a rejection, like a non-fast-forward, and the advice for the
+  // two is opposite: "pull first" is wrong for someone who asked to overwrite.
+  const stale = [
+    ' ! [rejected]        main -> main (stale info)',
+    'error: failed to push some refs to /tmp/origin',
+  ].join('\n');
+
+  it('is its own kind, not a non-fast-forward', () => {
+    const error = classifyFailure(['push'], output({ stderr: stale }));
+
+    expect(error.kind).toBe('stale-info');
+    expect(error.message).toMatch(/moved since/);
+    expect(error.message).toMatch(/nothing was overwritten/i);
+  });
+
+  it('does not swallow an ordinary rejection', () => {
+    const rejected = [
+      ' ! [rejected]        main -> main (non-fast-forward)',
+      'error: failed to push some refs',
+    ].join('\n');
+
+    expect(classifyFailure(['push'], output({ stderr: rejected })).kind).toBe(
+      'non-fast-forward',
+    );
+  });
+});

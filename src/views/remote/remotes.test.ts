@@ -2,9 +2,14 @@ import { describe, expect, it } from 'vitest';
 import type { Branch, RepoStatus } from '../../git/types';
 import type { Loadable } from '../../state/store';
 import {
+  BUSY_REASON,
   candidateRemotes,
   divergence,
   fetchBlock,
+  forcePushBlock,
+  forcePushIntent,
+  forcePushQuestion,
+  leaseRead,
   parseUpstream,
   pullBlock,
   pullMergeQuestion,
@@ -57,6 +62,7 @@ function gate(overrides: Partial<Gate> = {}): Gate {
     },
     branchesState: 'ready',
     publishRemote: 'origin',
+    lease: { oid: 'c'.repeat(40), ahead: 1, behind: 2 },
     ...overrides,
   };
 }
@@ -571,5 +577,269 @@ describe('pushIntent', () => {
     ],
   ])('refuses to push with %s', (_case, blocked) => {
     expect(pushIntent(blocked)).toBeNull();
+  });
+});
+
+describe('leaseRead', () => {
+  const tracking = {
+    kind: 'tracking' as const,
+    branch: 'main',
+    upstream: { remote: 'origin', branch: 'main' },
+    ahead: 1,
+    behind: 1,
+  };
+
+  /** The branch list as git reports it: the local branch and its remote one. */
+  function list(overrides: { ahead?: number; behind?: number; oid?: string } = {}) {
+    return {
+      state: 'ready' as const,
+      value: [
+        branch({
+          name: 'main',
+          current: true,
+          upstream: 'origin/main',
+          ahead: overrides.ahead ?? 1,
+          behind: overrides.behind ?? 2,
+        }),
+        branch({
+          name: 'origin/main',
+          remote: true,
+          oid: overrides.oid ?? 'c'.repeat(40),
+        }),
+      ],
+    };
+  }
+
+  it('takes the oid and both counts from the one read', () => {
+    // The whole point: `git for-each-ref` answers "where is the remote branch"
+    // and "how far apart are we" in a single invocation, and a force push puts
+    // both halves in one sentence.
+    expect(leaseRead(list(), tracking)).toEqual({
+      oid: 'c'.repeat(40),
+      ahead: 1,
+      behind: 2,
+    });
+  });
+
+  it('is null when the branch list has not been read', () => {
+    // "Not known" is not "not there". A force push leases against this value,
+    // so a guess here is a guess about whose commits get overwritten.
+    expect(leaseRead({ state: 'loading' }, tracking)).toBeNull();
+    expect(leaseRead({ state: 'idle' }, tracking)).toBeNull();
+  });
+
+  it('is null when the remote-tracking ref is not in the list', () => {
+    expect(
+      leaseRead(
+        {
+          state: 'ready',
+          value: [branch({ name: 'main', current: true })],
+        },
+        tracking,
+      ),
+    ).toBeNull();
+  });
+
+  it('never reads a local branch of the same name as the remote one', () => {
+    // `main` and `origin/main` are different refs, and on a diverged branch
+    // they are different commits — leasing against the local one would say
+    // "the remote is where I am", which is exactly the false lease.
+    expect(
+      leaseRead(
+        {
+          state: 'ready',
+          value: [
+            branch({ name: 'main', current: true }),
+            branch({ name: 'origin/main', remote: false, oid: 'e'.repeat(40) }),
+          ],
+        },
+        tracking,
+      ),
+    ).toBeNull();
+  });
+
+  it('takes the counts from the checked-out branch, not one that shares its name', () => {
+    expect(
+      leaseRead(
+        {
+          state: 'ready',
+          value: [
+            branch({ name: 'main', current: false, ahead: 9, behind: 9 }),
+            branch({ name: 'origin/main', remote: true, oid: 'c'.repeat(40) }),
+          ],
+        },
+        tracking,
+      ),
+    ).toBeNull();
+  });
+
+  it('is null off a tracking branch', () => {
+    expect(leaseRead(list(), { kind: 'detached' })).toBeNull();
+    expect(leaseRead(list(), { kind: 'no-upstream', branch: 'main' })).toBeNull();
+  });
+});
+
+describe('forcePushBlock', () => {
+  const diverged = {
+    kind: 'tracking' as const,
+    branch: 'main',
+    upstream: { remote: 'origin', branch: 'main' },
+    ahead: 1,
+    behind: 2,
+  };
+
+  it('allows it on a diverged branch whose upstream oid is known', () => {
+    expect(forcePushBlock(gate({ upstream: diverged }))).toBeNull();
+  });
+
+  it('refuses without the oid to lease against', () => {
+    // Git's bare `--force-with-lease` would push here, leasing against
+    // whatever the last background fetch wrote — a lease that renews itself.
+    expect(forcePushBlock(gate({ upstream: diverged, lease: null }))).toMatch(
+      /cannot lease the push against it/,
+    );
+  });
+
+  it('refuses when the two reads of the counts disagree', () => {
+    // The background fetch re-reads the status before it fetches and the
+    // branch list after, so a tick that brought commits leaves a fresh oid
+    // beside a stale count. Agreeing here would be a confirmation given over a
+    // panel that is lying about how much it is about to drop.
+    expect(
+      forcePushBlock(
+        gate({
+          upstream: diverged,
+          lease: { oid: 'c'.repeat(40), ahead: 1, behind: 5 },
+        }),
+      ),
+    ).toMatch(/two different answers/);
+  });
+
+  it('refuses when the branch has nothing of its own to put there', () => {
+    expect(
+      forcePushBlock(
+        gate({
+          upstream: { ...diverged, ahead: 0, behind: 2 },
+          lease: { oid: 'c'.repeat(40), ahead: 0, behind: 2 },
+        }),
+      ),
+    ).toMatch(/only delete work/);
+  });
+
+  it('refuses when nothing needs overwriting', () => {
+    expect(
+      forcePushBlock(
+        gate({
+          upstream: { ...diverged, ahead: 3, behind: 0 },
+          lease: { oid: 'c'.repeat(40), ahead: 3, behind: 0 },
+        }),
+      ),
+    ).toMatch(/ordinary push is enough/);
+  });
+
+  it('refuses on counts git did not report', () => {
+    const unknown = {
+      kind: 'tracking' as const,
+      branch: 'main',
+      upstream: diverged.upstream,
+    };
+    expect(forcePushBlock(gate({ upstream: unknown }))).toMatch(/Fetch first/);
+  });
+
+  it('refuses when the upstream has another name', () => {
+    // The push builder writes `refs/heads/main:refs/heads/main`, so this would
+    // overwrite a branch whose counts were never on screen.
+    expect(
+      forcePushBlock(
+        gate({
+          upstream: { ...diverged, upstream: { remote: 'origin', branch: 'trunk' } },
+        }),
+      ),
+    ).toMatch(/different name/);
+  });
+
+  it('inherits every shared refusal', () => {
+    expect(forcePushBlock(gate({ upstream: diverged, repoOpen: false }))).toMatch(
+      /No repository/,
+    );
+    expect(forcePushBlock(gate({ upstream: diverged, busy: true }))).toBe(BUSY_REASON);
+    expect(forcePushBlock(gate({ upstream: diverged, hasConflicts: true }))).toMatch(
+      /merge is in progress/,
+    );
+    expect(forcePushBlock(gate({ upstream: diverged, statusState: 'error' }))).toMatch(
+      /could not be read/,
+    );
+  });
+
+  it('refuses off a tracking branch entirely', () => {
+    expect(forcePushBlock(gate({ upstream: { kind: 'detached' } }))).toMatch(
+      /tracks one/,
+    );
+  });
+});
+
+describe('forcePushIntent', () => {
+  const diverged = {
+    kind: 'tracking' as const,
+    branch: 'main',
+    upstream: { remote: 'origin', branch: 'main' },
+    ahead: 1,
+    behind: 2,
+  };
+
+  it('carries the remote, the branch, the oid and the count from one read', () => {
+    expect(forcePushIntent(gate({ upstream: diverged }))).toEqual({
+      remote: 'origin',
+      branch: 'main',
+      expect: 'c'.repeat(40),
+      behind: 2,
+    });
+  });
+
+  it('is null for every case the button was supposed to refuse', () => {
+    expect(forcePushIntent(gate({ upstream: diverged, busy: true }))).toBeNull();
+    expect(forcePushIntent(gate({ upstream: diverged, lease: null }))).toBeNull();
+    expect(
+      forcePushIntent(
+        gate({
+          upstream: { ...diverged, ahead: 0 },
+          lease: { oid: 'c'.repeat(40), ahead: 0, behind: 2 },
+        }),
+      ),
+    ).toBeNull();
+    // A lease whose counts disagree with the panel's is no intent at all.
+    expect(
+      forcePushIntent(
+        gate({ upstream: diverged, lease: { oid: 'c'.repeat(40), ahead: 1, behind: 7 } }),
+      ),
+    ).toBeNull();
+  });
+});
+
+describe('forcePushQuestion', () => {
+  const intent = {
+    remote: 'origin',
+    branch: 'main',
+    expect: 'c'.repeat(40),
+    behind: 2,
+  };
+
+  it('says how much of the remote branch it drops, and what the lease means', () => {
+    const question = forcePushQuestion(intent);
+
+    expect(question).toContain('Replace origin/main with your main');
+    expect(question).toContain('dropping 2 commits');
+    // The oid is in the sentence the user agrees to: it is what the lease is
+    // taken against, and what finds those commits again afterwards.
+    expect(question).toContain('cccccccccc');
+    expect(question).toMatch(
+      /if origin\/main has moved since the last fetch, git refuses/,
+    );
+  });
+
+  it('counts one commit as one', () => {
+    expect(forcePushQuestion({ ...intent, behind: 1 })).toContain(
+      'dropping 1 commit that',
+    );
   });
 });

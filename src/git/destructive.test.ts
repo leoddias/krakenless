@@ -12,6 +12,17 @@ describe('isDestructive', () => {
     [['branch', '--delete', 'topic']],
     [['push', '--force', 'origin', 'main']],
     [['push', '--force-with-lease', 'origin', 'main']],
+    // The exact shape `buildPushCommand` produces: the lease carries the ref
+    // and the oid, so the flag is no longer a bare token in the array.
+    [
+      [
+        'push',
+        '--progress',
+        `--force-with-lease=refs/heads/main:${'a'.repeat(40)}`,
+        'origin',
+        'refs/heads/main:refs/heads/main',
+      ],
+    ],
     [['push', 'origin', '+main:main']],
     [['push', '--delete', 'origin', 'topic']],
     [['stash', 'drop', 'stash@{0}']],

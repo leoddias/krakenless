@@ -84,8 +84,27 @@ describe('runFetch', () => {
     expect(gitFetch).toHaveBeenCalledWith(ROOT, { prune: true });
     expect(refreshBranches).toHaveBeenCalledTimes(1);
     expect(refreshCommits).toHaveBeenCalledTimes(1);
-    expect(refreshStatus).toHaveBeenCalledTimes(1);
     expect(refreshRemotes).toHaveBeenCalledTimes(1);
+    // Twice: once before the fetch, so a laptop that has been offline all
+    // afternoon still gets a current working tree, and once after, because
+    // the ahead/behind counts are exactly what the fetch just changed.
+    expect(refreshStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it('re-reads the status after the fetch, not only before it', async () => {
+    // The counts and the remote-tracking oid are two halves of one sentence
+    // when a force push asks its question (ADR-0047). Refreshing the branch
+    // list after the fetch and leaving the status where it was left the app
+    // holding a fresh oid beside a count that predated it.
+    movedRefs();
+
+    await runFetch(openStore(), ROOT);
+
+    const statusCalls = refreshStatus.mock.invocationCallOrder;
+    const fetchCall = gitFetch.mock.invocationCallOrder[0] as number;
+    expect(statusCalls).toHaveLength(2);
+    expect(statusCalls[0]).toBeLessThan(fetchCall);
+    expect(statusCalls[1]).toBeGreaterThan(fetchCall);
   });
 
   it('stays out of the way while a git operation is running', async () => {

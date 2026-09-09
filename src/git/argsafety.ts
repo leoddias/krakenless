@@ -156,3 +156,18 @@ export function assertRevision(rev: string): string {
   if (/\s/.test(rev)) reject('revision contains whitespace', rev);
   return rev;
 }
+
+/**
+ * A full object id, as git printed it: 40 hex characters (SHA-1) or 64
+ * (SHA-256), nothing else.
+ *
+ * Used where an oid becomes part of an argument rather than a whole one — the
+ * lease of a force push is `--force-with-lease=<ref>:<oid>`, so a value with a
+ * colon or a space in it would silently change what is being leased against.
+ * Abbreviations are refused too: the lease must name the exact commit the user
+ * was shown, and a short oid is a prefix that can grow ambiguous.
+ */
+export function assertOid(oid: string): string {
+  if (!/^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(oid)) reject('not a full object id', oid);
+  return oid;
+}

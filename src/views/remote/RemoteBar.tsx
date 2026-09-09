@@ -9,15 +9,17 @@
  * already renders the notice and two differently-worded copies of one failure
  * is how a user ends up trusting the wrong one. Every disabled button states
  * its reason in visible text next to it, since a disabled control cannot be
- * focused and its tooltip is never announced. And force push is deliberately
- * absent: the git layer refuses it without a confirmation token minted from a
- * dialog that does not exist yet, so offering the button would only produce an
- * error the user cannot act on.
+ * focused and its tooltip is never announced. And the force push appears only
+ * where it is the answer — a branch whose upstream has commits it does not —
+ * behind a confirmation that names how many of somebody else's commits come
+ * off that branch, and always leased against the oid this panel had on screen
+ * (ADR-0047). Plain `--force` exists nowhere in this app.
  */
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   fetchRemote,
+  forcePushCurrent,
   pullCurrent,
   pullMergeCurrent,
   pushCurrent,
@@ -33,16 +35,21 @@ import {
   candidateRemotes,
   divergence,
   fetchBlock,
+  forcePushBlock,
+  forcePushIntent,
+  forcePushQuestion,
+  leaseRead,
   pullBlock,
   pullMergeQuestion,
   pushBlock,
   pushIntent,
   readUpstream,
   summarize,
+  type ForcePushIntent,
   type Gate,
 } from './remotes';
 
-type ActionKind = 'fetch' | 'pull' | 'pull-merge' | 'push' | 'publish';
+type ActionKind = 'fetch' | 'pull' | 'pull-merge' | 'push' | 'publish' | 'force-push';
 
 /** The running line, which a blocked button points at while it is on screen. */
 const PROGRESS_ID = 'remote-progress';
@@ -57,6 +64,8 @@ interface Outcome {
    */
   repoRoot: string | null;
   branch: string | null;
+  /** Replaces the stock line when this failure has its own explanation. */
+  message?: string;
 }
 
 const RUNNING_LABEL: Record<ActionKind, string> = {
@@ -65,6 +74,7 @@ const RUNNING_LABEL: Record<ActionKind, string> = {
   'pull-merge': 'Pulling and merging…',
   push: 'Pushing…',
   publish: 'Publishing the branch…',
+  'force-push': 'Force-pushing…',
 };
 
 const SUCCESS_LABEL: Record<ActionKind, string> = {
@@ -74,6 +84,7 @@ const SUCCESS_LABEL: Record<ActionKind, string> = {
   'pull-merge': 'Pull finished. The upstream was merged into your branch.',
   push: 'Push finished.',
   publish: 'Branch published and set as the upstream.',
+  'force-push': 'Force push finished. The remote branch now matches yours.',
 };
 
 const FAILURE_LABEL: Record<ActionKind, string> = {
@@ -85,6 +96,9 @@ const FAILURE_LABEL: Record<ActionKind, string> = {
   'pull-merge': 'Pull did not complete.',
   push: 'Push did not complete. Nothing was published.',
   publish: 'Publishing did not complete. The branch still has no upstream.',
+  // The lease is the likeliest reason, and it is the good one: it means the
+  // remote moved and git refused rather than overwrote.
+  'force-push': 'Force push did not complete. The remote branch was left as it was.',
 };
 
 /**
@@ -159,9 +173,26 @@ export function RemoteBar(): ReactNode {
     upstream,
     branchesState: branches.state,
     publishRemote,
+    lease: leaseRead(branches, upstream),
   };
 
   const publishing = upstream.kind === 'no-upstream';
+
+  /*
+    The gate as of the latest render, for the confirmation dialogs.
+
+    A dialog's `run` closure is built in the render that opened it, so the gate
+    it captured is the one from that moment — which is exactly what a
+    confirmation must not act on for an operation that overwrites a remote.
+    Written in an effect rather than during render so no render ever reads it
+    mid-update. It is only as current as what the app has *observed*: a branch
+    moved in a terminal reaches this after the file watcher refreshes, and the
+    lease is what stands behind that.
+  */
+  const gateRef = useRef<Gate>(gate);
+  useEffect(() => {
+    gateRef.current = gate;
+  });
 
   /**
    * Turns a button green for a few seconds, and only that long.
@@ -265,8 +296,80 @@ export function RemoteBar(): ReactNode {
     );
   };
 
+  /**
+   * Asks before overwriting the remote branch, and never without a lease.
+   *
+   * The intent is re-derived from the gate rather than read off the button,
+   * and the question is built from that same intent — so the sentence the user
+   * agrees to names the branch, the count and the oid the push is actually
+   * leased against, not whatever the toolbar happened to render.
+   */
+  const onForcePush = (): void => {
+    const intent = forcePushIntent(gate);
+    if (intent === null) return;
+    setDialog({
+      kind: 'confirm',
+      title: `Force push ${intent.branch} over ${intent.remote}/${intent.branch}?`,
+      question: forcePushQuestion(intent),
+      confirmLabel: 'Force push',
+      danger: true,
+      run: (reason) => runForcePush(intent, reason),
+    });
+  };
+
+  /**
+   * Runs the force push the user agreed to — and only that one.
+   *
+   * The intent is re-derived and compared before anything is sent. Nothing
+   * locks the repository while the question is on screen: a commit, a reset or
+   * a rebase in a terminal moves the local branch, and the refspec sends
+   * whatever it points at *now*. The confirmation was about a particular set
+   * of commits replacing a particular remote oid, and if either half has moved
+   * the honest answer is to ask again rather than to push something else under
+   * the sentence the user read.
+   */
+  const runForcePush = async (agreed: ForcePushIntent, reason: string): Promise<void> => {
+    const now = forcePushIntent(gateRef.current);
+    if (
+      now === null ||
+      now.remote !== agreed.remote ||
+      now.branch !== agreed.branch ||
+      now.expect !== agreed.expect ||
+      now.behind !== agreed.behind
+    ) {
+      setOutcome({
+        kind: 'force-push',
+        ok: false,
+        repoRoot,
+        branch: branchNow,
+        message:
+          'The branch or its upstream moved while the question was on screen, so nothing was pushed. Look at the counts and decide again.',
+      });
+      celebrate(null);
+      return;
+    }
+    await run('force-push', () =>
+      forcePushCurrent(
+        store,
+        { remote: agreed.remote, branch: agreed.branch, expect: agreed.expect },
+        reason,
+      ),
+    );
+  };
+
   const summary = summarize(status);
   const pushReason = pushBlock(gate);
+  const forceReason = forcePushBlock(gate);
+  /*
+    The force push is not a permanent fourth control. It appears where it is
+    the answer to what the toolbar is showing — an upstream with commits this
+    branch does not have — and stays hidden otherwise, so the button that
+    overwrites other people's work is not sitting next to Push all day waiting
+    to be clicked by mistake. When it does appear and is still refused, the
+    reason strip says why, like every other blocked action here.
+  */
+  const forceOffered =
+    upstream.kind === 'tracking' && (upstream.behind ?? 0) > 0 && !publishing;
   // A status that is mid-refresh keeps the outcome on screen: it is the same
   // branch being re-read, usually by the refresh this very operation triggered.
   const outcomeApplies =
@@ -327,6 +430,20 @@ export function RemoteBar(): ReactNode {
       done: finished('push', 'publish'),
       onClick: onPush,
     },
+    ...(forceOffered
+      ? [
+          {
+            id: 'remote-force-push',
+            label: 'Force push',
+            icon: spinning('force-push', <PushIcon />),
+            reason: forceReason,
+            hint: `Replaces ${'branch' in upstream ? upstream.branch : 'this branch'} on the remote with your version, dropping the commits the remote has and you do not. Asks first, and is leased against the commit shown here — if the remote moved since the last fetch, git refuses.`,
+            danger: true,
+            done: finished('force-push'),
+            onClick: onForcePush,
+          },
+        ]
+      : []),
   ];
 
   /**
@@ -394,7 +511,8 @@ export function RemoteBar(): ReactNode {
             {outcome.ok && <CheckIcon size={12} className={styles.successIcon} />}
             {outcome.ok
               ? SUCCESS_LABEL[outcome.kind]
-              : `${FAILURE_LABEL[outcome.kind]} Krakenless is showing what git reported; read that message before trying again.`}
+              : (outcome.message ??
+                `${FAILURE_LABEL[outcome.kind]} Krakenless is showing what git reported; read that message before trying again.`)}
           </p>
         )}
       </div>
@@ -473,9 +591,9 @@ function pushHint(
   }
   if (upstream.kind === 'tracking') {
     const { remote, branch } = upstream.upstream;
-    return `Sends your commits to ${remote}/${branch}. Krakenless never force-pushes: if the remote has moved, git refuses and nothing is overwritten.`;
+    return `Sends your commits to ${remote}/${branch}. Push itself never overwrites: if the remote has moved, git refuses and nothing there changes. Replacing the remote branch is a separate control, and it asks first.`;
   }
-  return 'Krakenless never force-pushes; a rejected push leaves the remote untouched.';
+  return 'Push never overwrites; a rejected push leaves the remote untouched.';
 }
 
 /** One toolbar action: the icon button, and the words that describe it. */
@@ -486,6 +604,8 @@ interface ToolbarAction {
   /** Non-null when the action is unavailable; the text says why. */
   reason: string | null;
   hint: string;
+  /** Drawn as a destructive control: this one can overwrite other people's work. */
+  danger?: boolean;
   /**
    * True right after this action succeeded: the button turns green and says
    * so, until the next click or the next refresh of the branch. A push that
@@ -511,16 +631,20 @@ function Action({
   reason,
   hint,
   reasonId,
+  danger = false,
   done = false,
   onClick,
 }: ToolbarAction & { reasonId: string | null }): ReactNode {
   const hintId = `${id}-hint`;
+  // "Done" wins over "danger": the green is a moment, and while it lasts the
+  // button is reporting what happened rather than offering to do it again.
+  const tone = done ? styles.buttonDone : danger ? styles.buttonDanger : '';
 
   return (
     <div className={styles.action}>
       <button
         type="button"
-        className={done ? `${styles.button} ${styles.buttonDone}` : styles.button}
+        className={tone === '' ? styles.button : `${styles.button} ${tone}`}
         disabled={reason !== null}
         aria-describedby={reasonId ?? hintId}
         // Announced, not only coloured: the green is the feedback for eyes, the

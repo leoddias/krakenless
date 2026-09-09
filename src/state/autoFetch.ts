@@ -142,10 +142,15 @@ export async function runFetch(
   if (news !== null && !hasNews(news)) return;
 
   // Only what a fetch can change: remote-tracking branches, the commits they
-  // point at, and the remote list itself (a pruned or renamed remote shows up
-  // here). The working tree and the stash list cannot move, so they are not
-  // re-read.
+  // point at, the remote list itself (a pruned or renamed remote shows up
+  // here) — and the status, for its ahead/behind counts. The working tree and
+  // the stash list cannot move, so those parts are re-read for nothing; the
+  // counts are the part that just did move. The status read above this fetch
+  // predates whatever it brought, and leaving it there left the app holding a
+  // fresh remote oid beside a count that did not know about it — the two halves
+  // a force push puts in one sentence (ADR-0047).
   await Promise.all([
+    refreshStatus(store),
     refreshBranches(store),
     refreshCommits(store),
     refreshRemotes(store),

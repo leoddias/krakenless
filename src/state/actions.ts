@@ -856,6 +856,56 @@ export async function pushCurrent(
   return operate(store, () => push(root, options));
 }
 
+/**
+ * Overwrites a branch on the remote with the local one, under a lease.
+ *
+ * `expect` is the remote-tracking oid the toolbar had on screen when it asked
+ * the question, and the lease is what makes this refusable: if the remote is
+ * not still at that oid, git rejects the push and nothing on the server
+ * changes. The confirmation is minted from the same sentence the user read,
+ * because the git layer refuses a lease push without one (ADR-0016).
+ *
+ * The push itself moves the local remote-tracking ref, and `operate` re-reads
+ * everything afterwards, so the counts on the toolbar describe the branch as
+ * it is now rather than the divergence that led here.
+ */
+export async function forcePushCurrent(
+  store: Store,
+  options: { remote: string; branch: string; expect: string },
+  confirmationReason: string,
+): Promise<boolean> {
+  const root = currentRoot(store);
+  if (root === null) return false;
+
+  const pushed = await operate(store, () =>
+    push(
+      root,
+      {
+        remote: options.remote,
+        branch: options.branch,
+        forceWithLease: { expect: options.expect },
+      },
+      userConfirmed(confirmationReason),
+    ),
+  );
+  if (pushed) {
+    store.dispatch({
+      type: 'notice',
+      notice: {
+        tone: 'info',
+        message: `Force-pushed ${options.branch} to ${options.remote}. The commits that were on ${options.remote}/${options.branch} are no longer reachable from that branch.`,
+        // The oid was on screen in the question and nowhere else, and the
+        // notice is the last moment it exists in the app. The commits are in
+        // this repository — the lease only matched because they had been
+        // fetched — so the way back is one command, and without this the user
+        // would have to find it in a reflog under time pressure.
+        undoHint: `git branch recovered-${options.remote}-${options.branch} ${options.expect}`,
+      },
+    });
+  }
+  return pushed;
+}
+
 export async function switchTo(store: Store, name: string): Promise<boolean> {
   const root = currentRoot(store);
   if (root === null) return false;

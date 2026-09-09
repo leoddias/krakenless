@@ -1,4 +1,4 @@
-import { assertRefName } from '../argsafety';
+import { assertOid, assertRefName } from '../argsafety';
 import type { GitCommand } from '../types';
 
 /**
@@ -99,23 +99,39 @@ export interface PushOptions {
   /** Publishes a branch that has no upstream yet. */
   setUpstream?: boolean;
   /**
-   * Force with lease: refuses if the remote moved since our last fetch. Plain
-   * `--force` is deliberately not offered anywhere in this app.
+   * Force with lease, against the oid the user was shown.
    *
-   * Not safe to expose in the UI until the lease carries an explicit
-   * `<branch>:<oid>` — the bare form leases against the local remote-tracking
-   * ref, so it is only as fresh as the last fetch. Wire the oid the UI showed
-   * the user at the same time as the confirmation dialog.
+   * `expect` is the remote-tracking oid the UI had on screen when it asked the
+   * question. Git's bare `--force-with-lease` leases against the local
+   * remote-tracking ref, which is only as fresh as the last fetch *and* is
+   * updated by any background fetch — including this app's own five-minute
+   * one, which would quietly renew the lease on work the user never saw. The
+   * explicit form leases against a value that came from the same read that
+   * drew the counts, so a remote that moved since is a refusal rather than an
+   * overwrite. Plain `--force` is not offered anywhere in this app.
    */
-  forceWithLease?: boolean;
+  forceWithLease?: { expect: string };
 }
 
+/**
+ * Pushes one branch to its own name on a remote.
+ *
+ * The lease, when there is one, names the *remote* ref and the oid it must
+ * still be at: `--force-with-lease=refs/heads/<branch>:<oid>`. Fully qualified
+ * on that side too, for the reason the refspec is — a branch named `main` and
+ * a tag named `main` are different refs, and the lease has to be about the one
+ * being written.
+ */
 export function buildPushCommand(options: PushOptions): GitCommand {
   const args = ['push', '--progress'];
   if (options.setUpstream === true) args.push('--set-upstream');
-  if (options.forceWithLease === true) args.push('--force-with-lease');
 
   const branch = assertRefName(options.branch);
+  if (options.forceWithLease !== undefined) {
+    const expect = assertOid(options.forceWithLease.expect);
+    args.push(`--force-with-lease=refs/heads/${branch}:${expect}`);
+  }
+
   args.push(assertRefName(options.remote));
   // An explicit, fully-qualified refspec. A bare branch token would let a name
   // like `+main` be read as a force refspec, and a name like `refs/heads/x`
@@ -123,7 +139,7 @@ export function buildPushCommand(options: PushOptions): GitCommand {
   args.push(`refs/heads/${branch}:refs/heads/${branch}`);
   return {
     args,
-    destructive: options.forceWithLease === true,
+    destructive: options.forceWithLease !== undefined,
     timeoutMs: NETWORK_TIMEOUT_MS,
   };
 }

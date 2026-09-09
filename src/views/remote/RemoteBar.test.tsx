@@ -1,8 +1,17 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Branch, RepoStatus } from '../../git/types';
 import {
   fetchRemote,
+  forcePushCurrent,
   pullCurrent,
   pullMergeCurrent,
   pushCurrent,
@@ -14,6 +23,7 @@ import { RemoteBar } from './RemoteBar';
 
 vi.mock('../../state/actions', () => ({
   fetchRemote: vi.fn(),
+  forcePushCurrent: vi.fn(),
   pullCurrent: vi.fn(),
   pullMergeCurrent: vi.fn(),
   pushCurrent: vi.fn(),
@@ -24,6 +34,7 @@ const fetchMock = vi.mocked(fetchRemote);
 const pullMock = vi.mocked(pullCurrent);
 const pullMergeMock = vi.mocked(pullMergeCurrent);
 const pushMock = vi.mocked(pushCurrent);
+const forcePushMock = vi.mocked(forcePushCurrent);
 const refreshBranchesMock = vi.mocked(refreshBranches);
 
 beforeEach(() => {
@@ -32,6 +43,7 @@ beforeEach(() => {
   pullMock.mockResolvedValue(true);
   pullMergeMock.mockResolvedValue('pulled');
   pushMock.mockResolvedValue(true);
+  forcePushMock.mockResolvedValue(true);
   refreshBranchesMock.mockResolvedValue(undefined);
 });
 
@@ -54,6 +66,24 @@ function statusOf(overrides: Partial<RepoStatus> = {}): RepoStatus {
 
 function remoteBranch(name: string): Branch {
   return { name, current: false, oid: 'b'.repeat(40), ahead: 0, behind: 0, remote: true };
+}
+
+/**
+ * The checked-out branch as the branch list reports it.
+ *
+ * Its counts matter: the force push takes the oid *and* the count it names
+ * from this one read, and refuses when they disagree with the status.
+ */
+function localBranch(ahead: number, behind: number, name = 'main'): Branch {
+  return {
+    name,
+    current: true,
+    oid: 'a'.repeat(40),
+    ahead,
+    behind,
+    remote: false,
+    upstream: `origin/${name}`,
+  };
 }
 
 function openRepo(store: Store): void {
@@ -171,21 +201,20 @@ describe('RemoteBar — actions', () => {
     expect(screen.getByText('Push finished.')).toBeInTheDocument();
   });
 
-  it('never offers a force push, even on a diverged branch', () => {
+  it('keeps Push itself free of any force, on a diverged branch', () => {
     renderReady({ upstream: 'origin/main', ahead: 1, behind: 1 });
-    for (const control of screen.getAllByRole('button')) {
-      expect(control).not.toHaveAccessibleName(/force/i);
-    }
-    // Divergence resolves through the merge-pull, never through force: push
-    // is blocked outright and the way out is spelled next to it.
-    expect(button('Pull (merge)')).toBeEnabled();
+
+    // Push is blocked outright and says why; overwriting the remote is a
+    // separate control with its own question, never something Push does.
+    expect(button('Push')).toBeDisabled();
     expect(screen.getByText(/Pull first, then push/)).toBeInTheDocument();
+    expect(button('Pull (merge)')).toBeEnabled();
   });
 
-  it('still names the no-force promise while push is offered', () => {
+  it('promises that an ordinary push never overwrites', () => {
     renderReady({ upstream: 'origin/main', ahead: 1 });
     expect(button('Push')).toBeEnabled();
-    expect(screen.getByText(/Krakenless never force-pushes/)).toBeInTheDocument();
+    expect(screen.getByText(/never overwrites/)).toBeInTheDocument();
   });
 });
 
@@ -669,5 +698,170 @@ describe('RemoteBar — the green fades, the sentence stays', () => {
 
     expect(button('Fetch')).toHaveAttribute('data-done', 'true');
     expect(button('Push')).not.toHaveAttribute('data-done');
+  });
+});
+
+describe('RemoteBar — force push', () => {
+  /** Diverged: one commit each way, agreed on by both reads. */
+  function diverged(
+    branches: Branch[] = [localBranch(1, 1), remoteBranch('origin/main')],
+  ): Store {
+    return renderReady({ upstream: 'origin/main', ahead: 1, behind: 1 }, branches);
+  }
+
+  it('is absent until the upstream has something this branch does not', () => {
+    renderReady({ upstream: 'origin/main', ahead: 2 });
+
+    expect(screen.queryByRole('button', { name: 'Force push' })).toBeNull();
+    expect(button('Push')).toBeEnabled();
+  });
+
+  it('appears exactly where the ordinary push is refused for divergence', () => {
+    diverged();
+
+    expect(button('Force push')).toBeEnabled();
+    expect(button('Push')).toBeDisabled();
+    // The merge is still the first offer: the force is the other way out, not
+    // the only one.
+    expect(button('Pull (merge)')).toBeEnabled();
+  });
+
+  it('asks first, naming what comes off the remote branch', () => {
+    diverged();
+
+    fireEvent.click(button('Force push'));
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveTextContent('Force push main over origin/main?');
+    expect(dialog).toHaveTextContent('dropping 1 commit');
+    // The oid the lease is taken against is in the sentence the user agrees
+    // to: it is what finds those commits again afterwards.
+    expect(dialog).toHaveTextContent('bbbbbbbbbb');
+    expect(forcePushMock).not.toHaveBeenCalled();
+  });
+
+  it('pushes with the lease once confirmed, and reports it', async () => {
+    const store = diverged();
+    fireEvent.click(button('Force push'));
+
+    await act(async () => {
+      fireEvent.click(
+        within(screen.getByRole('dialog')).getByRole('button', {
+          name: 'Force push',
+        }),
+      );
+    });
+
+    expect(forcePushMock).toHaveBeenCalledTimes(1);
+    const [passedStore, intent, reason] = forcePushMock.mock.calls[0] ?? [];
+    expect(passedStore).toBe(store);
+    expect(intent).toEqual({
+      remote: 'origin',
+      branch: 'main',
+      expect: 'b'.repeat(40),
+    });
+    // The reason is the dialog's own sentence, which is what the confirmation
+    // token records the user as having agreed to.
+    expect(reason).toContain('dropping 1 commit');
+    expect(
+      screen.getByText('Force push finished. The remote branch now matches yours.'),
+    ).toBeInTheDocument();
+  });
+
+  it('does nothing when the question is dismissed', () => {
+    diverged();
+    fireEvent.click(button('Force push'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(forcePushMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('refuses while the two reads of the counts disagree', () => {
+    // What a background fetch landing between the two reads looks like: the
+    // status still says 1 behind, the branch list (and the oid with it) knows
+    // about four. Pushing here would drop three commits the panel said did not
+    // exist.
+    renderReady({ upstream: 'origin/main', ahead: 1, behind: 1 }, [
+      localBranch(1, 4),
+      remoteBranch('origin/main'),
+    ]);
+
+    expect(button('Force push')).toBeDisabled();
+    expect(screen.getByText(/two different answers/)).toBeInTheDocument();
+  });
+
+  it('pushes nothing when the branch moved while the question was open', async () => {
+    // Nothing locks the repository while a dialog is on screen, and the
+    // refspec sends whatever the branch points at when it runs. The
+    // confirmation was about one set of commits and one remote oid.
+    const store = diverged();
+    fireEvent.click(button('Force push'));
+
+    act(() => {
+      store.dispatch({
+        type: 'branches/loaded',
+        branches: [
+          localBranch(1, 3),
+          { ...remoteBranch('origin/main'), oid: 'f'.repeat(40) },
+        ],
+      });
+      store.dispatch({
+        type: 'status/loaded',
+        status: statusOf({ upstream: 'origin/main', ahead: 1, behind: 3 }),
+      });
+    });
+    await act(async () => {
+      fireEvent.click(
+        within(screen.getByRole('dialog')).getByRole('button', { name: 'Force push' }),
+      );
+    });
+
+    expect(forcePushMock).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(/moved while the question was on screen/),
+    ).toBeInTheDocument();
+  });
+
+  it('refuses without the oid it would lease against', () => {
+    // The branch list has no `origin/main` — an unfetched remote, a pruned
+    // ref. A bare `--force-with-lease` would push anyway, leasing against
+    // whatever the last background fetch happened to write.
+    diverged([localBranch(1, 1), remoteBranch('origin/other')]);
+
+    expect(button('Force push')).toBeDisabled();
+    expect(screen.getByText(/cannot lease the push against it/)).toBeInTheDocument();
+  });
+
+  it('refuses when this branch has nothing of its own to put there', () => {
+    // Behind only: the force push would delete commits and add nothing.
+    renderReady({ upstream: 'origin/main', ahead: 0, behind: 2 }, [
+      localBranch(0, 2),
+      remoteBranch('origin/main'),
+    ]);
+
+    expect(button('Force push')).toBeDisabled();
+    expect(screen.getByText(/would only delete work/)).toBeInTheDocument();
+  });
+
+  it('reports a refused lease as a failure that changed nothing', async () => {
+    forcePushMock.mockResolvedValue(false);
+    diverged();
+    fireEvent.click(button('Force push'));
+
+    await act(async () => {
+      fireEvent.click(
+        within(screen.getByRole('dialog')).getByRole('button', {
+          name: 'Force push',
+        }),
+      );
+    });
+
+    expect(
+      screen.getByText(
+        /Force push did not complete\. The remote branch was left as it was\./,
+      ),
+    ).toBeInTheDocument();
   });
 });

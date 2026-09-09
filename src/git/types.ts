@@ -47,6 +47,7 @@ export type GitErrorKind =
   | 'conflict'
   | 'diverged'
   | 'non-fast-forward'
+  | 'stale-info'
   | 'command-failed'
   | 'parse-failed'
   | 'undecodable-output';

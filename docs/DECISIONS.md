@@ -1286,3 +1286,91 @@ label of every action button, because "Discard c.ts" is an ambiguous thing to
 have agreed to. `fileTree.ts` and its tests are gone, replaced by
 `pathTree.ts` and `pathTree.test.ts`. The conflicted list stays flat: its rows
 open a resolver rather than being staged, and it is short by nature.
+
+## ADR-0047 — A force push exists, leased against the oid the user was shown, and only where divergence makes it the answer
+
+**Date:** 2026-09-08 · **Status:** accepted
+
+**Decision:** the remote toolbar gains a **Force push** button. It appears only
+when the current branch tracks an upstream of the same name that has commits
+this branch does not — the exact case where Push is refused — and it is hidden
+otherwise. It asks first, in a danger dialog that names the branch, how many of
+the remote's commits come off it, and the oid it leases against; the sentence
+the user reads becomes the confirmation token the git layer requires. The
+command is always `--force-with-lease=refs/heads/<branch>:<oid>` with an
+explicit oid, never the bare flag and never `--force`. `PushOptions.forceWithLease`
+changes from `true` to `{ expect }`, `assertOid` guards the value, and a refused
+lease gets its own error kind, `stale-info`.
+
+**Why an explicit oid.** Git's bare `--force-with-lease` leases against the
+local remote-tracking ref, so it is only as fresh as the last fetch — and this
+app fetches in the background every five minutes (ADR-0025/0034). That
+background fetch would silently renew the lease over commits the user never
+saw: they read "1 behind", the timer fetched twice, and the lease now protects
+nothing they looked at. The explicit form leases against the oid the branch
+list held when the question was asked, which is the same read the history draws
+`origin/<branch>` from. When that oid is unknown — branch list unread, tracking
+ref gone — the button is refused rather than falling back to the bare flag.
+That is the whole safety story of this feature: without the lease it is
+`--force` wearing a longer name.
+
+**The oid and the count come from one read.** The first version of this took
+the oid from the branch list and the "n behind" from the status, and the safety
+review found that those are refreshed at different moments: the background
+fetch re-reads the status *before* it fetches and the branch list *after*. A
+tick that brought three commits therefore left the app holding a fresh oid
+beside a count that predated them — the dialog would have said "dropping 1
+commit" and leased against a remote that had four, so git would have accepted
+and three commits the user was told did not exist would have come off the
+branch. The bug was the same one the explicit oid exists to prevent, arriving
+through the back door. Both halves now come from `leaseRead`, one
+`for-each-ref` invocation, and the block refuses outright while the two reads
+disagree, because a confirmation given over a panel that is lying is not a
+confirmation. The auto-fetch also re-reads the status *after* the fetch now:
+ahead/behind is exactly what a fetch changes.
+
+**The confirmed intent is re-checked before it runs.** Nothing locks the
+repository while the dialog is on screen, and the refspec sends whatever the
+branch points at when it runs — a commit or a reset in a terminal changes what
+gets pushed under a sentence the user already agreed to. The intent is derived
+again at click time from the latest gate and compared; anything moved and the
+push does not run.
+
+**Why it is hidden rather than always present.** A control that overwrites
+other people's work sitting next to Push all day gets clicked by habit. It
+appears where it is the answer to what the panel is already saying, next to the
+merge-pull, which stays the first offer. Ahead-zero is refused outright with
+its own sentence: a push that only deletes commits and puts nothing in their
+place is `git push --delete` written the hard way, and it is not what this
+button is for.
+
+**What the confirmation has to say.** How many commits stop being on the remote
+branch, that they survive locally for now and the oid that finds them, that
+people who already pulled them must reconcile by hand, and that the lease means
+a remote which moved since the last fetch is a *refusal* rather than a wider
+overwrite. Those are the terms the token records the user as having agreed to.
+
+**Proven against the real binary.** `forcepush.integration.test.ts` pushes
+between directories on disk: the explicit lease form is accepted by git at all
+(a lease git does not parse protects nothing); a remote that moved makes git
+refuse and leaves the other clone's commit exactly where it was; the refusal
+says "stale info", which is what `classifyFailure` reads; and the recovery —
+fetch, look, lease against what arrived — goes through. Nothing else on the
+remote moves, because the lease names one ref and the refspec pushes one ref.
+
+**The way back is recorded.** The success notice carries an `undoHint` naming
+`git branch recovered-<remote>-<branch> <oid>`, the way the stash-drop notice
+does. The oid lived in the dialog and nowhere else, and the dialog is gone by
+the time anyone realises; the commits are in the local repository, because the
+lease only matched if they had been fetched, and the integration test proves
+that branch can still be created afterwards.
+
+**Consequences:** `push` in the git layer still refuses any lease push without
+a confirmation, and `isDestructive` still flags the command through its
+`--force` prefix rule, so the two independent gates from ADR-0016 both hold.
+The `stale-info` kind exists so the user is told "somebody else pushed and
+Krakenless did not overwrite them" instead of "failed to push some refs", and
+so the non-fast-forward advice — "pull first" — is not given to someone who
+just asked to overwrite. Push's own promise is unchanged and its hint now says
+it plainly: Push never overwrites; replacing a remote branch is a separate,
+confirmed control.

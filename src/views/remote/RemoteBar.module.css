@@ -255,3 +255,19 @@
   white-space: nowrap;
   border: 0;
 }
+
+/*
+ * The one control here that can overwrite work belonging to other people. It
+ * is drawn in the danger colour for the same reason the discard buttons are —
+ * a force push that looks like Push is a force push somebody clicks by
+ * habit — and it is only on screen when the branch it would overwrite has
+ * commits this one does not.
+ */
+.buttonDanger {
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  color: var(--danger);
+}
+
+.buttonDanger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}

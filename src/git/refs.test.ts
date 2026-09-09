@@ -24,6 +24,9 @@ function raw(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** A full oid, the only shape a lease is allowed to carry. */
+const OID = `${'0'.repeat(39)}1`;
+
 describe('network builders', () => {
   it('never offers a plain force push', () => {
     // --force-with-lease refuses when the remote moved; --force does not, and
@@ -31,10 +34,40 @@ describe('network builders', () => {
     const args = buildPushCommand({
       remote: 'origin',
       branch: 'main',
-      forceWithLease: true,
+      forceWithLease: { expect: OID },
     }).args;
-    expect(args).toContain('--force-with-lease');
+    expect(args).toContain(`--force-with-lease=refs/heads/main:${OID}`);
     expect(args).not.toContain('--force');
+  });
+
+  it('leases against the oid it was given, never the bare flag', () => {
+    // The bare `--force-with-lease` leases against the local remote-tracking
+    // ref, which this app's own background fetch updates every five minutes —
+    // renewing the lease on commits the user never saw. The lease has to name
+    // the oid that was on screen when the question was asked.
+    const args = buildPushCommand({
+      remote: 'origin',
+      branch: 'main',
+      forceWithLease: { expect: OID },
+    }).args;
+    expect(args).not.toContain('--force-with-lease');
+    expect(args.filter((arg) => arg.startsWith('--force'))).toEqual([
+      `--force-with-lease=refs/heads/main:${OID}`,
+    ]);
+  });
+
+  it('refuses a lease that is not a full object id', () => {
+    // An abbreviation is a prefix, and a prefix can grow ambiguous; anything
+    // else could carry a colon and lease against a different ref entirely.
+    for (const expect_ of ['0000001', `${OID}:refs/heads/other`, 'HEAD', '']) {
+      expect(() =>
+        buildPushCommand({
+          remote: 'origin',
+          branch: 'main',
+          forceWithLease: { expect: expect_ },
+        }),
+      ).toThrow(/object id/);
+    }
   });
 
   it('marks a lease push destructive but a normal push not', () => {
@@ -42,8 +75,11 @@ describe('network builders', () => {
       buildPushCommand({ remote: 'origin', branch: 'main' }).destructive,
     ).toBeFalsy();
     expect(
-      buildPushCommand({ remote: 'origin', branch: 'main', forceWithLease: true })
-        .destructive,
+      buildPushCommand({
+        remote: 'origin',
+        branch: 'main',
+        forceWithLease: { expect: OID },
+      }).destructive,
     ).toBe(true);
   });
 
@@ -218,7 +254,11 @@ describe('push', () => {
     // This is the one operation here that can destroy other people's work.
     invoke.mockResolvedValue(raw());
     await expect(
-      push('C:/repo', { remote: 'origin', branch: 'main', forceWithLease: true }),
+      push('C:/repo', {
+        remote: 'origin',
+        branch: 'main',
+        forceWithLease: { expect: OID },
+      }),
     ).rejects.toMatchObject({ kind: 'needs-confirmation' });
     expect(invoke).not.toHaveBeenCalled();
   });
@@ -227,7 +267,7 @@ describe('push', () => {
     invoke.mockResolvedValue(raw());
     await push(
       'C:/repo',
-      { remote: 'origin', branch: 'main', forceWithLease: true },
+      { remote: 'origin', branch: 'main', forceWithLease: { expect: OID } },
       userConfirmed('Force push main over origin?'),
     );
     expect(invoke).toHaveBeenCalledTimes(1);

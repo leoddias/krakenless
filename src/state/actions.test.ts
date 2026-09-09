@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   closeRepo,
   fetchRemote,
+  forcePushCurrent,
   pullCurrent,
   removeBranch,
   removeStash,
@@ -806,5 +807,72 @@ describe('undoDiscard', () => {
     expect(store.getState().discards).toEqual([BACKUP]);
     expect(store.getState().notice?.tone).toBe('error');
     expect(store.getState().notice?.message).toMatch(/Restored 1 of 2.*src\/a\.ts/);
+  });
+});
+
+describe('forcePushCurrent — the lease and the way back', () => {
+  const EXPECT = 'c'.repeat(40);
+
+  it('leases against the oid it was given, under a confirmation', async () => {
+    pushFn.mockResolvedValue(undefined);
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await expect(
+      forcePushCurrent(
+        store,
+        { remote: 'origin', branch: 'main', expect: EXPECT },
+        'Replace origin/main with your main, dropping 2 commits…',
+      ),
+    ).resolves.toBe(true);
+
+    const [, options, confirmation] = pushFn.mock.calls[0] ?? [];
+    expect(options).toEqual({
+      remote: 'origin',
+      branch: 'main',
+      forceWithLease: { expect: EXPECT },
+    });
+    // The git layer refuses a lease push without one of these, and it is
+    // minted from the sentence the user read — not from a fixed string.
+    expect(confirmation).toBeDefined();
+  });
+
+  it('keeps the oid on screen as the way back to the dropped commits', async () => {
+    // The oid existed in the confirmation dialog and nowhere else, and the
+    // dialog is gone. The commits are still in this repository — the lease
+    // only matched because they had been fetched.
+    pushFn.mockResolvedValue(undefined);
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await forcePushCurrent(
+      store,
+      { remote: 'origin', branch: 'main', expect: EXPECT },
+      'reason',
+    );
+
+    expect(store.getState().notice).toMatchObject({ tone: 'info' });
+    expect(store.getState().notice?.undoHint).toBe(
+      `git branch recovered-origin-main ${EXPECT}`,
+    );
+  });
+
+  it('claims nothing when git refused the push', async () => {
+    // The refusal is the good case for a lease, and it must not arrive as a
+    // notice saying commits were dropped.
+    pushFn.mockRejectedValue(new GitError('stale-info', 'the remote moved'));
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await expect(
+      forcePushCurrent(
+        store,
+        { remote: 'origin', branch: 'main', expect: EXPECT },
+        'reason',
+      ),
+    ).resolves.toBe(false);
+
+    expect(store.getState().notice).toMatchObject({ tone: 'error' });
+    expect(store.getState().notice?.message).toMatch(/moved/);
   });
 });

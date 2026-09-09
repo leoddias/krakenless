@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { assertPath, assertRefName, assertRevision, pathspec } from './argsafety';
+import {
+  assertOid,
+  assertPath,
+  assertRefName,
+  assertRevision,
+  pathspec,
+} from './argsafety';
 import { GitError } from './errors';
 
 describe('pathspec', () => {
@@ -94,5 +100,27 @@ describe('assertRevision', () => {
 
   it.each(['', '-1', '--all', 'two words', 'nul\0'])('rejects %j', (rev) => {
     expect(() => assertRevision(rev)).toThrow(GitError);
+  });
+});
+
+describe('assertOid', () => {
+  it('takes a full oid of either hash size', () => {
+    const sha1 = 'a'.repeat(40);
+    const sha256 = 'b'.repeat(64);
+    expect(assertOid(sha1)).toBe(sha1);
+    expect(assertOid(sha256)).toBe(sha256);
+  });
+
+  it.each([
+    ['an abbreviation', 'a1b2c3d'],
+    ['the wrong length', 'a'.repeat(41)],
+    ['upper case, which git does not print', 'A'.repeat(40)],
+    ['a revision', 'HEAD~1'],
+    ['a second lease smuggled in', `${'a'.repeat(40)}:refs/heads/other`],
+    ['nothing at all', ''],
+  ])('refuses %s', (_why, value) => {
+    // This value ends up inside `--force-with-lease=<ref>:<oid>`, so anything
+    // that is not exactly an oid could change which ref is being leased.
+    expect(() => assertOid(value)).toThrow(/object id/);
   });
 });
