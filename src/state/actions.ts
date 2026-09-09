@@ -48,6 +48,7 @@ import {
   checkoutRevision,
   createBranch,
   deleteBranch,
+  deleteRemoteBranch,
   dropStash,
   listBranches,
   listRemotes,
@@ -950,6 +951,46 @@ export async function removeBranch(
     }
   }
   return outcome;
+}
+
+/**
+ * Deletes a branch on a remote.
+ *
+ * `undoHint` carries the push that puts it back, built from the oid the panel
+ * had on screen. That number is about to stop existing anywhere in the app —
+ * the next fetch prunes the remote-tracking ref the row was drawn from — and
+ * the commits themselves are still in this repository, so the hint is a real
+ * way back rather than a consolation. `null` when the caller could not supply
+ * a usable oid; the notice then simply says what happened.
+ */
+export async function removeRemoteBranch(
+  store: Store,
+  target: { remote: string; branch: string },
+  confirmationReason: string,
+  recovery: string | null,
+): Promise<boolean> {
+  const root = currentRoot(store);
+  if (root === null) return false;
+
+  const deleted = await operate(store, () =>
+    deleteRemoteBranch(
+      root,
+      target.remote,
+      target.branch,
+      userConfirmed(confirmationReason),
+    ),
+  );
+  if (deleted) {
+    store.dispatch({
+      type: 'notice',
+      notice: {
+        tone: 'info',
+        message: `Deleted ${target.branch} from ${target.remote}. Anyone who fetches from it will lose that branch name too.`,
+        ...(recovery === null ? {} : { undoHint: recovery }),
+      },
+    });
+  }
+  return deleted;
 }
 
 // --- one commit from the history ------------------------------------------

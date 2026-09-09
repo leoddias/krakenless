@@ -6,6 +6,7 @@ import {
   refreshBranches,
   refreshStashes,
   removeBranch,
+  removeRemoteBranch,
   removeStash,
   restoreStash,
   selectCommit,
@@ -21,6 +22,7 @@ vi.mock('../../state/actions', () => ({
   switchTo: vi.fn(),
   createAndSwitch: vi.fn(),
   removeBranch: vi.fn(),
+  removeRemoteBranch: vi.fn(),
   restoreStash: vi.fn(),
   removeStash: vi.fn(),
   selectCommit: vi.fn(),
@@ -31,6 +33,7 @@ const refreshStashesMock = vi.mocked(refreshStashes);
 const switchToMock = vi.mocked(switchTo);
 const createMock = vi.mocked(createAndSwitch);
 const removeBranchMock = vi.mocked(removeBranch);
+const removeRemoteBranchMock = vi.mocked(removeRemoteBranch);
 const restoreStashMock = vi.mocked(restoreStash);
 const removeStashMock = vi.mocked(removeStash);
 const selectCommitMock = vi.mocked(selectCommit);
@@ -152,6 +155,7 @@ beforeEach(() => {
   switchToMock.mockReset().mockResolvedValue(true);
   createMock.mockReset().mockResolvedValue(true);
   removeBranchMock.mockReset().mockResolvedValue({ deleted: true });
+  removeRemoteBranchMock.mockReset().mockResolvedValue(true);
   restoreStashMock.mockReset().mockResolvedValue(true);
   removeStashMock.mockReset().mockResolvedValue(true);
 });
@@ -1076,5 +1080,123 @@ describe('stash list', () => {
       stash({ ref: 'stash@{3}', oid: 'd'.repeat(40), message: '' }),
     ]);
     expect(screen.getAllByText('stash@{3}').length).toBeGreaterThan(0);
+  });
+});
+
+describe('deleting a branch on the remote', () => {
+  const REMOTE_OID = 'e'.repeat(40);
+
+  function withRemote(): Store {
+    return renderLoaded([
+      branch({ name: 'main', current: true }),
+      branch({ name: 'origin/feat/mysql-pitr', remote: true, oid: REMOTE_OID }),
+    ]);
+  }
+
+  /** The row's own Delete, told apart from the local list's by its label. */
+  function remoteDeleteButton(name = 'origin/feat/mysql-pitr'): HTMLElement {
+    return screen.getByRole('button', { name: `Delete ${name} on the remote` });
+  }
+
+  it('offers a delete on the remote row, beside Check out', () => {
+    withRemote();
+
+    expect(remoteDeleteButton()).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Check out as feat/mysql-pitr' }),
+    ).toBeInTheDocument();
+  });
+
+  it('asks before anything is sent, saying it is for everyone', async () => {
+    withRemote();
+
+    await click(remoteDeleteButton());
+
+    expect(dialog()).toHaveTextContent(/Delete "feat\/mysql-pitr" from origin/);
+    expect(dialog()).toHaveTextContent(/for everyone/);
+    expect(removeRemoteBranchMock).not.toHaveBeenCalled();
+  });
+
+  it('focuses the safe choice, so a stray Enter deletes nothing', async () => {
+    withRemote();
+
+    await click(remoteDeleteButton());
+
+    expect(within(dialog()).getByRole('button', { name: 'Cancel' })).toHaveFocus();
+  });
+
+  it('deletes on confirmation, with the question as the reason and a way back', async () => {
+    const store = withRemote();
+
+    await click(remoteDeleteButton());
+    await click(screen.getByRole('button', { name: 'Delete on origin' }));
+
+    expect(removeRemoteBranchMock).toHaveBeenCalledTimes(1);
+    const [passedStore, ref, reason, recovery] =
+      removeRemoteBranchMock.mock.calls[0] ?? [];
+    expect(passedStore).toBe(store);
+    expect(ref).toEqual({ remote: 'origin', branch: 'feat/mysql-pitr' });
+    expect(reason).toMatch(/for everyone/);
+    // Built from the oid the row was drawn with, *before* the delete: the
+    // refresh that follows prunes the ref that number came from.
+    expect(recovery).toBe(`git push origin ${REMOTE_OID}:refs/heads/feat/mysql-pitr`);
+    expect(
+      screen.getByText('Deleted "origin/feat/mysql-pitr" on origin.'),
+    ).toBeInTheDocument();
+  });
+
+  it('sends nothing when the question is cancelled', async () => {
+    withRemote();
+
+    await click(remoteDeleteButton());
+    await click(within(dialog()).getByRole('button', { name: 'Cancel' }));
+
+    expect(removeRemoteBranchMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+
+  it('says the branch is still there when the delete failed', async () => {
+    removeRemoteBranchMock.mockResolvedValue(false);
+    withRemote();
+
+    await click(remoteDeleteButton());
+    await click(screen.getByRole('button', { name: 'Delete on origin' }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      '"origin/feat/mysql-pitr" was not deleted. It is still on origin.',
+    );
+  });
+
+  it('offers no delete for a name it cannot split', () => {
+    // `origin/HEAD` is a symref, not a branch. The parser drops it, but a
+    // list from anywhere else must not produce a delete button either.
+    renderLoaded([
+      branch({ name: 'main', current: true }),
+      branch({ name: 'origin/HEAD', remote: true }),
+    ]);
+
+    expect(
+      screen.queryByRole('button', { name: /on the remote$/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('replaces a local delete question rather than stacking two', async () => {
+    // Only one question is ever on screen; the panel's rule is that the open
+    // one sits above everything so nothing shifts a destructive button under
+    // the pointer.
+    renderLoaded([
+      branch({ name: 'main', current: true }),
+      branch({ name: 'topic' }),
+      branch({ name: 'origin/feat/mysql-pitr', remote: true, oid: REMOTE_OID }),
+    ]);
+    const topicRow = screen.getByRole('button', { name: 'topic' })
+      .parentElement as HTMLElement;
+    await click(within(topicRow).getByRole('button', { name: 'Delete' }));
+    expect(dialog()).toHaveTextContent('Delete branch "topic"?');
+
+    await click(remoteDeleteButton());
+
+    expect(screen.getAllByRole('alertdialog')).toHaveLength(1);
+    expect(dialog()).toHaveTextContent(/from origin/);
   });
 });

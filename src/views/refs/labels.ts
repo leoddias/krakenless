@@ -123,6 +123,57 @@ export function dropRecoveryCommand(oid: string): string | null {
   return OID.test(oid) ? `git stash apply ${oid}` : null;
 }
 
+/** A remote-tracking branch split into the two halves a push needs. */
+export interface RemoteRef {
+  remote: string;
+  branch: string;
+}
+
+/**
+ * Splits `origin/feature/x` into `origin` + `feature/x`.
+ *
+ * The first slash is the only split git gives us, and it is right for every
+ * remote git itself creates. `null` for anything that does not have a non-empty
+ * name on both sides, and for `<remote>/HEAD`, which is a symref rather than a
+ * branch: deleting a branch the user misread is precisely the mistake this
+ * panel must not make, so an unparsable name gets no delete button at all.
+ */
+export function splitRemoteBranch(name: string): RemoteRef | null {
+  const slash = name.indexOf('/');
+  if (slash <= 0) return null;
+  const remote = name.slice(0, slash);
+  const branch = name.slice(slash + 1);
+  if (branch.length === 0 || branch === 'HEAD') return null;
+  return { remote, branch };
+}
+
+/**
+ * The question a remote delete asks, and the confirmation reason it mints.
+ *
+ * It says "for everyone" because that is the whole difference from the local
+ * delete two rows above it: this one reaches a server other people fetch from,
+ * and the branch disappears from their next fetch whether or not they were
+ * working on it.
+ */
+export function deleteRemoteBranchQuestion(ref: RemoteRef): string {
+  return `Delete "${ref.branch}" from ${ref.remote} — for everyone who uses that remote?`;
+}
+
+/**
+ * How to put a deleted remote branch back, or `null` when no command can be
+ * offered.
+ *
+ * The oid is the one the panel had on screen for that branch. Deleting a
+ * remote branch removes the *name*: the commits stay on the server until it
+ * collects them, and in this repository they are right here, because a
+ * remote-tracking ref pointing at them is what the row was drawn from. So the
+ * way back is one push, and it is worth saying while the number is still known
+ * — after the next fetch prunes the ref, nothing in the app remembers it.
+ */
+export function remoteDeleteRecovery(ref: RemoteRef, oid: string): string | null {
+  return OID.test(oid) ? `git push ${ref.remote} ${oid}:refs/heads/${ref.branch}` : null;
+}
+
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
 const HOUR = 60 * MINUTE;

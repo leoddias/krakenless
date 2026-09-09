@@ -22,6 +22,7 @@ import {
   refreshBranches,
   refreshStashes,
   removeBranch,
+  removeRemoteBranch,
   removeStash,
   restoreStash,
   selectCommit,
@@ -47,13 +48,17 @@ import {
   deleteBranchQuestion,
   dropRecoveryCommand,
   dropStashQuestion,
+  deleteRemoteBranchQuestion,
   forceDeleteBranchQuestion,
   formatRelativeDate,
   groupBranches,
   localNameFor,
   popStashQuestion,
+  remoteDeleteRecovery,
+  splitRemoteBranch,
   stashLabel,
   trackingSummary,
+  type RemoteRef,
 } from './labels';
 
 /**
@@ -73,6 +78,23 @@ type Deletion = {
    */
   root: string;
 } & ({ stage: 'safe' } | { stage: 'force'; warning: string });
+
+/**
+ * The remote-delete question on screen, if any.
+ *
+ * It carries the oid the row was drawn with, because that number is the way
+ * back and it stops existing the moment the next fetch prunes the ref. Its own
+ * type rather than a stage of {@link Deletion}: a local delete git refuses can
+ * be escalated, and a remote delete has nothing to escalate to — it either
+ * happened on the server or it did not.
+ */
+interface RemoteDeletion {
+  ref: RemoteRef;
+  /** Full name as the panel shows it, for the sentences about it. */
+  name: string;
+  oid: string;
+  root: string;
+}
 
 type StashActionKind = 'apply' | 'pop' | 'drop';
 
@@ -132,6 +154,7 @@ export function RefsView(): ReactNode {
   );
 
   const [deletion, setDeletion] = useState<Deletion | null>(null);
+  const [remoteDeletion, setRemoteDeletion] = useState<RemoteDeletion | null>(null);
   const [stashQuestion, setStashQuestion] = useState<StashQuestion | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
@@ -178,6 +201,8 @@ export function RefsView(): ReactNode {
   const openDeletion = deletion !== null && deletion.root === root ? deletion : null;
   const openStashQuestion =
     stashQuestion !== null && stashQuestion.root === root ? stashQuestion : null;
+  const openRemoteDeletion =
+    remoteDeletion !== null && remoteDeletion.root === root ? remoteDeletion : null;
   const shownFailure = failure !== null && failure.root === root ? failure : null;
   const shownOutcome = outcome !== null && outcome.root === root ? outcome : null;
 
@@ -292,6 +317,48 @@ export function RefsView(): ReactNode {
     setFailure({ text: `Branch "${name}" was not deleted.`, cause, root: pending.root });
   };
 
+  /**
+   * Deletes a branch on the remote, once the user has said so.
+   *
+   * There is no second stage here and no forcing: git does not refuse this the
+   * way it refuses an unmerged local delete, so the confirmation is the only
+   * gate on this side and the server's own protections are the other. The
+   * recovery command is built from the oid the row was drawn with, *before*
+   * the delete, because the refresh that follows prunes the ref it came from.
+   */
+  const runRemoteDelete = async (pending: RemoteDeletion): Promise<void> => {
+    if (running) return;
+    clearMessages();
+    const { ref, name } = pending;
+    if (!stillCurrent(pending.root)) {
+      setRemoteDeletion(null);
+      reportHere(
+        `Nothing was deleted: the open repository changed after the question about "${name}" was asked.`,
+        null,
+      );
+      return;
+    }
+
+    setRemoteDeletion(null);
+    const [ok, cause] = await perform(() =>
+      removeRemoteBranch(
+        store,
+        ref,
+        deleteRemoteBranchQuestion(ref),
+        remoteDeleteRecovery(ref, pending.oid),
+      ),
+    );
+    if (ok) {
+      setOutcome({ text: `Deleted "${name}" on ${ref.remote}.`, root: pending.root });
+      return;
+    }
+    setFailure({
+      text: `"${name}" was not deleted. It is still on ${ref.remote}.`,
+      cause,
+      root: pending.root,
+    });
+  };
+
   const runStashAction = async (pending: StashQuestion): Promise<void> => {
     if (running) return;
     clearMessages();
@@ -366,6 +433,16 @@ export function RefsView(): ReactNode {
           busy={locked}
           onCancel={() => setDeletion(null)}
           onConfirm={() => void runDelete(openDeletion)}
+        />
+      )}
+
+      {openRemoteDeletion !== null && (
+        <RemoteDeleteConfirmation
+          key={openRemoteDeletion.name}
+          deletion={openRemoteDeletion}
+          busy={locked}
+          onCancel={() => setRemoteDeletion(null)}
+          onConfirm={() => void runRemoteDelete(openRemoteDeletion)}
         />
       )}
 
@@ -466,8 +543,18 @@ export function RefsView(): ReactNode {
             if (root === null) return;
             clearMessages();
             setStashQuestion(null);
+            setRemoteDeletion(null);
             // Always the safe stage: force is unreachable from a click.
             setDeletion({ stage: 'safe', name, root });
+          }}
+          onAskDeleteRemote={(branch) => {
+            if (root === null) return;
+            const ref = splitRemoteBranch(branch.name);
+            if (ref === null) return;
+            clearMessages();
+            setStashQuestion(null);
+            setDeletion(null);
+            setRemoteDeletion({ ref, name: branch.name, oid: branch.oid, root });
           }}
         />
 
@@ -562,6 +649,7 @@ function BranchesSection({
   onSwitch,
   onCreate,
   onAskDelete,
+  onAskDeleteRemote,
 }: {
   busy: boolean;
   selectedOid: string | null;
@@ -569,6 +657,7 @@ function BranchesSection({
   onSwitch: (name: string) => void;
   onCreate: CreateBranch;
   onAskDelete: (name: string) => void;
+  onAskDeleteRemote: (branch: Branch) => void;
 }): ReactNode {
   const branches = useAppState((state) => state.branches);
   const [open, setOpen] = useState(true);
@@ -614,6 +703,7 @@ function BranchesSection({
             onSwitch={onSwitch}
             onCreate={onCreate}
             onAskDelete={onAskDelete}
+            onAskDeleteRemote={onAskDeleteRemote}
           />
         )}
       </div>
@@ -629,6 +719,7 @@ function BranchLists({
   onSwitch,
   onCreate,
   onAskDelete,
+  onAskDeleteRemote,
 }: {
   branches: readonly Branch[];
   busy: boolean;
@@ -637,6 +728,7 @@ function BranchLists({
   onSwitch: (name: string) => void;
   onCreate: CreateBranch;
   onAskDelete: (name: string) => void;
+  onAskDeleteRemote: (branch: Branch) => void;
 }): ReactNode {
   const { local, remote } = groupBranches(branches);
   const [localOpen, setLocalOpen] = useState(true);
@@ -726,6 +818,7 @@ function BranchLists({
                   branch={branch}
                   busy={busy}
                   onCreate={onCreate}
+                  onAskDelete={onAskDeleteRemote}
                 />
               ))}
             </ul>
@@ -795,12 +888,18 @@ function RemoteRow({
   branch,
   busy,
   onCreate,
+  onAskDelete,
 }: {
   branch: Branch;
   busy: boolean;
   onCreate: CreateBranch;
+  onAskDelete: (branch: Branch) => void;
 }): ReactNode {
   const local = localNameFor(branch);
+  // No delete for a name this panel cannot split into a remote and a branch:
+  // the push would have to guess which half is which, and guessing wrong
+  // deletes a ref on a server.
+  const deletable = splitRemoteBranch(branch.name) !== null;
   const [error, setError] = useState<string | null>(null);
 
   const checkout = async (name: string): Promise<void> => {
@@ -856,12 +955,94 @@ function RemoteRow({
           Check out
         </button>
       )}
+      {deletable && (
+        <button
+          type="button"
+          className={`${styles.button} ${styles.danger}`}
+          disabled={busy}
+          // Named for a screen reader, fixed-width on screen, for the same
+          // reason the Check out button is: the branch name is what the row
+          // exists to show and must not be squeezed by its own buttons.
+          aria-label={`Delete ${branch.name} on the remote`}
+          title={`Delete ${branch.name} on the remote. It disappears for everyone who fetches from it.`}
+          onClick={() => onAskDelete(branch)}
+        >
+          Delete
+        </button>
+      )}
       {error !== null && (
         <p className={styles.fieldError} role="alert">
           {error}
         </p>
       )}
     </li>
+  );
+}
+
+/**
+ * The remote-delete question.
+ *
+ * One stage, and no arming checkbox: there is nothing to escalate to, because
+ * git does not refuse this the way it refuses an unmerged local delete. What
+ * it does have instead is the sentence saying the branch goes for everyone,
+ * and Cancel with the focus — the same rule the other questions here follow, so
+ * a stray Enter never deletes anything.
+ */
+function RemoteDeleteConfirmation({
+  deletion,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  deletion: RemoteDeletion;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}): ReactNode {
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    cancelRef.current?.focus();
+  }, []);
+
+  return (
+    <div
+      className={styles.confirm}
+      role="alertdialog"
+      aria-modal="true"
+      aria-label="Confirm remote branch delete"
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') onCancel();
+        trapTab(event);
+      }}
+    >
+      <strong className={styles.noticeTitle}>
+        {deleteRemoteBranchQuestion(deletion.ref)}
+      </strong>
+      <p className={styles.noticeText}>
+        This removes the branch name on the server, not the commits: they stay there until
+        it collects them, and they are in this repository right now. Krakenless will offer
+        the push that puts the branch back.
+      </p>
+      <div className={styles.confirmActions}>
+        <button
+          type="button"
+          className={styles.button}
+          ref={cancelRef}
+          onClick={onCancel}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          className={`${styles.button} ${styles.danger}`}
+          disabled={busy}
+          onClick={onConfirm}
+        >
+          Delete on {deletion.ref.remote}
+        </button>
+      </div>
+    </div>
   );
 }
 

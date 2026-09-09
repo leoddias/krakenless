@@ -60,6 +60,12 @@
   (`changesFileList`). Shift-ranges follow the rows as drawn and never reach
   into a folded directory; the selection now holds rows and expands to action
   paths at the point of acting, so a selected rename stages both halves.
+- **A remote branch can be deleted from its row** (2026-09-08, ADR-0048):
+  `push <remote> --delete refs/heads/<branch>` behind a confirmation that says
+  it goes for everyone, with `git push <remote> <oid>:refs/heads/<branch>` kept
+  as the way back (the oid is only knowable before the delete). Fully qualified
+  so a same-named tag is never hit. Four real-git integration tests. Not used
+  by hand yet.
 - **A force push exists** (2026-09-08, ADR-0047): offered only on a branch
   whose upstream has commits it does not, behind a danger confirmation, and
   always `--force-with-lease=refs/heads/<branch>:<oid>` with the oid the branch
@@ -77,7 +83,7 @@
   `prefers-reduced-motion`), and goes back to normal after five seconds while
   the outcome line — green, with a check — stays. Announced through
   `data-done` too.
-- **Test status:** `npm test` 2190 passing (102 files), `cargo test` 108 passing;
+- **Test status:** `npm test` 2220 passing (103 files), `cargo test` 108 passing;
   oxlint, prettier and clippy clean. `cargo fmt` is *not* clean and never has
   been — see `docs/ROADMAP.md` § Backlog.
 - **Git no longer runs on the UI thread** (ADR-0028). Every git command used to
@@ -235,6 +241,23 @@
   until `buildPushCommand` emits a `<local>:<upstream>` refspec.
 
 ## Session log
+
+### 2026-09-08 (later still) — deleting a branch on the remote
+
+"não está sendo possível deletar branch do origin", over the Remote list where
+every row offered only Check out. The row now has a Delete beside it
+(ADR-0048), asking a question that says the branch goes for everyone who uses
+that remote — one stage, no arming checkbox, because unlike the local delete
+there is nothing for git to refuse and escalate from.
+
+Two details worth the ADR. The ref is pushed fully qualified: `--delete
+release` with a branch *and* a tag of that name is ambiguous, and with only the
+tag present git deletes the tag. And the recovery command is built *before* the
+delete runs — `git push <remote> <oid>:refs/heads/<branch>` — because the
+refresh that follows prunes the remote-tracking ref the oid came from, and
+after that nothing in the app remembers where the branch was.
+
+Not used by hand in the running app yet. `npm test` 2220 passing.
 
 ### 2026-09-08 (later) — the force push, and the lease that makes it allowed
 

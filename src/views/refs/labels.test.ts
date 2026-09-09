@@ -6,6 +6,7 @@ import {
   applyStashQuestion,
   branchNameError,
   deleteBranchQuestion,
+  deleteRemoteBranchQuestion,
   dropRecoveryCommand,
   dropStashQuestion,
   forceDeleteBranchQuestion,
@@ -15,6 +16,8 @@ import {
   popStashQuestion,
   stashLabel,
   trackingSummary,
+  remoteDeleteRecovery,
+  splitRemoteBranch,
 } from './labels';
 
 function branch(overrides: Partial<Branch> & { name: string }): Branch {
@@ -269,5 +272,59 @@ describe('formatRelativeDate', () => {
 
   it('returns unparsable input verbatim rather than a wrong date', () => {
     expect(formatRelativeDate('not a date', now)).toBe('not a date');
+  });
+});
+
+describe('splitRemoteBranch', () => {
+  it('splits at the first slash, which is the only split git gives', () => {
+    expect(splitRemoteBranch('origin/main')).toEqual({
+      remote: 'origin',
+      branch: 'main',
+    });
+    expect(splitRemoteBranch('origin/feat/tickets-service')).toEqual({
+      remote: 'origin',
+      branch: 'feat/tickets-service',
+    });
+  });
+
+  it.each([
+    ['no slash at all', 'main'],
+    ['nothing before the slash', '/main'],
+    ['nothing after it', 'origin/'],
+    ['the symref, not a branch', 'origin/HEAD'],
+    ['nothing', ''],
+  ])('refuses %s', (_why, name) => {
+    // A name this cannot split gets no delete button: the push would have to
+    // guess which half is the remote, and guessing wrong deletes a ref on a
+    // server.
+    expect(splitRemoteBranch(name)).toBeNull();
+  });
+});
+
+describe('deleteRemoteBranchQuestion', () => {
+  it('says it is for everyone, which is the whole difference', () => {
+    const question = deleteRemoteBranchQuestion({ remote: 'origin', branch: 'feat/x' });
+
+    expect(question).toContain('feat/x');
+    expect(question).toContain('origin');
+    expect(question).toMatch(/for everyone/);
+  });
+});
+
+describe('remoteDeleteRecovery', () => {
+  const ref = { remote: 'origin', branch: 'feat/x' };
+
+  it('pushes the oid back to the name it had', () => {
+    const oid = 'a'.repeat(40);
+    expect(remoteDeleteRecovery(ref, oid)).toBe(
+      `git push origin ${oid}:refs/heads/feat/x`,
+    );
+  });
+
+  it('offers nothing for an oid it cannot vouch for', () => {
+    // This string is handed to the user to paste into a shell.
+    expect(remoteDeleteRecovery(ref, 'HEAD')).toBeNull();
+    expect(remoteDeleteRecovery(ref, 'a1b2c3d')).toBeNull();
+    expect(remoteDeleteRecovery(ref, '')).toBeNull();
   });
 });

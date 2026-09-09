@@ -1374,3 +1374,55 @@ so the non-fast-forward advice — "pull first" — is not given to someone who
 just asked to overwrite. Push's own promise is unchanged and its hint now says
 it plainly: Push never overwrites; replacing a remote branch is a separate,
 confirmed control.
+
+## ADR-0048 — A remote branch can be deleted from its row, confirmed, with the push that puts it back
+
+**Date:** 2026-09-08 · **Status:** accepted
+
+**Decision:** every row under **Remote** in the refs panel gets a **Delete**
+button beside Check out. It opens a one-stage danger confirmation naming the
+branch, the remote, and that the branch goes *for everyone who uses that
+remote*; the sentence becomes the confirmation token. The command is
+`git push --progress <remote> --delete refs/heads/<branch>`, built by
+`buildDeleteRemoteBranchCommand`, marked destructive, and refused by the git
+layer without a token. On success the notice carries an `undoHint`:
+`git push <remote> <oid>:refs/heads/<branch>`, built from the oid the row was
+drawn with. A remote-tracking name this panel cannot split into a remote and a
+branch — `origin/HEAD`, anything without both halves — gets no button at all.
+
+**Why:** the panel listed three remote branches and offered "Check out" on
+each, so a branch merged and finished had to be deleted from a terminal. That
+is the operation the app was closest to already having: it holds the name, the
+remote and the oid.
+
+**Why one stage and no arming checkbox.** The local delete has two, because git
+itself refuses `-d` on an unmerged branch and the second question is asked with
+git's own warning in view. Nothing analogous exists here: git will delete a
+remote branch that is merged nowhere without a murmur, so the only gates are
+this confirmation and whatever the server enforces. Cancel takes focus, as it
+does in every question in this panel, and the button says "Delete on
+&lt;remote&gt;" rather than "Delete" so the sentence is complete on the control.
+
+**Why the ref is fully qualified.** `git push origin --delete release` is
+ambiguous when a branch and a tag share the name, and with only the tag present
+it deletes the *tag* — a ref nobody asked about, and the kind that is often the
+only name left on a commit. `refs/heads/<branch>` cannot do that, and the
+integration test holds the property against the real binary.
+
+**Why the recovery command is built before the delete.** Deleting a remote
+branch removes the name, not the commits: they stay on the server until it
+collects them, and they are in this clone, because the row was drawn from a
+remote-tracking ref pointing at them. So the way back is one push. The oid is
+only knowable *before* the operation — the refresh that follows prunes the ref
+it came from — so it is captured with the question and carried through to the
+notice, the way the stash-drop recovery is (ADR-0031).
+
+**Consequences:** four integration tests against the real binary — the branch
+and only the branch goes, a same-named tag survives, the recovery push
+recreates the branch at its oid, and a server's refusal (deleting the branch
+HEAD points at) comes back as a failure with git's words rather than as
+silence. `splitRemoteBranch` and the two sentences live in `views/refs/labels.ts`
+with the rest of the panel's pure logic. The confirmed question is checked
+against the open repository before it runs, like every other question here:
+branch names collide across repositories, and the action layer resolves the
+root from current state.

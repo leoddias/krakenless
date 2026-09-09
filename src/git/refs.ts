@@ -11,6 +11,7 @@ import {
   buildMergeAbortCommand,
   buildPullCommand,
   buildPullMergeCommand,
+  buildDeleteRemoteBranchCommand,
   buildPushCommand,
   buildPushTagCommand,
   buildRemoteListCommand,
@@ -151,6 +152,28 @@ export async function push(
     return runGit(repo, buildPushCommand(options), approve(confirmation));
   }
   return runGit(repo, buildPushCommand(options), SAFE);
+}
+
+/**
+ * Deletes a branch on a remote, which is not undoable from here.
+ *
+ * Confirmed for the reason a lease push is: this is a ref other people fetch,
+ * and it stops existing for all of them. The confirmation token is the only
+ * gate — git will not refuse a delete of a branch that is merged nowhere, and
+ * the server's own protections (a default branch, a protected pattern) are the
+ * only other thing standing in the way.
+ */
+export function deleteRemoteBranch(
+  repo: string,
+  remote: string,
+  branch: string,
+  confirmation: Confirmation,
+): Promise<unknown> {
+  return runGit(
+    repo,
+    buildDeleteRemoteBranchCommand(remote, branch),
+    approve(confirmation),
+  );
 }
 
 /**

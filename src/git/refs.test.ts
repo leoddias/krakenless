@@ -1,8 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { deleteBranch, listStashes, pull, pullMerge, push, pushTag } from './refs';
+import {
+  deleteBranch,
+  deleteRemoteBranch,
+  listStashes,
+  pull,
+  pullMerge,
+  push,
+  pushTag,
+} from './refs';
 import { userConfirmed } from './confirm';
 import { GitError } from './errors';
+import { isDestructive } from './destructive';
 import {
+  buildDeleteRemoteBranchCommand,
   buildFetchCommand,
   buildPullCommand,
   buildPullMergeCommand,
@@ -420,5 +430,70 @@ describe('pull --autostash', () => {
     await expect(
       pullMerge('C:/repo', userConfirmed('Merge origin/main into main?')),
     ).resolves.toBe('autostash-conflicted');
+  });
+});
+
+describe('deleting a branch on a remote', () => {
+  it('names the ref in full, so a tag of the same name is never hit', () => {
+    // `git push origin --delete release` is ambiguous when both a branch and a
+    // tag are called `release`, and with only the tag present it deletes the
+    // tag. A delete that lands on the wrong kind of ref is the surprise this
+    // app must not produce.
+    expect(buildDeleteRemoteBranchCommand('origin', 'release').args).toEqual([
+      'push',
+      '--progress',
+      'origin',
+      '--delete',
+      'refs/heads/release',
+    ]);
+  });
+
+  it('is destructive, and says so to the runner', () => {
+    // The argument gate (ADR-0016) is the second lock: it inspects the array
+    // and refuses an unapproved run whatever the caller claimed.
+    const command = buildDeleteRemoteBranchCommand('origin', 'topic');
+    expect(command.destructive).toBe(true);
+    expect(isDestructive(command.args)).toBe(true);
+  });
+
+  it('refuses a branch or remote name that would change the command', () => {
+    for (const name of ['-D', '+main', 'refs/heads/x', 'a b', '']) {
+      expect(() => buildDeleteRemoteBranchCommand('origin', name)).toThrow(GitError);
+      expect(() => buildDeleteRemoteBranchCommand(name, 'topic')).toThrow(GitError);
+    }
+  });
+
+  it('carries the network timeout, like every other push', () => {
+    expect(buildDeleteRemoteBranchCommand('origin', 'topic').timeoutMs).toBe(300_000);
+  });
+});
+
+describe('deleteRemoteBranch', () => {
+  beforeEach(() => {
+    invoke.mockReset();
+  });
+
+  it('refuses to run without a confirmation the user gave', () => {
+    // The one gate on this side: git will happily delete a remote branch that
+    // is merged nowhere, so nothing else stands between a click and a ref
+    // other people fetch. The refusal is thrown before the command is built,
+    // which is why this is not an awaited rejection.
+    invoke.mockResolvedValue(raw());
+    expect(() =>
+      // @ts-expect-error the point of the test is the missing token
+      deleteRemoteBranch('C:/repo', 'origin', 'topic', undefined),
+    ).toThrow(GitError);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('runs once the user has confirmed', async () => {
+    invoke.mockResolvedValue(raw());
+    await deleteRemoteBranch(
+      'C:/repo',
+      'origin',
+      'topic',
+      userConfirmed('Delete "topic" from origin — for everyone who uses that remote?'),
+    );
+    expect(invoke).toHaveBeenCalledTimes(1);
   });
 });

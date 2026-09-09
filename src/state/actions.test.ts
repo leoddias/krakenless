@@ -3,6 +3,7 @@ import {
   closeRepo,
   fetchRemote,
   forcePushCurrent,
+  removeRemoteBranch,
   pullCurrent,
   removeBranch,
   removeStash,
@@ -48,6 +49,7 @@ const pushFn = vi.hoisted(() => vi.fn());
 const switchBranch = vi.hoisted(() => vi.fn());
 const switchNewBranch = vi.hoisted(() => vi.fn());
 const deleteBranch = vi.hoisted(() => vi.fn());
+const deleteRemoteBranchFn = vi.hoisted(() => vi.fn());
 const applyStash = vi.hoisted(() => vi.fn());
 const dropStash = vi.hoisted(() => vi.fn());
 
@@ -66,6 +68,7 @@ vi.mock('../git/refs', () => ({
   switchBranch,
   switchNewBranch,
   deleteBranch,
+  deleteRemoteBranch: deleteRemoteBranchFn,
   applyStash,
   dropStash,
 }));
@@ -874,5 +877,54 @@ describe('forcePushCurrent — the lease and the way back', () => {
 
     expect(store.getState().notice).toMatchObject({ tone: 'error' });
     expect(store.getState().notice?.message).toMatch(/moved/);
+  });
+});
+
+describe('removeRemoteBranch — the name goes, the way back is kept', () => {
+  const TARGET = { remote: 'origin', branch: 'feat/x' };
+
+  it('deletes under a confirmation and keeps the push that puts it back', async () => {
+    deleteRemoteBranchFn.mockResolvedValue(undefined);
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+    const recovery = `git push origin ${'e'.repeat(40)}:refs/heads/feat/x`;
+
+    await expect(
+      removeRemoteBranch(store, TARGET, 'Delete "feat/x" from origin?', recovery),
+    ).resolves.toBe(true);
+
+    const [, remote, branch, confirmation] = deleteRemoteBranchFn.mock.calls[0] ?? [];
+    expect([remote, branch]).toEqual(['origin', 'feat/x']);
+    expect(confirmation).toBeDefined();
+    expect(store.getState().notice).toMatchObject({ tone: 'info' });
+    // The oid is about to stop existing anywhere in the app: the refresh that
+    // follows prunes the remote-tracking ref the row was drawn from.
+    expect(store.getState().notice?.undoHint).toBe(recovery);
+  });
+
+  it('says what happened even when no recovery command could be built', async () => {
+    deleteRemoteBranchFn.mockResolvedValue(undefined);
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await removeRemoteBranch(store, TARGET, 'reason', null);
+
+    expect(store.getState().notice?.message).toMatch(/Deleted feat\/x from origin/);
+    expect(store.getState().notice?.undoHint).toBeUndefined();
+  });
+
+  it('claims nothing when the remote refused', async () => {
+    // A protected branch, a server-side hook, no permission — all ordinary,
+    // and none of them may arrive as "deleted".
+    deleteRemoteBranchFn.mockRejectedValue(
+      new GitError('command-failed', 'remote: refusing to delete the current branch'),
+    );
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await expect(removeRemoteBranch(store, TARGET, 'reason', null)).resolves.toBe(false);
+
+    expect(store.getState().notice).toMatchObject({ tone: 'error' });
+    expect(store.getState().notice?.message).toMatch(/refusing to delete/);
   });
 });

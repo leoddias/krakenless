@@ -145,6 +145,33 @@ export function buildPushCommand(options: PushOptions): GitCommand {
 }
 
 /**
+ * Deletes one branch on a remote.
+ *
+ * The ref is fully qualified for the same reason the push refspec is, and here
+ * it matters more: `git push origin --delete release` with both a branch and a
+ * tag called `release` is ambiguous, and git either refuses or — with only one
+ * of them present — deletes whichever it found. A delete that hits a tag
+ * because a branch of that name was already gone is exactly the surprise this
+ * app must not produce.
+ *
+ * Destructive, and not in the recoverable-by-git sense: the ref is gone from
+ * the server for everyone the moment this returns. Its confirmation is
+ * required by {@link deleteRemoteBranch}, and the way back — a push of the oid
+ * the panel had on screen — is offered in the notice afterwards.
+ */
+export function buildDeleteRemoteBranchCommand(
+  remote: string,
+  branch: string,
+): GitCommand {
+  const name = assertRefName(branch);
+  return {
+    args: ['push', '--progress', assertRefName(remote), '--delete', `refs/heads/${name}`],
+    destructive: true,
+    timeoutMs: NETWORK_TIMEOUT_MS,
+  };
+}
+
+/**
  * Publishes one tag to a remote.
  *
  * A tag is created locally and then exists nowhere else: `git push` does not
