@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FileDiff, Hunk } from '../../git/types';
@@ -142,6 +143,25 @@ describe('DiffView hunk rendering', () => {
       ['added', '', '2', 'added: 2+const b = 3;'],
       ['context', '3', '3', 'context: 33 export {};'],
     ]);
+  });
+
+  it('keeps everything but the code out of a copied selection', () => {
+    // Copying a few lines out of a diff and pasting them somewhere that runs
+    // them is the point of this panel, and clipped-away text is still selected
+    // text: the screen-reader label came back glued to the front of every line
+    // ("added:const b = 3;"). The rule is the same one the line numbers and the
+    // marker glyph in the same row already follow.
+    // jsdom applies no CSS, and this is a selection behaviour rather than
+    // anything the DOM can be asked about, so the stylesheet is read as text.
+    const sheet = readFileSync('src/views/diff/DiffView.module.css', 'utf8');
+    const rule = (name: string): string =>
+      sheet.split(`.${name} {`)[1]?.split('}')[0] ?? '';
+
+    for (const name of ['srOnly', 'lineNumber', 'marker']) {
+      expect(rule(name)).toContain('user-select: none');
+    }
+    // The code itself is the one thing that must stay selectable.
+    expect(rule('lineText')).not.toContain('user-select');
   });
 
   it('preserves line content verbatim, including leading whitespace and tabs', () => {

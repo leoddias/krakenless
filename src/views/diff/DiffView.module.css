@@ -578,6 +578,15 @@
   line-height: 1.5;
 }
 
+/* Said to a screen reader, never to the clipboard.
+
+   Every line of the diff carries one of these ("added: ", "deleted: "), because
+   the marker glyph beside it is decorative and colour is not a cue everyone
+   has. But clipped-away text is still *selected* text: a copy of three lines of
+   a diff came back with "added:" glued to the front of each one. `user-select`
+   is what keeps it out, the same way the line numbers and the marker in the
+   same row are already kept out — the point of this panel is that the code in
+   it can be copied and pasted somewhere that will run it. */
 .srOnly {
   position: absolute;
   width: 1px;
@@ -588,4 +597,5 @@
   clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
+  user-select: none;
 }
