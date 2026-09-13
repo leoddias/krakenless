@@ -1,5 +1,6 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { DISMISS_AFTER_MS } from './autoDismiss';
 import { NoticeBar } from './NoticeBar';
 import { StoreProvider } from '../../state/hooks';
 import { createStore, type NoticeInput, type Store } from '../../state/store';
@@ -63,5 +64,56 @@ describe('NoticeBar', () => {
 
     expect(store.getState().notice).toBeNull();
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+});
+
+afterEach(cleanup);
+
+describe('NoticeBar dismissing itself', () => {
+  it('clears the notice once the delay has passed', () => {
+    vi.useFakeTimers();
+    const store = renderBar({ tone: 'info', message: 'Fetched from origin.' });
+    expect(screen.getByRole('status')).toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(DISMISS_AFTER_MS);
+    });
+
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(store.getState().notice).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it('gives a notice that replaces another a full ten seconds of its own', () => {
+    // The id is the key, so a second notice is a second clock. Keying on the
+    // message would let two identical failures share one, and the second would
+    // disappear while the user was still reading it.
+    vi.useFakeTimers();
+    const store = renderBar({ tone: 'error', message: 'First.' });
+
+    act(() => {
+      vi.advanceTimersByTime(DISMISS_AFTER_MS - 500);
+      store.dispatch({ type: 'notice', notice: { tone: 'error', message: 'Second.' } });
+    });
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('Second.');
+
+    act(() => {
+      vi.advanceTimersByTime(DISMISS_AFTER_MS);
+    });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  it('still goes when the button is pressed before the timer', () => {
+    vi.useFakeTimers();
+    const store = renderBar({ tone: 'info', message: 'Fetched from origin.' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+
+    expect(store.getState().notice).toBeNull();
+    vi.useRealTimers();
   });
 });

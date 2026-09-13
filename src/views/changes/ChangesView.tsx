@@ -40,6 +40,7 @@ import {
 import { useAppState, useStore } from '../../state/hooks';
 import { isBusy } from '../../state/store';
 import type { Loadable } from '../../state/store';
+import { useAutoDismiss } from '../shell/autoDismiss';
 import { ContextMenu, type MenuSection } from '../shell/ContextMenu';
 import { buildPathTree, visiblePaths, type PathNode } from '../shell/pathTree';
 import { rememberConfig } from '../shell/useLayout';
@@ -343,18 +344,12 @@ export function ChangesView(): ReactNode {
         />
       ))}
 
-      {failure !== null && (
-        <div className={styles.failure} role="alert">
-          <p className={styles.noticeText}>{failure}</p>
-          <button
-            type="button"
-            className={styles.button}
-            onClick={() => setFailure(null)}
-          >
-            Dismiss
-          </button>
-        </div>
-      )}
+      <FailureNotice
+        failure={failure}
+        onDismiss={() => {
+          setFailure(null);
+        }}
+      />
 
       {pending !== null && (
         <DiscardConfirmation
@@ -564,6 +559,7 @@ function RecoveryNotice({
   recovery: Recovery;
   onDismiss: () => void;
 }): ReactNode {
+  useAutoDismiss(recovery.id, onDismiss);
   return (
     <div className={styles.recovery} role="status">
       <strong className={styles.noticeTitle}>Changes discarded — recoverable</strong>
@@ -580,6 +576,32 @@ function RecoveryNotice({
           </li>
         ))}
       </ul>
+      <button type="button" className={styles.button} onClick={onDismiss}>
+        Dismiss
+      </button>
+    </div>
+  );
+}
+
+/**
+ * The panel's failure line.
+ *
+ * A component rather than an inline block so it can hold the dismiss timer:
+ * hooks cannot be called from inside a conditional, and the condition is
+ * exactly "is there a failure to show".
+ */
+function FailureNotice({
+  failure,
+  onDismiss,
+}: {
+  failure: string | null;
+  onDismiss: () => void;
+}): ReactNode {
+  useAutoDismiss(failure, onDismiss);
+  if (failure === null) return null;
+  return (
+    <div className={styles.failure} role="alert">
+      <p className={styles.noticeText}>{failure}</p>
       <button type="button" className={styles.button} onClick={onDismiss}>
         Dismiss
       </button>

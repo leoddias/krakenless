@@ -1520,3 +1520,48 @@ unaffected. `commitMenu.ts` now imports `splitRemoteBranch` from
 already lives. The remote delete captures the row's oid as its recovery push
 before running, for the reason ADR-0048 gives: the refresh afterwards prunes the
 ref the oid came from.
+
+## ADR-0051 — Every dismissible notice goes away on its own after ten seconds (amends ADR-0031, ADR-0045)
+
+**Decision:** One hook, `useAutoDismiss` (`src/views/shell/autoDismiss.ts`),
+gives every dismissible thing in the app the same lifetime: it removes itself
+`DISMISS_AFTER_MS` — ten seconds — after it appears. It is wired into the five
+places that had a `Dismiss` button: the `NoticeBar`, both row kinds of the
+"Recent discards" panel, the `ChangesView` recovery and failure notices, and
+the `RefsView` stash-drop recovery, failure and outcome notices. The delay is
+fixed: it does not pause on hover, does not pause while the window is in the
+background, and does not restart when the same notice is re-shown. The buttons
+stay, for anyone who wants the notice gone sooner. A notice is keyed by its
+identity — a notice id, a discard's `at`, a blob oid, the repository plus the
+message text — so a second notice replacing a first gets a full ten seconds of
+its own rather than inheriting what was left of the first one's.
+
+**Why:** "Depois de 10 segundos podemos dar dismiss — isso vale para todos
+dismiss do krakenless." The panels had accumulated a notice lifetime each, and
+"Recent discards" in particular grows one row per discard and never shrinks on
+its own, so a working session ends with a stack of rows nobody is reading. A
+single rule that holds everywhere is worth more than a per-panel judgement
+about which notice deserves to linger.
+
+**What this overrides, and what it costs.** `NoticeBar` used to say in so many
+words that *nothing here is on a timer*, because a discard's recovery command
+was the only route back to discarded work and a notice that fades takes that
+route with it. Two things make the override survivable rather than reckless.
+ADR-0045 had already moved that route out of the notice: the way back is now a
+button in "Recent discards", and the backup is a blob in the object store that
+no dismissal touches — dismissing has never been what loses the work. And the
+oid is printed on the row for exactly the case where the handle is needed after
+the row is gone. What is genuinely lost is *convenience*: after ten seconds the
+Undo button and the oid are off the screen, and recovering means
+`git fsck --lost-found` (a discard) or `git fsck --unreachable` (a dropped
+stash) instead of one click. That was weighed and accepted.
+
+**Consequences:** A discard of many files is undoable by button for ten seconds
+and by `git fsck` after that. The timer runs while a git command is in flight,
+so a long operation can take a row away while its Undo button is disabled — the
+fixed delay was chosen over a pause knowingly, on the grounds that a timer that
+stops and starts is one nobody can predict. `ChangesView`'s failure line became
+a component (`FailureNotice`) so it could hold a hook, since hooks cannot be
+called from inside a conditional. Re-showing a notice whose key equals the one
+already displayed does not restart the clock; the notice never left the screen,
+so the seconds the user has already had are the seconds that count.

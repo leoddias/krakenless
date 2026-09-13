@@ -1,17 +1,25 @@
 import { type ReactNode } from 'react';
 import { useAppState, useStore } from '../../state/hooks';
+import { useAutoDismiss } from './autoDismiss';
 import styles from './NoticeBar.module.css';
 
 /**
  * The one place a completed operation gets to say what it did.
  *
- * It stays on screen until dismissed. A discard's recovery command is the only
- * route back to the discarded work, and a notification that fades after three
- * seconds would take that route with it — so nothing here is on a timer.
+ * It goes away on its own after ten seconds, like every other dismissible
+ * notice in the app (`useAutoDismiss`). It did not always: a discard's recovery
+ * command used to live here and was the only route back to the discarded work,
+ * so nothing was allowed to fade. ADR-0045 moved that route to the "Recent
+ * discards" panel and its Undo button, and ADR-0051 put the rest on a timer.
  */
 export function NoticeBar(): ReactNode {
   const store = useStore();
   const notice = useAppState((state) => state.notice);
+  // Before the early return: a hook cannot be called conditionally, and a null
+  // key is how this one says "nothing is showing".
+  useAutoDismiss(notice?.id ?? null, () => {
+    store.dispatch({ type: 'notice', notice: null });
+  });
 
   if (notice === null) return null;
 

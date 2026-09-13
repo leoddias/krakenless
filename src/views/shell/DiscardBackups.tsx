@@ -17,12 +17,18 @@
  * thousands of files at once; a row per file would push the repository off
  * the screen, so files that share a discard fold into one row with one Undo,
  * and open on request for the file-by-file buttons.
+ *
+ * A row dismisses itself after ten seconds (ADR-0051), like every other notice
+ * in the app. Dismissing has never been what loses the work — the backup blob
+ * stays in the object store either way — but it does take the oid and the Undo
+ * button off the screen, so after that the way back is `git fsck --lost-found`.
  */
 
 import { useState, type ReactNode } from 'react';
 import { undoDiscard, undoDiscards } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
 import { isBusy, type DiscardBackup } from '../../state/store';
+import { useAutoDismiss } from './autoDismiss';
 import styles from './DiscardBackups.module.css';
 
 /** The files of one discard, in the order they were recorded. */
@@ -71,6 +77,10 @@ export function DiscardBackups(): ReactNode {
 function FileRow({ backup }: { backup: DiscardBackup }): ReactNode {
   const store = useStore();
   const busy = useAppState(isBusy);
+  const forget = (): void => {
+    store.dispatch({ type: 'discard/forgotten', blobOid: backup.blobOid });
+  };
+  useAutoDismiss(backup.blobOid, forget);
   return (
     <li className={styles.row}>
       <code className={styles.path}>{backup.path}</code>
@@ -100,9 +110,7 @@ function FileRow({ backup }: { backup: DiscardBackup }): ReactNode {
         // Only removes the row. The blob stays in the object store, so a
         // dismissal is never the thing that loses the work.
         title="Hide this entry; the backup stays in the object store"
-        onClick={() => {
-          store.dispatch({ type: 'discard/forgotten', blobOid: backup.blobOid });
-        }}
+        onClick={forget}
       >
         Dismiss
       </button>
@@ -116,6 +124,16 @@ function GroupRow({ group }: { group: DiscardGroup }): ReactNode {
   const [open, setOpen] = useState(false);
   const count = group.backups.length;
   const label = `${String(count)} files discarded together`;
+  const forgetAll = (): void => {
+    for (const backup of group.backups) {
+      store.dispatch({ type: 'discard/forgotten', blobOid: backup.blobOid });
+    }
+  };
+  // Keyed on the discard's identity, which is what every file of one click
+  // shares (ADR-0045), so the group's clock is one clock rather than one per
+  // file. The rows revealed by opening the group carry their own, but they all
+  // started together and so expire together.
+  useAutoDismiss(group.at, forgetAll);
 
   return (
     <li className={styles.row}>
@@ -146,11 +164,7 @@ function GroupRow({ group }: { group: DiscardGroup }): ReactNode {
         className={styles.dismiss}
         disabled={busy}
         title="Hide these entries; the backups stay in the object store"
-        onClick={() => {
-          for (const backup of group.backups) {
-            store.dispatch({ type: 'discard/forgotten', blobOid: backup.blobOid });
-          }
-        }}
+        onClick={forgetAll}
       >
         Dismiss all
       </button>

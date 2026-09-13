@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { undoDiscard, undoDiscards } from '../../state/actions';
 import { StoreProvider } from '../../state/hooks';
 import { createStore, type DiscardBackup, type Store } from '../../state/store';
+import { DISMISS_AFTER_MS } from './autoDismiss';
 import { DiscardBackups } from './DiscardBackups';
 
 vi.mock('../../state/actions', () => ({
@@ -195,5 +196,78 @@ describe('DiscardBackups — one row per discard', () => {
 
     expect(screen.getByText('src/a.ts')).toBeInTheDocument();
     expect(screen.getByText('3 files discarded together')).toBeInTheDocument();
+  });
+});
+
+describe('DiscardBackups dismissing itself', () => {
+  it('takes a row off the screen once the delay has passed', () => {
+    vi.useFakeTimers();
+    renderBar([backup()]);
+    expect(screen.getByText('src/a.ts')).toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(DISMISS_AFTER_MS);
+    });
+
+    expect(screen.queryByRole('region', { name: 'Recent discards' })).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it('keeps the backup in the store, so dismissing is never what loses the work', () => {
+    // The row going away is a UI event. The blob it names is still in the
+    // object store, and the oid was on screen for ten seconds precisely so it
+    // can be written down; `git fsck --lost-found` finds it after that.
+    vi.useFakeTimers();
+    const store = renderBar([backup()]);
+
+    act(() => {
+      vi.advanceTimersByTime(DISMISS_AFTER_MS);
+    });
+
+    expect(undoMock).not.toHaveBeenCalled();
+    expect(store.getState().discards).toHaveLength(0);
+    vi.useRealTimers();
+  });
+
+  it('expires a grouped discard as one row rather than file by file', () => {
+    vi.useFakeTimers();
+    renderBar([
+      backup({ path: 'a.ts', blobOid: 'a'.repeat(40) }),
+      backup({ path: 'b.ts', blobOid: 'b'.repeat(40) }),
+    ]);
+    expect(screen.getByText('2 files discarded together')).toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(DISMISS_AFTER_MS);
+    });
+
+    expect(screen.queryByRole('region', { name: 'Recent discards' })).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it('leaves a later discard its own ten seconds', () => {
+    // Two discards a few seconds apart are two clocks. Sharing one would mean
+    // the second row vanished almost as soon as it appeared.
+    vi.useFakeTimers();
+    const store = renderBar([backup({ at: '2026-08-31T10:00:00.000Z' })]);
+
+    act(() => {
+      vi.advanceTimersByTime(DISMISS_AFTER_MS - 2000);
+      store.dispatch({
+        type: 'discard/recorded',
+        backup: backup({
+          path: 'later.ts',
+          blobOid: 'c'.repeat(40),
+          at: '2026-08-31T10:00:08.000Z',
+        }),
+      });
+    });
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+
+    expect(screen.queryByText('src/a.ts')).toBeNull();
+    expect(screen.getByText('later.ts')).toBeInTheDocument();
+    vi.useRealTimers();
   });
 });

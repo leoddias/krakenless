@@ -31,6 +31,7 @@ import {
 import { useAppState, useStore } from '../../state/hooks';
 import { isBusy } from '../../state/store';
 import { buildStashMenu } from '../history/commitMenu';
+import { useAutoDismiss } from '../shell/autoDismiss';
 import { copyText } from '../shell/clipboard';
 import { ContextMenu, type MenuSection } from '../shell/ContextMenu';
 import {
@@ -205,6 +206,26 @@ export function RefsView(): ReactNode {
     remoteDeletion !== null && remoteDeletion.root === root ? remoteDeletion : null;
   const shownFailure = failure !== null && failure.root === root ? failure : null;
   const shownOutcome = outcome !== null && outcome.root === root ? outcome : null;
+
+  // Each of this panel's three notices dismisses itself after ten seconds
+  // (ADR-0051). The keys carry the repository as well as the text, so switching
+  // to another repository and back is a new notice with a fresh clock rather
+  // than one that expires early on a timer the user never saw start.
+  useAutoDismiss(recovery === null ? null : `${recovery.root}:${recovery.oid}`, () => {
+    setRecovery(null);
+  });
+  useAutoDismiss(
+    shownFailure === null ? null : `${shownFailure.root}:${shownFailure.text}`,
+    () => {
+      setFailure(null);
+    },
+  );
+  useAutoDismiss(
+    shownOutcome === null ? null : `${shownOutcome.root}:${shownOutcome.text}`,
+    () => {
+      setOutcome(null);
+    },
+  );
 
   const clearMessages = (): void => {
     setFailure(null);
@@ -457,7 +478,10 @@ export function RefsView(): ReactNode {
 
       {/*
         A drop leaves an oid that is the only route back to the work, so this
-        notice outlives the lists reloading underneath it and every later click.
+        notice outlives the lists reloading underneath it and every later click
+        — but not the ten-second timer every notice now carries (ADR-0051).
+        After that the stash commit is still there and `git fsck --unreachable`
+        is what finds it.
       */}
       {recovery !== null && (
         <div className={styles.recovery} role="status">
