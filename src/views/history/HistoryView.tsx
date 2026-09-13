@@ -21,7 +21,7 @@ import {
   type UIEvent,
 } from 'react';
 import type { Commit, CommitRef, RefKind, StashEntry } from '../../git/types';
-import { selectCommit } from '../../state/actions';
+import { selectCommit, switchTo } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
 import { isBusy, type Loadable } from '../../state/store';
 import { formatAbsoluteDate, formatRelativeDate } from './relativeTime';
@@ -820,6 +820,26 @@ function WorktreeRow({
   );
 }
 
+/**
+ * Whether double-clicking this chip switches to it.
+ *
+ * Local branches only, and not the one already checked out. A remote-tracking
+ * chip is deliberately excluded: `git switch origin/main` detaches HEAD rather
+ * than checking that branch out, and the thing a user means by it — create the
+ * local branch that tracks it — is a ref this repository does not have yet.
+ * That belongs to the refs panel's `RemoteRow`, which asks for the name first.
+ * Tags and HEAD have nothing to switch to.
+ *
+ * Pure and exported so the one rule that decides whether a double click moves
+ * somebody's working tree is asserted on its own.
+ */
+export function chipSwitchesOnDoubleClick(
+  commitRef: CommitRef,
+  current: boolean,
+): boolean {
+  return commitRef.kind === 'branch' && !current;
+}
+
 function RefChip({
   commitRef,
   current = false,
@@ -828,6 +848,8 @@ function RefChip({
   /** The ref the working tree is on: it gets the ✓ and the brighter chip. */
   current?: boolean;
 }): ReactNode {
+  const store = useStore();
+  const busy = useAppState(isBusy);
   const kind = REF_CHIP_CLASS[commitRef.kind];
   const isBranch = commitRef.kind === 'branch' || commitRef.kind === 'remote-branch';
   // A branch you are not on can be picked up; the branch you *are* on is where
@@ -835,6 +857,7 @@ function RefChip({
   // a thing you can name with them.
   const draggable = isBranch && !current;
   const dropTarget = commitRef.kind === 'branch' && current;
+  const switches = chipSwitchesOnDoubleClick(commitRef, current);
   return (
     <span
       className={
@@ -844,11 +867,28 @@ function RefChip({
       data-ref-name={commitRef.name}
       data-current={current ? 'true' : undefined}
       data-drop-target={dropTarget ? 'true' : undefined}
+      data-switches={switches ? 'true' : undefined}
       draggable={draggable ? true : undefined}
+      {...(switches
+        ? {
+            onDoubleClick: (event: ReactMouseEvent<HTMLSpanElement>) => {
+              // The chip sits inside the row's button, whose click selects the
+              // commit. Without this the switch and a selection race each other.
+              event.stopPropagation();
+              if (busy) return;
+              // `switchTo` goes through `git switch`, so a dirty working tree is
+              // a refusal from git rather than an overwrite — which is what
+              // makes this safe to put on a gesture as cheap as a double click.
+              void switchTo(store, commitRef.name);
+            },
+          }
+        : {})}
       title={
-        draggable
-          ? `${REF_LABEL[commitRef.kind]} ${commitRef.name} — drag onto the checked-out branch to merge it in`
-          : `${current ? 'checked out ' : ''}${REF_LABEL[commitRef.kind]} ${commitRef.name}`
+        switches
+          ? `${REF_LABEL[commitRef.kind]} ${commitRef.name} — double-click to switch to it, or drag onto the checked-out branch to merge it in`
+          : draggable
+            ? `${REF_LABEL[commitRef.kind]} ${commitRef.name} — drag onto the checked-out branch to merge it in`
+            : `${current ? 'checked out ' : ''}${REF_LABEL[commitRef.kind]} ${commitRef.name}`
       }
     >
       {current ? (

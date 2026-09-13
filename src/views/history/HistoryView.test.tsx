@@ -10,7 +10,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defaultConfig } from '../../config/schema';
 import type { Commit } from '../../git/types';
-import { mergeRefInto, selectCommit } from '../../state/actions';
+import { mergeRefInto, selectCommit, switchTo } from '../../state/actions';
 import { StoreProvider } from '../../state/hooks';
 import { createStore, type Store } from '../../state/store';
 import { subscribeOpenRequests } from '../../state/openRequests';
@@ -25,10 +25,12 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke }));
 vi.mock('../../state/actions', () => ({
   selectCommit: vi.fn(),
   mergeRefInto: vi.fn(),
+  switchTo: vi.fn(),
 }));
 
 const selectCommitMock = vi.mocked(selectCommit);
 const mergeRefIntoMock = vi.mocked(mergeRefInto);
+const switchToMock = vi.mocked(switchTo);
 
 const NOW = new Date('2026-08-20T12:00:00Z');
 
@@ -74,6 +76,7 @@ beforeEach(() => {
   vi.setSystemTime(NOW);
   selectCommitMock.mockReset();
   mergeRefIntoMock.mockReset().mockResolvedValue(true);
+  switchToMock.mockReset().mockResolvedValue(true);
   // The real action dispatches the selection; keep that behaviour so the view
   // can be observed reacting to it.
   selectCommitMock.mockImplementation((store, oid) => {
@@ -776,5 +779,120 @@ describe('column widths', () => {
     });
 
     expect(store.getState().config.layout.historyColumns.author).toBe(before - 16);
+  });
+});
+
+describe('switching branch from a chip', () => {
+  function chipsOf(row: HTMLElement): HTMLElement[] {
+    return [...row.querySelectorAll<HTMLElement>('[data-ref-kind]')];
+  }
+
+  function chip(name: string): HTMLElement {
+    const row = screen.getByRole('button', { name: /Commit 1/ });
+    const found = chipsOf(row).find((one) => one.getAttribute('data-ref-name') === name);
+    if (found === undefined) throw new Error(`no chip for ${name}`);
+    return found;
+  }
+
+  function renderRefs(refs: Commit['refs']): void {
+    renderWithCommits([makeCommit(1, { refs })]);
+  }
+
+  it('switches to a local branch that is not checked out', () => {
+    renderRefs([
+      { kind: 'head', name: 'HEAD' },
+      { kind: 'branch', name: 'main' },
+      { kind: 'branch', name: 'feat/beta' },
+    ]);
+
+    fireEvent.doubleClick(chip('feat/beta'));
+
+    expect(switchToMock).toHaveBeenCalledTimes(1);
+    expect(switchToMock.mock.calls[0]?.[1]).toBe('feat/beta');
+  });
+
+  it('does nothing on the branch already checked out', () => {
+    renderRefs([
+      { kind: 'head', name: 'HEAD' },
+      { kind: 'branch', name: 'main' },
+    ]);
+
+    fireEvent.doubleClick(chip('main'));
+
+    expect(switchToMock).not.toHaveBeenCalled();
+  });
+
+  it('leaves a remote-tracking chip alone', () => {
+    // `git switch origin/main` detaches HEAD rather than checking that branch
+    // out, and creating the local branch that tracks it needs a name the
+    // repository does not have yet — that is the refs panel's question to ask.
+    renderRefs([
+      { kind: 'branch', name: 'main' },
+      { kind: 'remote-branch', name: 'origin/feat/beta' },
+    ]);
+
+    fireEvent.doubleClick(chip('origin/feat/beta'));
+
+    expect(switchToMock).not.toHaveBeenCalled();
+  });
+
+  it('leaves a tag alone', () => {
+    renderRefs([
+      { kind: 'branch', name: 'main' },
+      { kind: 'tag', name: 'v0.1.0' },
+    ]);
+
+    fireEvent.doubleClick(chip('v0.1.0'));
+
+    expect(switchToMock).not.toHaveBeenCalled();
+  });
+
+  it('does not also select the commit under the chip', () => {
+    // The chip sits inside the row's button. Without stopPropagation a double
+    // click switches branch *and* moves the selection, and the diff panel
+    // reloads under a working tree that is being replaced.
+    renderRefs([
+      { kind: 'head', name: 'HEAD' },
+      { kind: 'branch', name: 'main' },
+      { kind: 'branch', name: 'feat/beta' },
+    ]);
+    selectCommitMock.mockClear();
+
+    fireEvent.doubleClick(chip('feat/beta'));
+
+    expect(selectCommitMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses while a git command is already running', () => {
+    renderHistory((store) => {
+      store.dispatch({
+        type: 'commits/loaded',
+        commits: [
+          makeCommit(1, {
+            refs: [
+              { kind: 'head', name: 'HEAD' },
+              { kind: 'branch', name: 'main' },
+              { kind: 'branch', name: 'feat/beta' },
+            ],
+          }),
+        ],
+      });
+      store.dispatch({ type: 'busy', busy: true });
+    });
+
+    fireEvent.doubleClick(chip('feat/beta'));
+
+    expect(switchToMock).not.toHaveBeenCalled();
+  });
+
+  it('says so in the tooltip, since the gesture is otherwise invisible', () => {
+    renderRefs([
+      { kind: 'head', name: 'HEAD' },
+      { kind: 'branch', name: 'main' },
+      { kind: 'branch', name: 'feat/beta' },
+    ]);
+
+    expect(chip('feat/beta').getAttribute('title')).toContain('double-click to switch');
+    expect(chip('main').getAttribute('title')).not.toContain('double-click');
   });
 });

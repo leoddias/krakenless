@@ -1565,3 +1565,31 @@ a component (`FailureNotice`) so it could hold a hook, since hooks cannot be
 called from inside a conditional. Re-showing a notice whose key equals the one
 already displayed does not restart the clock; the notice never left the screen,
 so the seconds the user has already had are the seconds that count.
+
+## ADR-0052 — Double-clicking a local branch chip in the history switches to it
+
+**Decision:** A `branch` chip on a commit row that is not the current checkout
+answers a double click by running `switchTo` — the same `git switch` the
+toolbar's branch picker uses. The gesture is announced in the chip's tooltip,
+because a double click is otherwise invisible. It is refused while a git
+command is running, and the event stops propagating so the row's click does not
+also move the commit selection. `chipSwitchesOnDoubleClick` is pure and
+exported: the rule that decides whether a double click moves somebody's working
+tree is asserted on its own.
+
+**Why:** "Deveria ser possível switch de branch quando double click em cima
+destas marcações de branch." The chips are where the branches are visible, and
+reaching the toolbar picker to switch to one that is already on screen and
+under the cursor is a detour. `switch` refuses on a dirty working tree rather
+than overwriting it, which is what makes a checkout safe to hang off a gesture
+as cheap as a double click.
+
+**Consequences:** Remote-tracking chips are deliberately inert. `git switch
+origin/main` detaches HEAD rather than checking that branch out, and the thing
+a user means by double-clicking one — create the local branch that tracks it —
+is a ref the repository does not have yet and a name it must be asked for;
+`RemoteRow` in the refs panel already owns that question. Tags and `HEAD` have
+nothing to switch to. The chip stays a `<span>` rather than becoming a button,
+because it is nested inside the row's button and a button inside a button is
+invalid; the gesture is therefore an accelerator and not a keyboard route, and
+the picker and the commit context menu remain the reachable ones.
