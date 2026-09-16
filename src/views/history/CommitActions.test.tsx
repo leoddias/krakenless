@@ -128,10 +128,16 @@ describe('opening the menu', () => {
     expect(store.getState().selection.commitOid).toBe(OID);
   });
 
-  it('does not open on the working-tree row — there is no commit to act on', () => {
+  it('opens the working tree menu there, not the commit one', () => {
+    // The working-tree row has no commit, so none of these items apply to it.
+    // It has a menu of its own now (ADR-0053) — what must not happen is the
+    // commit menu appearing over a row there is no commit for.
     renderHistory();
     fireEvent.contextMenu(screen.getByRole('button', { name: /Working tree/ }));
-    expect(screen.queryByRole('menu')).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: /Check out this commit/ })).toBeNull();
+    expect(
+      screen.queryByRole('menuitem', { name: /Stash tracked changes/ }),
+    ).not.toBeNull();
   });
 
   it('closes without running anything when Escape is pressed', () => {

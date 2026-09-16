@@ -23,6 +23,7 @@ import {
   buildResolveStashCommand,
   buildStashApplyCommand,
   buildStashDropCommand,
+  buildStashPushCommand,
   buildStashListCommand,
 } from './commands/stage';
 import { autostashConflictedIn } from './autostash';
@@ -288,6 +289,32 @@ export async function applyStash(
 ): Promise<void> {
   await assertStashUnchanged(repo, entry.ref, entry.oid);
   await runGit(repo, buildStashApplyCommand(entry.ref, options), approve(confirmation));
+}
+
+/**
+ * Puts the working tree aside as a new stash entry.
+ *
+ * Confirmed like every other stash operation: the work leaves the working tree,
+ * and a user who did not ask for that would find their edits gone with no diff
+ * to explain it. Recoverable by design — the entry is in the stash list the app
+ * already shows, and `git stash pop` is one click away — which is why this asks
+ * rather than refuses.
+ *
+ * Tracked changes only — see {@link buildStashPushCommand} for why untracked
+ * files are not offered here. They stay on disk, which is also what plain
+ * `git stash` does.
+ *
+ * `git stash push` on a clean tree exits 0 and creates nothing. The caller is
+ * responsible for not offering it there; this does not second-guess the status
+ * it was given, because a status read and a stash are two moments and a file
+ * can change between them.
+ */
+export async function stashWorkingTree(
+  repo: string,
+  options: { message?: string },
+  confirmation: Confirmation,
+): Promise<void> {
+  await runGit(repo, buildStashPushCommand(options), approve(confirmation));
 }
 
 export async function dropStash(

@@ -9,6 +9,7 @@ import {
   buildStageCommand,
   buildStashApplyCommand,
   buildStashDropCommand,
+  buildStashPushCommand,
   buildStashListCommand,
   buildUnstageCommand,
 } from './stage';
@@ -127,6 +128,52 @@ describe('stash builders', () => {
 
   it('validates the stash ref', () => {
     expect(() => buildStashDropCommand('--all')).toThrow(GitError);
+  });
+
+  it('pushes as a subcommand, so a message can never be read as one', () => {
+    expect(buildStashPushCommand().args).toEqual(['stash', 'push']);
+  });
+
+  it('is destructive, so the runner demands a confirmation', () => {
+    expect(buildStashPushCommand().destructive).toBe(true);
+  });
+
+  it('offers no way to include untracked or ignored files', () => {
+    // `--include-untracked` is broken under the runner's --literal-pathspecs
+    // (the file lands in the stash *and* stays on disk, and the next pop
+    // refuses); `--all` would move ignored files nobody asked about. The
+    // integration test pins git's half of that.
+    const args = buildStashPushCommand({ message: 'anything' }).args;
+    expect(args).not.toContain('--include-untracked');
+    expect(args).not.toContain('-u');
+    expect(args).not.toContain('--all');
+  });
+
+  it('adds no pathspec terminator, which would change what the command means', () => {
+    expect(buildStashPushCommand().args).not.toContain('--');
+    expect(buildStashPushCommand({ message: 'x' }).args).not.toContain('--');
+  });
+
+  it('passes a message behind --message', () => {
+    expect(buildStashPushCommand({ message: 'before the rebase' }).args).toEqual([
+      'stash',
+      'push',
+      '--message',
+      'before the rebase',
+    ]);
+  });
+
+  it('cannot have a message mistaken for a flag', () => {
+    expect(buildStashPushCommand({ message: '--force everything' }).args).toEqual([
+      'stash',
+      'push',
+      '--message',
+      '--force everything',
+    ]);
+  });
+
+  it('omits an empty message rather than sending a blank one', () => {
+    expect(buildStashPushCommand({ message: '' }).args).toEqual(['stash', 'push']);
   });
 });
 

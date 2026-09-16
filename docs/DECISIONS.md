@@ -1593,3 +1593,77 @@ nothing to switch to. The chip stays a `<span>` rather than becoming a button,
 because it is nested inside the row's button and a button inside a button is
 invalid; the gesture is therefore an accelerator and not a keyboard route, and
 the picker and the commit context menu remain the reachable ones.
+
+## ADR-0053 — The working-tree row counts what is uncommitted, and stashes it from a right-click
+
+**Decision:** The history's working-tree row shows the uncommitted counts as
+`+15 M3 -2` — additions, modifications, deletions — and answers a right-click
+with a menu whose one item is `Stash tracked changes…`, behind the same
+`DialogHost` confirmation every other destructive action uses. `tallyWorkingTree`
+(`views/history/workingTreeTally.ts`) is pure and counts **one path, one
+bucket**: the working-tree side decides unless it is unmodified, untracked
+files count as additions, renames count once as a modification, conflicted
+paths count as modified, and ignored paths are not counted. Zero counts are not
+drawn. The glyphs are `aria-hidden`; the row's accessible name and the tooltip
+say "15 added, 3 modified, 2 deleted" instead.
+
+**Why:** "Uncommitted changes" is the same sentence whether one line moved or
+four hundred files did, and stashing was reachable only by leaving the panel.
+Counting each path once matters more than it sounds: a file that is edited and
+staged has two states, and adding the sides up separately reports it as two
+changes — a number that is wrong in the direction that makes people stop
+trusting the rest of the panel.
+
+**Untracked files are not stashed, and that is git's fault, not a choice.**
+`--include-untracked` is broken under the runner's global `--literal-pathspecs`
+(ADR-0015): git writes the untracked files into the stash entry **and leaves
+them on disk**, so the `git stash pop` that should undo the stash refuses with
+"could not restore untracked files from stash" and the entry stays behind.
+Verified against git 2.39.2 — with the flag the file survives on disk, without
+it the same command removes it. `stashpush.integration.test.ts` pins that
+behaviour deliberately: if a future git fixes it, or the runner stops sending
+the flag, the test fails and the option can be reconsidered, which is exactly
+when it should be. `--all` is not offered either, for the older reason: it
+sweeps in ignored files — build output, local secrets — that nobody asked to
+have moved.
+
+**Two preconditions are enforced, and both were found by review rather than
+by design.** The stash is refused while `state.operation.kind` is not null —
+during a merge, cherry-pick, rebase or revert. Git keeps those operations'
+state in the repository (`MERGE_HEAD`, `CHERRY_PICK_HEAD`, the rebase
+directory) and `git stash` takes it with the working tree. Git's own refusal
+while paths are unmerged looks like protection but is not: this app's conflict
+resolver *stages* resolutions, so by the time the last conflict is answered the
+tree is no longer unmerged and the stash goes through. Measured against git
+2.39.2 — a merge loses `MERGE_HEAD` and can no longer be aborted or committed
+as a merge; a cherry-pick can no longer be continued; and a rebase prints
+"Successfully rebased and updated refs/heads/<branch>" while the replayed
+commit is *gone from the branch*, alive only in the stash entry and the reflog,
+with nothing on screen saying so. `stashpush.integration.test.ts` pins that
+last one against real git, because the guard is only worth keeping while it
+stays true. It is checked twice: `stashRefusalReason` disables the menu item
+with the reason, and `stashAll` re-reads the operation before running, so the
+guarantee does not rest on the UI being right about a status that may be
+seconds old.
+
+The second precondition is that something *tracked* has changed.
+`tallyTracked` exists for this: a tree holding only untracked files is not
+clean — the row rightly shows `+3` — but `git stash push` on it prints "No
+local changes to save" and **exits 0**, so without the check the user would
+answer a question promising three files would move, get a success, and find
+nothing had happened.
+
+**Consequences:** `buildStashPushCommand` carries no `--` terminator. It buys
+nothing without a pathspec, and an *empty* pathspec after `--` is what flips
+git into pathspec mode under `--literal-pathspecs` — a token that changes the
+command's meaning while appearing to guard it is worse than none. The message
+is safe regardless: it sits behind `--message` as its own argument, and `push`
+is spelled out so a message starting with `drop` cannot become a subcommand.
+`stash push` was already classified destructive (`destructive.ts`), so the
+runner demands a confirmation token and there is no path to stashing without a
+question — the architecture, not the UI, is what guarantees that. The old test
+asserting the working-tree row has *no* context menu is replaced by one
+asserting it does not get the *commit* menu. The command carries a 120-second
+timeout like the other tree-touching builders, not the 30-second default:
+`stash push` restores the whole working tree, and being killed part-way through
+that on a large tree is the case this is most worth offering on.

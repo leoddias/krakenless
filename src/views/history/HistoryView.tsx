@@ -28,13 +28,23 @@ import { formatAbsoluteDate, formatRelativeDate } from './relativeTime';
 import { GraphCell } from './GraphCell';
 import { useAuthorPictures } from './avatarCache';
 import { HISTORY_COLUMN_BOUNDS, type HistoryColumns } from '../../config/schema';
+import { ContextMenu } from '../shell/ContextMenu';
 import { Splitter } from '../shell/Splitter';
 import { edgeHandlers, useLayout, type LayoutHandle } from '../shell/useLayout';
 import { avatarIdentity } from './remoteAvatar';
 import { buildGraph, type GraphRow } from './graph';
 import { CommitActions, DialogHost, type CommitMenuTarget } from './CommitActions';
 import { mergeDialog } from './mergeDialog';
+import { stashDialog } from './stashDialog';
 import { applyStashes, stashRowLabel } from './stashRows';
+import {
+  tallyParts,
+  tallySentence,
+  tallyTracked,
+  tallyWorkingTree,
+  type WorkingTreeTally,
+} from './workingTreeTally';
+import { stashRefusalReason } from './stashDialog';
 import {
   applyWorktrees,
   isWorktreeRow,
@@ -207,6 +217,9 @@ function CommitList({ commits: loaded }: { commits: Commit[] }): ReactNode {
   const focusSelected = useRef(false);
   /** The commit whose context menu is open, and where it was opened. */
   const [menuTarget, setMenuTarget] = useState<CommitMenuTarget | null>(null);
+  /** Where the working-tree row's own menu was opened, when it is open. */
+  const [treeMenu, setTreeMenu] = useState<{ x: number; y: number } | null>(null);
+  const [stashing, setStashing] = useState(false);
   /**
    * The branch being dragged, or `null`.
    *
@@ -221,6 +234,8 @@ function CommitList({ commits: loaded }: { commits: Commit[] }): ReactNode {
     null,
   );
   const busy = useAppState(isBusy);
+  const status = useAppState((state) => state.status);
+  const operation = useAppState((state) => state.operation);
 
   const worktreeList = useAppState((state) => state.worktrees);
   const { commits, stashes, worktreeRows } = useMemo(() => {
@@ -419,6 +434,13 @@ function CommitList({ commits: loaded }: { commits: Commit[] }): ReactNode {
     if (ref !== null) setDropMerge({ branch: onto, ref });
   };
 
+  const readyStatus = status.state === 'ready' ? status.value : null;
+  const tally = tallyWorkingTree(readyStatus);
+  // What a stash would actually move, which is not what the row shows: see
+  // `tallyTracked`.
+  const trackedTally = tallyTracked(readyStatus);
+  const stashRefusal = stashRefusalReason(operation, busy, trackedTally);
+
   const rows: ReactNode[] = [];
   for (let index = first; index < last; index += 1) {
     const shared = {
@@ -428,7 +450,18 @@ function CommitList({ commits: loaded }: { commits: Commit[] }): ReactNode {
       onSelect: select,
     };
     if (index === 0) {
-      rows.push(<WorkingTreeRow key="working-tree" {...shared} />);
+      rows.push(
+        <WorkingTreeRow
+          key="working-tree"
+          tally={tally}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            select(0, false);
+            setTreeMenu({ x: event.clientX, y: event.clientY });
+          }}
+          {...shared}
+        />,
+      );
       continue;
     }
     const commit = commits[index - 1];
@@ -486,6 +519,37 @@ function CommitList({ commits: loaded }: { commits: Commit[] }): ReactNode {
       {menuTarget !== null && (
         <CommitActions target={menuTarget} onDismiss={() => setMenuTarget(null)} />
       )}
+      {treeMenu !== null && (
+        <ContextMenu
+          sections={[
+            [
+              {
+                id: 'stash',
+                label: 'Stash tracked changes…',
+                disabled: stashRefusal,
+                ...(stashRefusal === null
+                  ? {
+                      onSelect: () => {
+                        setStashing(true);
+                      },
+                    }
+                  : {}),
+              },
+            ],
+          ]}
+          x={treeMenu.x}
+          y={treeMenu.y}
+          label="Working tree"
+          onClose={() => setTreeMenu(null)}
+        />
+      )}
+      {stashing && (
+        <DialogHost
+          dialog={stashDialog(store, trackedTally)}
+          busy={busy}
+          onClose={() => setStashing(false)}
+        />
+      )}
       {dropMerge !== null && (
         <DialogHost
           dialog={mergeDialog(store, dropMerge.branch, dropMerge.ref, dropMerge.ref)}
@@ -504,25 +568,53 @@ interface RowProps {
   onSelect: (index: number, viaKeyboard: boolean) => void;
 }
 
-/** Rows that have a context menu carry the handler; the working tree does not. */
+/** Rows that have a context menu carry the handler. */
 interface MenuRowProps {
   onContextMenu: (event: ReactMouseEvent<HTMLElement>) => void;
 }
 
-function WorkingTreeRow({ index, selected, tabbable, onSelect }: RowProps): ReactNode {
+const TALLY_CLASS: Record<keyof WorkingTreeTally, string> = {
+  added: styles.tallyAdded ?? '',
+  modified: styles.tallyModified ?? '',
+  deleted: styles.tallyDeleted ?? '',
+};
+
+function WorkingTreeRow({
+  index,
+  selected,
+  tabbable,
+  onSelect,
+  tally,
+  onContextMenu,
+}: RowProps & {
+  tally: WorkingTreeTally;
+  onContextMenu: (event: ReactMouseEvent<HTMLElement>) => void;
+}): ReactNode {
+  const parts = tallyParts(tally);
+  const sentence = tallySentence(tally);
   return (
     <RowButton
       index={index}
       selected={selected}
       tabbable={tabbable}
       onSelect={onSelect}
-      label="Working tree, uncommitted changes"
+      onContextMenu={onContextMenu}
+      label={`Working tree, uncommitted changes: ${sentence}`}
     >
       <span className={styles.columnRefs} />
       <span className={styles.columnGraph} />
       <span className={styles.columnSubject}>
         <span className={styles.wip}>Working tree</span>
         <span className={styles.wipNote}>Uncommitted changes</span>
+        {parts.length > 0 && (
+          <span className={styles.tally} title={sentence} aria-hidden="true">
+            {parts.map((part) => (
+              <span key={part.key} className={TALLY_CLASS[part.key]}>
+                {part.text}
+              </span>
+            ))}
+          </span>
+        )}
       </span>
       <span className={styles.columnAuthor} />
       <span className={styles.columnOid} aria-hidden="true">

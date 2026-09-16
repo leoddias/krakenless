@@ -9,8 +9,8 @@ import {
 } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defaultConfig } from '../../config/schema';
-import type { Commit } from '../../git/types';
-import { mergeRefInto, selectCommit, switchTo } from '../../state/actions';
+import type { Commit, StatusEntry } from '../../git/types';
+import { mergeRefInto, selectCommit, stashAll, switchTo } from '../../state/actions';
 import { StoreProvider } from '../../state/hooks';
 import { createStore, type Store } from '../../state/store';
 import { subscribeOpenRequests } from '../../state/openRequests';
@@ -26,11 +26,13 @@ vi.mock('../../state/actions', () => ({
   selectCommit: vi.fn(),
   mergeRefInto: vi.fn(),
   switchTo: vi.fn(),
+  stashAll: vi.fn(),
 }));
 
 const selectCommitMock = vi.mocked(selectCommit);
 const mergeRefIntoMock = vi.mocked(mergeRefInto);
 const switchToMock = vi.mocked(switchTo);
+const stashAllMock = vi.mocked(stashAll);
 
 const NOW = new Date('2026-08-20T12:00:00Z');
 
@@ -77,6 +79,7 @@ beforeEach(() => {
   selectCommitMock.mockReset();
   mergeRefIntoMock.mockReset().mockResolvedValue(true);
   switchToMock.mockReset().mockResolvedValue(true);
+  stashAllMock.mockReset().mockResolvedValue(true);
   // The real action dispatches the selection; keep that behaviour so the view
   // can be observed reacting to it.
   selectCommitMock.mockImplementation((store, oid) => {
@@ -894,5 +897,170 @@ describe('switching branch from a chip', () => {
 
     expect(chip('feat/beta').getAttribute('title')).toContain('double-click to switch');
     expect(chip('main').getAttribute('title')).not.toContain('double-click');
+  });
+});
+
+describe('the working tree row', () => {
+  function withStatus(entries: StatusEntry[]): Store {
+    return renderHistory((store) => {
+      store.dispatch({ type: 'commits/loaded', commits: [makeCommit(1)] });
+      store.dispatch({
+        type: 'status/loaded',
+        status: {
+          branch: 'main',
+          head: 'a'.repeat(40),
+          detached: false,
+          entries,
+          hasConflicts: false,
+        },
+      });
+    });
+  }
+
+  function file(overrides: Partial<StatusEntry>): StatusEntry {
+    return {
+      path: 'a.txt',
+      index: 'unmodified',
+      worktree: 'unmodified',
+      conflicted: false,
+      ...overrides,
+    };
+  }
+
+  function treeRow(): HTMLElement {
+    return screen.getByRole('button', { name: /Working tree/ });
+  }
+
+  it('shows the counts beside the row', () => {
+    withStatus([
+      file({ path: 'n1', index: 'untracked', worktree: 'untracked' }),
+      file({ path: 'n2', index: 'untracked', worktree: 'untracked' }),
+      file({ path: 'e1', worktree: 'modified' }),
+      file({ path: 'g1', worktree: 'deleted' }),
+    ]);
+
+    expect(treeRow()).toHaveTextContent('+2');
+    expect(treeRow()).toHaveTextContent('M1');
+    expect(treeRow()).toHaveTextContent('-1');
+  });
+
+  it('says the same thing in words, for a screen reader', () => {
+    // The glyphs are aria-hidden: "+2" read aloud is "plus two", which is not
+    // what the row means.
+    withStatus([
+      file({ path: 'n1', index: 'untracked', worktree: 'untracked' }),
+      file({ path: 'e1', worktree: 'modified' }),
+    ]);
+
+    expect(treeRow().getAttribute('aria-label')).toContain('1 added, 1 modified');
+  });
+
+  it('shows no counts at all when the tree is clean', () => {
+    withStatus([]);
+
+    expect(treeRow()).not.toHaveTextContent('+');
+    expect(treeRow()).not.toHaveTextContent('M0');
+  });
+
+  it('offers a stash on right-click', () => {
+    withStatus([file({ worktree: 'modified' })]);
+
+    fireEvent.contextMenu(treeRow());
+
+    expect(
+      screen.getByRole('menuitem', { name: /Stash tracked changes/ }),
+    ).not.toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('refuses the stash when there is nothing to stash', () => {
+    withStatus([]);
+
+    fireEvent.contextMenu(treeRow());
+
+    // The menu marks a refusal with `aria-disabled` and a reason, rather than
+    // the `disabled` attribute, so the item stays reachable and can say why.
+    expect(
+      screen.getByRole('menuitem', { name: /Stash tracked changes/ }),
+    ).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('refuses when only untracked files have changed', () => {
+    // The row shows `+2` and is right to; a stash would move neither of them,
+    // print "No local changes to save" and exit 0.
+    withStatus([
+      file({ path: 'n1', index: 'untracked', worktree: 'untracked' }),
+      file({ path: 'n2', index: 'untracked', worktree: 'untracked' }),
+    ]);
+
+    expect(treeRow()).toHaveTextContent('+2');
+    fireEvent.contextMenu(treeRow());
+    expect(
+      screen.getByRole('menuitem', { name: /Stash tracked changes/ }),
+    ).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('refuses while a rebase is in progress, and says why', () => {
+    // The one that loses work: stashing mid-rebase takes the rebase state with
+    // the working tree, and `rebase --continue` then reports success while the
+    // replayed commit is gone from the branch.
+    const store = renderHistory((s2) => {
+      s2.dispatch({ type: 'commits/loaded', commits: [makeCommit(1)] });
+      s2.dispatch({
+        type: 'status/loaded',
+        status: {
+          branch: 'topic',
+          head: 'a'.repeat(40),
+          detached: false,
+          entries: [file({ worktree: 'modified' })],
+          hasConflicts: false,
+        },
+      });
+      s2.dispatch({
+        type: 'operation/read',
+        operation: {
+          kind: 'rebase',
+          commit: null,
+          step: 1,
+          steps: 1,
+          branch: 'topic',
+        },
+      });
+    });
+    expect(store.getState().operation.kind).toBe('rebase');
+
+    fireEvent.contextMenu(treeRow());
+    const item = screen.getByRole('menuitem', { name: /Stash tracked changes/ });
+
+    expect(item).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(item);
+    expect(stashAllMock).not.toHaveBeenCalled();
+  });
+
+  it('asks before stashing rather than doing it from the menu', () => {
+    // `stash push` is destructive to the runner, so the reason the git layer
+    // records has to come from a question the user actually answered.
+    withStatus([file({ worktree: 'modified' })]);
+
+    fireEvent.contextMenu(treeRow());
+    fireEvent.click(screen.getByRole('menuitem', { name: /Stash tracked changes/ }));
+
+    expect(stashAllMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toHaveTextContent(/Stash tracked changes\?/);
+  });
+
+  it('stashes once the question is answered, with the words that were shown', () => {
+    withStatus([
+      file({ path: 'e1', worktree: 'modified' }),
+      file({ path: 'g1', worktree: 'deleted' }),
+    ]);
+
+    fireEvent.contextMenu(treeRow());
+    fireEvent.click(screen.getByRole('menuitem', { name: /Stash tracked changes/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stash' }));
+
+    expect(stashAllMock).toHaveBeenCalledTimes(1);
+    const [, options, reason] = stashAllMock.mock.calls[0] ?? [];
+    expect(options).toEqual({});
+    expect(reason).toContain('1 modified, 1 deleted');
   });
 });

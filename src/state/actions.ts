@@ -57,6 +57,7 @@ import {
   pullMerge,
   push,
   pushTag,
+  stashWorkingTree,
   switchBranch,
   switchNewBranch,
   type DeleteBranchOutcome,
@@ -1180,6 +1181,38 @@ export async function restoreStash(
   return operate(store, () =>
     applyStash(root, entry, options, userConfirmed(confirmationReason)),
   );
+}
+
+/**
+ * Puts the tracked working tree aside as a stash entry.
+ *
+ * The caller passes the words the user actually saw, because that string is
+ * what the runner's confirmation gate records — see `git/confirm.ts`.
+ */
+export async function stashAll(
+  store: Store,
+  options: { message?: string },
+  confirmationReason: string,
+): Promise<boolean> {
+  const repo = currentRepo(store);
+  if (repo === null) return false;
+  return operate(store, async () => {
+    // Read again here rather than trusting the menu that offered this. A merge,
+    // rebase or cherry-pick keeps its state in the working tree, and `git stash`
+    // takes that state with it — a rebase then reports success while the commit
+    // it was replaying is gone from the branch. The UI disables the item
+    // (`stashRefusalReason`); this is the check that does not depend on the UI
+    // being right, and on a status that may be seconds old.
+    const operation = await readOperation(repo.root, repo.gitDir);
+    if (operation.kind !== null) {
+      throw new GitError(
+        'command-failed',
+        `A ${operation.kind} is in progress. Stashing now would take its state with the working tree, and the commit being replayed would be lost. Finish or abort it first.`,
+        { args: ['stash', 'push'] },
+      );
+    }
+    await stashWorkingTree(repo.root, options, userConfirmed(confirmationReason));
+  });
 }
 
 export async function removeStash(

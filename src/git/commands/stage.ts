@@ -242,3 +242,49 @@ export function buildStashApplyCommand(
 export function buildStashDropCommand(ref: string): GitCommand {
   return { args: ['stash', 'drop', assertRevision(ref)], destructive: true };
 }
+
+/**
+ * Restoring a whole working tree is not a sub-second command, the way the
+ * index-only ones are. Matches the other tree-touching builders.
+ */
+const STASH_TIMEOUT_MS = 120_000;
+
+/**
+ * Puts the tracked working tree aside as a new stash entry.
+ *
+ * `push`, never the bare `git stash`: the two mean the same thing today, but
+ * only the explicit form is safe to extend with a message — bare `stash` reads
+ * its first argument as a subcommand, so a message beginning with the word
+ * `push` or `drop` would change what the command *is*.
+ *
+ * **Tracked changes only, and there is no `--include-untracked` option here.**
+ * Under the runner's global `--literal-pathspecs` (ADR-0015) that flag is
+ * broken in a way that loses nothing but leaves a mess: git records the
+ * untracked files into the stash entry *and leaves them on disk*, so the next
+ * `git stash pop` refuses with "could not restore untracked files from stash"
+ * and the entry stays behind. Verified against git 2.39 — see
+ * `stashpush.integration.test.ts`, which pins the behaviour so a future change
+ * to the runner's flags cannot re-enable this silently. `--all` is not offered
+ * either, for the older reason: it sweeps in ignored files — build output,
+ * local secrets — which nobody asked to have moved.
+ *
+ * There is deliberately **no `--` terminator**, for the plain reason that this
+ * command emits no positional argument at all: the message is consumed by
+ * `--message`, so there is nothing for git to mistake for a pathspec. (A bare
+ * `--` was measured to be harmless here, not helpful — it is left out because
+ * an unused guard reads as a guarantee it does not give.) **If a pathspec is
+ * ever added to this builder, it must go behind a `--`**, or a path shaped like
+ * a flag becomes one.
+ *
+ * The timeout is the tree-touching one, not the default. `stash push` writes
+ * the stash commit and then restores the whole working tree; on the large tree
+ * this is most worth offering, being killed at the 30-second default would
+ * leave that restore half done.
+ */
+export function buildStashPushCommand(options: { message?: string } = {}): GitCommand {
+  const args = ['stash', 'push'];
+  if (options.message !== undefined && options.message.length > 0) {
+    args.push('--message', options.message);
+  }
+  return { args, destructive: true, timeoutMs: STASH_TIMEOUT_MS };
+}

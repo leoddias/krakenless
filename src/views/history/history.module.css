@@ -267,6 +267,35 @@
   font-size: 0.75rem;
 }
 
+/* The uncommitted counts: `+15 M3 -2`.
+
+   Tabular figures so the three numbers keep their columns as the working tree
+   changes underneath them — proportional digits make the row twitch on every
+   file save, which is exactly when the user is not looking at it. */
+.tally {
+  display: inline-flex;
+  gap: 0.5rem;
+  margin-left: 0.5rem;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Colour is a second cue, never the only one: the `+`, `M` and `-` in front of
+   each number say the same thing to a reader who cannot tell these apart. */
+.tallyAdded {
+  color: var(--added);
+}
+
+/* `--warning` rather than a new token: modified is the middle state, and the
+   palette already has one amber that means exactly "neither of the other two". */
+.tallyModified {
+  color: var(--warning);
+}
+
+.tallyDeleted {
+  color: var(--deleted);
+}
+
 /* --- ref chips ------------------------------------------------------------- */
 
 .ref {
