@@ -25,6 +25,7 @@ import {
   cherryPickCommit,
   createBranchAt,
   createTagAt,
+  pushCurrent,
   pushTagTo,
   rebaseBranchOnto,
   removeBranch,
@@ -40,6 +41,13 @@ import { ContextMenu, type MenuSection } from '../shell/ContextMenu';
 import { copyText } from '../shell/clipboard';
 import { BRANCH_NOUN, TAG_NOUN, refNameError, type RefNoun } from '../shell/refName';
 import { trapTab } from '../shell/trapTab';
+import {
+  candidateRemotes,
+  pushIntent,
+  readUpstream,
+  type Gate,
+  type PushIntent,
+} from '../remote/remotes';
 import {
   applyStashQuestion,
   deleteBranchQuestion,
@@ -94,6 +102,12 @@ interface NameDialog {
    * made it — but not always, which is why this is a choice and not a rule.
    */
   pushTo: string | null;
+  /**
+   * The branch that goes to the remote together with the tag, or `null` when
+   * none can. Shown in the checkbox's label: the box publishes two refs, and a
+   * label naming only one of them would be a lie about what the click does.
+   */
+  pushBranch: string | null;
   run: (values: {
     name: string;
     message: string;
@@ -151,6 +165,8 @@ export function CommitActions({
   const busy = useAppState(isBusy);
   const status = useAppState((state) => state.status);
   const remotes = useAppState((state) => state.remotes);
+  const repo = useAppState((state) => state.repo);
+  const branches = useAppState((state) => state.branches);
   const [menuOpen, setMenuOpen] = useState(true);
   const [dialog, setDialog] = useState<Dialog | null>(null);
 
@@ -173,6 +189,36 @@ export function CommitActions({
           (a, b) => Number(b.name === 'origin') - Number(a.name === 'origin'),
         )[0]?.name ?? null)
       : null;
+
+  /*
+    The branch the tag's push carries with it, or `null`.
+
+    A tag pushed on its own can land on a remote that has never seen the commit
+    under any branch: the ref is there, nothing else points into that history,
+    and everyone who fetches gets a tag hanging off commits their branches do
+    not contain. So the box publishes both, and the branch goes through the
+    same gate the remote toolbar's Push button uses — same refusals for a
+    detached HEAD, a branch that is behind, an upstream under another name.
+    Only to the remote the tag itself goes to: pushing the branch somewhere the
+    checkbox did not name is not what was ticked.
+
+    Read in this render and captured by the dialog's `run`, like every other
+    decision this menu makes between a question and its command. It is a plain
+    push, so a branch that moved underneath it is git's to refuse.
+  */
+  const branchIntent = pushIntent({
+    repoOpen: repo.state === 'ready',
+    busy,
+    statusState: status.state,
+    hasConflicts: status.state === 'ready' && status.value.hasConflicts,
+    upstream: readUpstream(status),
+    branchesState: branches.state,
+    publishRemote: candidateRemotes(branches, remotes)[0] ?? null,
+    // Only a force push leases, and this one never forces.
+    lease: null,
+  } satisfies Gate);
+  const branchPush: PushIntent | null =
+    branchIntent !== null && branchIntent.remote === tagRemote ? branchIntent : null;
 
   const notify = (tone: 'info' | 'warning', message: string): void => {
     store.dispatch({ type: 'notice', notice: { tone, message } });
@@ -211,6 +257,7 @@ export function CommitActions({
           needsMessage: false,
           offersCheckout: true,
           pushTo: null,
+          pushBranch: null,
           run: ({ name, checkout }) =>
             createBranchAt(store, name, commit.oid, { checkout }),
         });
@@ -223,6 +270,7 @@ export function CommitActions({
           needsMessage: action.annotated,
           offersCheckout: false,
           pushTo: tagRemote,
+          pushBranch: branchPush?.branch ?? null,
           run: async ({ name, message, push }) => {
             const created = await createTagAt(
               store,
@@ -232,9 +280,13 @@ export function CommitActions({
             );
             // Only if the tag exists: pushing a name git refused to create
             // would report a second failure about the first one.
-            if (created && push && tagRemote !== null) {
-              await pushTagTo(store, tagRemote, name);
-            }
+            if (!created || !push || tagRemote === null) return created;
+            // The branch first, so the remote has the history the tag points
+            // into before the tag names it. A push git refuses reports itself
+            // and does not cancel the tag: `push refs/tags/x` carries every
+            // object the tag needs on its own.
+            if (branchPush !== null) await pushCurrent(store, branchPush);
+            await pushTagTo(store, tagRemote, name);
             return created;
           },
         });
@@ -699,7 +751,11 @@ function NameBody({
             disabled={locked}
             onChange={(event) => setPush(event.target.checked)}
           />
-          <span>Push it to {dialog.pushTo}</span>
+          <span>
+            {dialog.pushBranch === null
+              ? `Push it to ${dialog.pushTo}`
+              : `Push it and ${dialog.pushBranch} to ${dialog.pushTo}`}
+          </span>
         </label>
       )}
 

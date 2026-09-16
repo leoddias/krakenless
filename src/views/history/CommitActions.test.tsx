@@ -41,6 +41,11 @@ function status(overrides: Partial<RepoStatus> = {}): RepoStatus {
   };
 }
 
+/** A status on `main`, tracking `origin/main` and ahead of it. */
+function tracking(overrides: Partial<RepoStatus> = {}): RepoStatus {
+  return status({ upstream: 'origin/main', ahead: 1, behind: 0, ...overrides });
+}
+
 function renderHistory(
   overrides: { status?: RepoStatus; refs?: Commit['refs'] } = {},
 ): Store {
@@ -306,6 +311,82 @@ describe('publishing a tag', () => {
     expect(ran('push', '--progress', 'origin', 'refs/tags/v2.0:refs/tags/v2.0')).toBe(
       true,
     );
+  });
+
+  it('sends the branch to the same remote, before the tag', async () => {
+    renderHistory({ status: tracking() });
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Create tag here' }));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'v2.0' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: /Push it and main to origin/ }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    });
+
+    expect(ran('push', '--progress', 'origin', 'refs/heads/main:refs/heads/main')).toBe(
+      true,
+    );
+    const pushes = invocations()
+      .filter((args) => args[0] === 'push')
+      .map((args) => args[3]);
+    // The branch first: the remote has the history the tag points into before
+    // the tag names it.
+    expect(pushes).toEqual([
+      'refs/heads/main:refs/heads/main',
+      'refs/tags/v2.0:refs/tags/v2.0',
+    ]);
+  });
+
+  it('leaves the branch alone when the box is not ticked', async () => {
+    renderHistory({ status: tracking() });
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Create tag here' }));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'v2.0' } });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    });
+
+    expect(invocations().some((args) => args[0] === 'push')).toBe(false);
+  });
+
+  it('pushes the tag alone when the branch is behind, and says only that', async () => {
+    // git would refuse the branch push as a non-fast-forward, so it is not
+    // offered — the same refusal the remote toolbar's Push button makes.
+    renderHistory({ status: tracking({ ahead: 0, behind: 2 }) });
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Create tag here' }));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'v2.0' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: /Push it to origin/ }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    });
+
+    const pushes = invocations()
+      .filter((args) => args[0] === 'push')
+      .map((args) => args[3]);
+    expect(pushes).toEqual(['refs/tags/v2.0:refs/tags/v2.0']);
+  });
+
+  it('pushes the tag alone when the branch tracks a differently-named upstream', async () => {
+    renderHistory({
+      status: status({ upstream: 'origin/release', ahead: 1, behind: 0 }),
+    });
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Create tag here' }));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'v2.0' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: /Push it to origin/ }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    });
+
+    const pushes = invocations()
+      .filter((args) => args[0] === 'push')
+      .map((args) => args[3]);
+    expect(pushes).toEqual(['refs/tags/v2.0:refs/tags/v2.0']);
   });
 });
 
