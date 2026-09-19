@@ -9,6 +9,33 @@
 - **Phase:** v0.1 feature-complete. Every buildable item in `docs/ROADMAP.md`
   M0–M5 is checked off; the only open item is the dogfood gate, which is two
   weeks of use, not code.
+- **A pasted-into-a-shell recovery line is only offered for a name a shell
+  reads as a name** (2026-09-19, ADR-0058). Covers the branch recovery too.
+- **Tags are listed, and can be deleted** (2026-09-19, ADR-0056): a third
+  section in the refs panel, read by `for-each-ref` over `refs/tags` and sorted
+  by version. A row selects the commit the tag resolves to, carries a Delete,
+  and answers a right-click with push, delete-on-remote and copy
+  (`views/refs/tagMenu.ts`). The commit row's menu offers the same two deletes
+  per tag on it. Both are one confirmed step — git has no safe form of
+  `tag -d` to try first — and both come with the way back:
+  `git update-ref refs/tags/<name> <object>` locally, a push of the object
+  remotely. The object, not the commit: restoring an annotated tag from its
+  commit would recreate it as a lightweight one and drop the message.
+- **A selection names a ref by its path** (2026-09-19, ADR-0057 amending
+  ADR-0055): `refs/heads/main`, `refs/tags/v1.0`. Git lets a branch and a tag
+  share a short name, and with tags on screen the short name would have
+  highlighted both. Tag chips in the history select their row too now.
+- **The branch lists can be a tree, and a chip names the branch it selects**
+  (2026-09-19, ADR-0054 and ADR-0055). Local and Remote carry the List / Tree
+  switch the file lists have, over the same `views/shell/pathTree.ts` builder
+  with the branch name standing where a path does — one setting, `branchList`,
+  default `flat`. A row inside the tree prints one segment and keeps the whole
+  name in its accessible name, its tooltip and every button on it. Separately,
+  `selection.ref` now travels with a selection: clicking a ref chip in the
+  history, or a row in the panel, highlights exactly that branch — local or
+  remote-tracking — instead of every branch sitting on that oid, scrolling it
+  into view and unfolding what hides it. Remote rows are selectable for the
+  first time. Not used by hand in the running app yet.
 - **UI redesigned** (2026-08-20) to GitKraken's layout language — ADR-0017,
   with author pictures on the graph nodes (ADR-0018 derived badge, ADR-0021
   optional Gravatar/GitHub pictures) and resizable panels whose sizes persist
@@ -255,6 +282,95 @@
   until `buildPushCommand` emits a `<local>:<upstream>` refspec.
 
 ## Session log
+
+### 2026-09-19 (later) — tags get a list, a delete, and a way back
+
+"Preciso ser possível deletar tags e também quero vê-las listadas na esquerda
+junto com as branches em uma seção própria." Krakenless could create a tag and
+push it and never get rid of one, and there was nowhere to see them at all.
+
+**The list** (ADR-0056). A third section rather than a third branch list: a tag
+has no upstream, no divergence and no Switch — checking one out detaches HEAD,
+which is the commit menu's question to ask. The row's shape follows from that:
+select the commit, delete the name, everything else on a right-click through a
+pure `buildTagMenu`.
+
+**The deletes.** One confirmed step each, local and remote, because git has no
+safe form of `tag -d` to escalate from — "merged" says nothing about a tag — so
+the gate is the confirmation plus an honest way back. The local one is
+`git update-ref refs/tags/<name> <object>` and not `git tag <name> <commit>`:
+the second resolves an annotated tag to its commit and recreates it
+*lightweight*, silently dropping the message and the tagger. That is why the
+parser keeps `%(objectname)` and `%(*objectname)` apart and `Tag` carries both.
+
+**The selection** (ADR-0057). Storing the short ref name was unambiguous only
+while the panel held branches; git allows a branch and a tag both called
+`release`. `selection.ref` is now a full ref path from one pure `refPath`, so a
+click on the tag lights the tag's row and not the branch's — whose Delete
+button means something entirely different.
+
+**What the two reviews changed.** The safety review measured three things
+against a real git that would otherwise have shipped as quiet lies, all now
+pinned by `src/git/deletetag.integration.test.ts`: `%(refname:short)` prints a
+tag as `tags/release` when a branch shares the name (undeletable row, nested
+restore command) — the list reads `%(refname)` and strips the prefix itself;
+`git push --delete` for a tag the remote never had exits **0** and prints
+`- [deleted]`, so the outcome is read from the output and reported as "nothing
+was deleted there"; and `%(contents:subject)` on a lightweight tag is the
+*commit's* subject, which the parser now drops. It also found the recovery
+lines were not shell-safe — a tag named `v1;rm -rf ~` rendered under "run this
+to undo" — so they are offered only for names a shell reads as names
+(ADR-0058), the branch recovery included.
+
+The conventions review found the branch list lighting up on a *tag* selection:
+filtering `selectedRef` to "a ref this list holds" re-enabled the oid fallback
+for refs of another kind, which is exactly what ADR-0057 exists to prevent. The
+fallback now lives only in `isRefSelected`, for a selection that named no ref
+at all; a ref that no longer exists highlights nothing. It also caught the
+remote-delete notice claiming a plain fetch removes the tag from everyone (it
+does not — that needs `--prune-tags`), duplicated confirmation details now
+shared through `labels.ts`, and the origin-first remote rule written out three
+times, now `preferredRemote`.
+
+`npm test` 2464 passing (112 files); oxlint at its 11 pre-existing warnings,
+prettier clean. `cargo` untouched. **Not used by hand in the running app.**
+
+**Known limit:** the restore command for a deleted tag lives in a notice, and
+every notice dismisses itself after ten seconds (ADR-0051). A tag has no
+reflog, so after that the object id is only in the panel's own outcome line
+(which says it) and then in `git fsck --dangling`. Same standing as a dropped
+stash today; worth revisiting if it bites in dogfooding.
+
+### 2026-09-19 — branches read as a tree, and a chip points at its own row
+
+One ask, with a screenshot of a sidebar holding fifty local branches: "Melhore
+a exibição de branches. pode ser tree. E também garanta que quando eu clico em
+um label de branch ela também seja selecionada na coluna de branch seja local
+ou origin."
+
+**The tree** (ADR-0054). Nothing new was built for it: `buildPathTree` already
+arranges the working tree and the diff's file list, and a branch name is a path
+for its purposes. Local and Remote share one switch and one setting
+(`branchList`), because they are two halves of one panel. A remote name carries
+its remote as its first segment, so `origin` becomes the outermost row without
+the panel knowing what a remote is. The rows' buttons keep naming the whole
+branch — `Delete feat/parser`, never `Delete parser` — since what a destructive
+button says is what the user agreed to.
+
+**The selection** (ADR-0055). `Selection` gained `ref`, set by
+`selectCommit(store, oid, ref)` and cleared by any selection that names none. A
+branch and the remote-tracking ref it was just pushed to share a commit, so
+matching rows on the oid lit both of them up; the name is now carried from
+wherever the click happened. `isBranchSelected` holds that rule on its own,
+with the oid kept as the fallback for a selection made from a commit row or a
+stash. The row scrolls itself into view and its section opens — adjusted during
+render, the way this panel already reacts to the repository changing, so the
+highlight is never painted inside a group that is shut.
+
+`npm test` 2359 passing (107 files); oxlint back at its 11 pre-existing
+warnings, prettier clean. `cargo` was not touched — nothing here leaves the
+frontend. **Neither half has been used by hand in the running app.**
+
 
 ### 2026-09-09 — the conflict screen learns what a conflict is, and a branch is deleted from its row
 

@@ -6,7 +6,9 @@ import {
   removeRemoteBranch,
   pullCurrent,
   removeBranch,
+  removeRemoteTag,
   removeStash,
+  removeTag,
   switchTo,
   commitStaged,
   discard,
@@ -42,6 +44,9 @@ const saveWorktreeFile = vi.hoisted(() => vi.fn());
 const restoreFromBackup = vi.hoisted(() => vi.fn());
 const listBranches = vi.hoisted(() => vi.fn());
 const listStashes = vi.hoisted(() => vi.fn());
+const listTags = vi.hoisted(() => vi.fn());
+const deleteTagFn = vi.hoisted(() => vi.fn());
+const deleteRemoteTagFn = vi.hoisted(() => vi.fn());
 const fetchRemoteFn = vi.hoisted(() => vi.fn());
 const readRefSnapshot = vi.hoisted(() => vi.fn());
 const pullFn = vi.hoisted(() => vi.fn());
@@ -61,6 +66,9 @@ vi.mock('../config/store', () => ({ saveConfig }));
 vi.mock('../git/refs', () => ({
   listBranches,
   listStashes,
+  listTags,
+  deleteTag: deleteTagFn,
+  deleteRemoteTag: deleteRemoteTagFn,
   fetch: fetchRemoteFn,
   readRefSnapshot,
   pull: pullFn,
@@ -926,5 +934,104 @@ describe('removeRemoteBranch — the name goes, the way back is kept', () => {
 
     expect(store.getState().notice).toMatchObject({ tone: 'error' });
     expect(store.getState().notice?.message).toMatch(/refusing to delete/);
+  });
+});
+
+describe('removeTag — the name goes, the way back is kept', () => {
+  const V1 = {
+    name: 'v1.0',
+    oid: 'a'.repeat(40),
+    object: 'b'.repeat(40),
+    annotated: true,
+    date: '2026-09-19T10:00:00+00:00',
+    subject: 'ship it',
+  };
+
+  it('deletes under a confirmation and keeps the command that restores it', async () => {
+    deleteTagFn.mockResolvedValue(undefined);
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+    const restore = `git update-ref refs/tags/v1.0 ${V1.object}`;
+
+    await expect(removeTag(store, 'v1.0', 'Delete tag "v1.0"?', restore)).resolves.toBe(
+      true,
+    );
+
+    const [, name, confirmation] = deleteTagFn.mock.calls[0] ?? [];
+    expect(name).toBe('v1.0');
+    expect(confirmation).toBeDefined();
+    expect(store.getState().notice).toMatchObject({ tone: 'info' });
+    expect(store.getState().notice?.undoHint).toBe(restore);
+  });
+
+  it('says the tag is still on the remote, because deleting here does not touch it', async () => {
+    deleteTagFn.mockResolvedValue(undefined);
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await removeTag(store, 'v1.0', 'reason', null);
+
+    expect(store.getState().notice?.message).toMatch(/still on any remote/);
+    expect(store.getState().notice?.undoHint).toBeUndefined();
+  });
+
+  it('claims nothing when git refused', async () => {
+    deleteTagFn.mockRejectedValue(
+      new GitError('command-failed', "error: tag 'v1.0' not found."),
+    );
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await expect(removeTag(store, 'v1.0', 'reason', null)).resolves.toBe(false);
+    expect(store.getState().notice).toMatchObject({ tone: 'error' });
+  });
+});
+
+describe('removeRemoteTag — it goes for everyone who fetches', () => {
+  const TARGET = { remote: 'origin', tag: 'v1.0' };
+
+  it('deletes under a confirmation and keeps the push that puts it back', async () => {
+    deleteRemoteTagFn.mockResolvedValue('deleted');
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+    const recovery = `git push origin ${'b'.repeat(40)}:refs/tags/v1.0`;
+
+    await expect(
+      removeRemoteTag(store, TARGET, 'Delete tag "v1.0" from origin?', recovery),
+    ).resolves.toBe('deleted');
+
+    const [, remote, tag, confirmation] = deleteRemoteTagFn.mock.calls[0] ?? [];
+    expect([remote, tag]).toEqual(['origin', 'v1.0']);
+    expect(confirmation).toBeDefined();
+    expect(store.getState().notice?.undoHint).toBe(recovery);
+  });
+
+  it('claims nothing when the remote refused', async () => {
+    deleteRemoteTagFn.mockRejectedValue(
+      new GitError('command-failed', 'remote: refusing to delete a protected tag'),
+    );
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await expect(removeRemoteTag(store, TARGET, 'reason', null)).resolves.toBeNull();
+    expect(store.getState().notice).toMatchObject({ tone: 'error' });
+  });
+
+  it('never calls a no-op a delete', async () => {
+    // git exits 0 for a tag the remote never had. Saying "deleted" there tells
+    // the user a release tag is gone from the server while it sits right where
+    // it was, under the name they meant to type.
+    deleteRemoteTagFn.mockResolvedValue('nothing-there');
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await expect(removeRemoteTag(store, TARGET, 'reason', 'git push …')).resolves.toBe(
+      'nothing-there',
+    );
+
+    expect(store.getState().notice).toMatchObject({ tone: 'warning' });
+    expect(store.getState().notice?.message).toMatch(/had no tag called v1\.0/);
+    // No way back is offered for something that never went away.
+    expect(store.getState().notice?.undoHint).toBeUndefined();
   });
 });

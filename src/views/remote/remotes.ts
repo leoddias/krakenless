@@ -198,6 +198,22 @@ export function candidateRemotes(
   return sortRemotes([...names]);
 }
 
+/**
+ * The remote an operation that needs one should use, or `null`.
+ *
+ * `origin` when there is one, else the first alphabetically. Three places make
+ * this choice — the commit menu's link and tag items, the refs panel's tag menu
+ * — and two of them offer acts on the *same* tag, so naming different remotes
+ * would mean "Push tag to origin" and "Delete tag on upstream" sitting in one
+ * list. It is deliberately silent about *why* there is none: callers that need
+ * to say so (`linkTarget`) have their own wording for "not read yet" versus
+ * "none configured".
+ */
+export function preferredRemote(remotes: Loadable<Remote[]>): string | null {
+  if (remotes.state !== 'ready') return null;
+  return sortRemotes(remotes.value.map((remote) => remote.name))[0] ?? null;
+}
+
 function sortRemotes(names: string[]): string[] {
   const sorted = [...new Set(names)].sort((a, b) => a.localeCompare(b));
   return sorted.sort((a, b) => Number(b === 'origin') - Number(a === 'origin'));

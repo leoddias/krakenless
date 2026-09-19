@@ -16,6 +16,7 @@ import type {
   RepoInfo,
   RepoStatus,
   StashEntry,
+  Tag,
 } from '../git/types';
 import { noOperation, type Operation } from '../git/operation';
 import type { WorktreeSummary } from '../git/worktrees';
@@ -56,6 +57,20 @@ export interface Selection {
   commitOid: string | null;
   /** Path selected within the current diff, or `null` for "all files". */
   path: string | null;
+  /**
+   * Ref the selection was made *through* — `refs/heads/main`,
+   * `refs/remotes/origin/main`, `refs/tags/v1.0` — or `null` when the commit
+   * was picked some other way.
+   *
+   * The oid alone cannot answer "which ref am I looking at?": several refs
+   * routinely sit on one commit, and highlighting every row on that oid says
+   * nothing about the one that was clicked. A *full ref path* rather than the
+   * short name (ADR-0057), because git allows a branch and a tag to share one
+   * and the two rows mean different things. Minted by `refPath`, so a chip in
+   * the history and a row in a list agree on what is selected without either of
+   * them re-deriving it.
+   */
+  ref: string | null;
 }
 
 /**
@@ -117,6 +132,14 @@ export interface AppState {
   diff: Loadable<FileDiff[]>;
   branches: Loadable<Branch[]>;
   /**
+   * Every tag in the repository, newest version first.
+   *
+   * Its own panel rather than a corner of the branch list: a tag is not a
+   * place work happens, it is a name pinned to a commit, and the two are
+   * deleted, pushed and read for different reasons.
+   */
+  tags: Loadable<Tag[]>;
+  /**
    * Read from `git remote`, not reconstructed from remote-tracking branches: a
    * remote that has never been fetched from has no tracking refs at all, and
    * inferring the list from branches makes it invisible in the publish picker.
@@ -177,6 +200,7 @@ export function initialState(): AppState {
     commits: idle(),
     diff: idle(),
     branches: idle(),
+    tags: idle(),
     remotes: idle(),
     stashes: idle(),
     worktrees: idle(),
@@ -184,7 +208,7 @@ export function initialState(): AppState {
     resolving: null,
     notice: null,
     discards: [],
-    selection: { commitOid: null, path: null },
+    selection: { commitOid: null, path: null, ref: null },
     busyDepth: 0,
   };
 }
@@ -207,6 +231,9 @@ export type Action =
   | { type: 'branches/loading' }
   | { type: 'branches/loaded'; branches: Branch[] }
   | { type: 'branches/failed'; message: string; kind?: string }
+  | { type: 'tags/loading' }
+  | { type: 'tags/loaded'; tags: Tag[] }
+  | { type: 'tags/failed'; message: string; kind?: string }
   | { type: 'remotes/loading' }
   | { type: 'remotes/loaded'; remotes: Remote[] }
   | { type: 'remotes/failed'; message: string; kind?: string }
@@ -222,7 +249,7 @@ export type Action =
   | { type: 'notice'; notice: NoticeInput | null }
   | { type: 'discard/recorded'; backup: DiscardBackup }
   | { type: 'discard/forgotten'; blobOid: string }
-  | { type: 'selection/commit'; oid: string | null }
+  | { type: 'selection/commit'; oid: string | null; ref?: string | null }
   | { type: 'selection/path'; path: string | null }
   | { type: 'busy'; busy: boolean };
 
@@ -289,6 +316,15 @@ export function reduce(state: AppState, action: Action): AppState {
       return { ...state, branches: reloading(state.branches) };
     case 'branches/loaded':
       return { ...state, branches: { state: 'ready', value: action.branches } };
+    case 'tags/loading':
+      return { ...state, tags: reloading(state.tags) };
+    case 'tags/loaded':
+      return { ...state, tags: { state: 'ready', value: action.tags } };
+    case 'tags/failed':
+      return {
+        ...state,
+        tags: { state: 'error', message: action.message, ...kindOf(action.kind) },
+      };
     case 'branches/failed':
       return {
         ...state,
@@ -359,7 +395,7 @@ export function reduce(state: AppState, action: Action): AppState {
       // selection; leaving it would attribute one commit's changes to another.
       return {
         ...state,
-        selection: { commitOid: action.oid, path: null },
+        selection: { commitOid: action.oid, path: null, ref: action.ref ?? null },
         diff: idle(),
       };
     case 'selection/path':

@@ -35,6 +35,12 @@ export type CommitAction =
     }
   | { kind: 'reset'; branch: string; mode: ResetMode }
   | { kind: 'delete-branch'; name: string }
+  | { kind: 'delete-tag'; name: string }
+  | {
+      kind: 'delete-remote-tag';
+      remote: string;
+      tag: string;
+    }
   | {
       kind: 'delete-remote-branch';
       remote: string;
@@ -274,6 +280,55 @@ function pushTagItems(context: CommitMenuContext): CommitMenuItem[] {
 }
 
 /**
+ * The tags on this row, offered for deletion here and on the remote.
+ *
+ * A tag is deleted by name, and the row on screen *is* the tag — the same
+ * argument the branch deletes make, and a stronger one here: a tag is usually
+ * found by looking for it, not by remembering it. The remote item is offered
+ * whether or not the remote has that tag, for the reason the push item is:
+ * asking costs a round trip per row, and git's refusal is accurate and free.
+ *
+ * The two are separate items because they are separate acts. Deleting the tag
+ * here leaves the release tag on the server for everyone who fetches; deleting
+ * it there takes it away from all of them.
+ */
+function deleteTagItems(context: CommitMenuContext): CommitMenuItem[] {
+  const tags = context.commit.refs.filter((ref) => ref.kind === 'tag');
+  if (tags.length === 0) return [];
+
+  const shared = blocked(context);
+  const link = linkTarget(context);
+  const remote = link.kind === 'remote' ? link.remote : null;
+  const remoteReason =
+    shared ??
+    (link.kind === 'none' ? `No remote to delete it from. ${link.reason}` : null);
+
+  return tags.flatMap((tag) => [
+    {
+      id: `delete-tag-${tag.name}`,
+      label: `Delete tag ${tag.name}`,
+      disabled: shared,
+      ...(shared === null
+        ? { action: { kind: 'delete-tag' as const, name: tag.name } }
+        : {}),
+    },
+    {
+      id: `delete-remote-tag-${tag.name}`,
+      label:
+        remote === null
+          ? `Delete tag ${tag.name} on the remote`
+          : `Delete tag ${tag.name} on ${remote}`,
+      disabled: remoteReason,
+      ...(remote === null || remoteReason !== null
+        ? {}
+        : {
+            action: { kind: 'delete-remote-tag' as const, remote, tag: tag.name },
+          }),
+    },
+  ]);
+}
+
+/**
  * The names on this row offered for deletion, local ones first.
  *
  * A branch is deleted by name, and finding that name in a list of two hundred
@@ -413,7 +468,7 @@ export function buildCommitMenu(context: CommitMenuContext): CommitMenuSection[]
         })),
       },
     ],
-    deleteRefItems(context),
+    [...deleteRefItems(context), ...deleteTagItems(context)],
     [
       {
         id: 'copy-sha',

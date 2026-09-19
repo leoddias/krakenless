@@ -116,6 +116,35 @@ export interface RepoStatus {
 
 export type RefKind = 'head' | 'branch' | 'remote-branch' | 'tag';
 
+/**
+ * One tag, as `for-each-ref` reports it.
+ *
+ * Two object ids, because a tag has two and confusing them is how a panel ends
+ * up showing the wrong thing or restoring a different tag than it deleted:
+ * {@link Tag.oid} is the commit the tag resolves to — the row the history has —
+ * and {@link Tag.object} is what the ref itself points at, which for an
+ * annotated tag is the tag object carrying the message. They are the same
+ * string for a lightweight tag.
+ */
+export interface Tag {
+  /** Short name, as git decorates a commit with it (`v1.0`). */
+  name: string;
+  /** The commit the tag resolves to. */
+  oid: string;
+  /** What the ref points at: the tag object, or the commit itself. */
+  object: string;
+  /** True when the ref points at a tag object — one with a message and a date. */
+  annotated: boolean;
+  /** The tagger's date, or the commit's for a lightweight tag. ISO 8601. */
+  date: string;
+  /**
+   * First line of an annotated tag's message; empty for a lightweight one,
+   * which has no message — git reports the commit's subject there, and the
+   * parser drops it rather than pass a commit message off as a tag's.
+   */
+  subject: string;
+}
+
 export interface CommitRef {
   kind: RefKind;
   /** Short name as decorated by git (`main`, `origin/main`, `v1.0`). */

@@ -19,7 +19,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import type { DeleteBranchOutcome } from '../../git/refs';
 import { hasTrackedChanges } from '../../git/status';
-import type { Commit, StashEntry } from '../../git/types';
+import type { Commit, StashEntry, Tag } from '../../git/types';
 import {
   checkoutCommit,
   cherryPickCommit,
@@ -30,7 +30,9 @@ import {
   rebaseBranchOnto,
   removeBranch,
   removeRemoteBranch,
+  removeRemoteTag,
   removeStash,
+  removeTag,
   resetBranchTo,
   restoreStash,
   revertCommitOnHead,
@@ -43,6 +45,7 @@ import { BRANCH_NOUN, TAG_NOUN, refNameError, type RefNoun } from '../shell/refN
 import { trapTab } from '../shell/trapTab';
 import {
   candidateRemotes,
+  preferredRemote,
   pushIntent,
   readUpstream,
   type Gate,
@@ -54,9 +57,15 @@ import {
   deleteRemoteBranchQuestion,
   dropRecoveryCommand,
   dropStashQuestion,
+  deleteRemoteTagDetail,
+  deleteRemoteTagQuestion,
+  deleteTagDetail,
+  deleteTagQuestion,
   forceDeleteBranchQuestion,
   popStashQuestion,
   remoteDeleteRecovery,
+  remoteTagDeleteRecovery,
+  tagRestoreCommand,
 } from '../refs/labels';
 import {
   buildCommitMenu,
@@ -167,6 +176,7 @@ export function CommitActions({
   const remotes = useAppState((state) => state.remotes);
   const repo = useAppState((state) => state.repo);
   const branches = useAppState((state) => state.branches);
+  const tags = useAppState((state) => state.tags);
   const [menuOpen, setMenuOpen] = useState(true);
   const [dialog, setDialog] = useState<Dialog | null>(null);
 
@@ -180,15 +190,22 @@ export function CommitActions({
         : (status.value.branch ?? undefined)
       : undefined;
 
-  // The remote a new tag would be published to — the same one the rest of this
-  // menu names, sorted with `origin` first, so the menu cannot offer two
-  // different answers to "which remote".
-  const tagRemote =
-    remotes.state === 'ready'
-      ? ([...remotes.value].sort(
-          (a, b) => Number(b.name === 'origin') - Number(a.name === 'origin'),
-        )[0]?.name ?? null)
-      : null;
+  /**
+   * The tag this row names, as the tag list read it, or `null`.
+   *
+   * A chip says a tag is on this commit; it does not say whether it is
+   * annotated or what object it points at, and both of those decide how the
+   * tag is put back after a delete. Looked up rather than carried on the
+   * action, because the menu is built from the commit and the list is read
+   * from git.
+   */
+  const tagNamed = (name: string): Tag | null =>
+    tags.state === 'ready' ? (tags.value.find((one) => one.name === name) ?? null) : null;
+
+  // The remote a new tag would be published to — `origin` when there is one,
+  // else the first — the same rule the refs panel's tag menu follows, so the
+  // two cannot offer different answers to "which remote".
+  const tagRemote = preferredRemote(remotes);
 
   /*
     The branch the tag's push carries with it, or `null`.
@@ -325,6 +342,49 @@ export function CommitActions({
       case 'delete-branch':
         setDialog(deleteBranchDialog(action.name));
         return;
+      case 'delete-tag': {
+        // The object is read from the tag list rather than from the row: a chip
+        // says a tag is here, not what kind it is, and an annotated tag is put
+        // back by naming its tag object. `null` when the list has not been read
+        // — the delete still happens, without a way back being promised.
+        const known = tagNamed(action.name);
+        setDialog({
+          kind: 'confirm',
+          title: `Delete tag "${action.name}"?`,
+          question: deleteTagQuestion(action.name),
+          detail: deleteTagDetail(known === null ? null : tagRestoreCommand(known)),
+          confirmLabel: 'Delete Tag',
+          danger: true,
+          run: (reason) =>
+            removeTag(
+              store,
+              action.name,
+              reason,
+              known === null ? null : tagRestoreCommand(known),
+            ),
+        });
+        return;
+      }
+      case 'delete-remote-tag': {
+        const ref = { remote: action.remote, tag: action.tag };
+        const known = tagNamed(action.tag);
+        setDialog({
+          kind: 'confirm',
+          title: `Delete tag "${action.tag}" on ${action.remote}?`,
+          question: deleteRemoteTagQuestion(ref),
+          detail: deleteRemoteTagDetail(action.remote),
+          confirmLabel: `Delete on ${action.remote}`,
+          danger: true,
+          run: (reason) =>
+            removeRemoteTag(
+              store,
+              ref,
+              reason,
+              known === null ? null : remoteTagDeleteRecovery(ref, known.object),
+            ),
+        });
+        return;
+      }
       case 'delete-remote-branch': {
         const ref = { remote: action.remote, branch: action.branch };
         setDialog({

@@ -111,6 +111,14 @@ export interface AppConfig {
    * and a user who asks for a tree is asking it of the panel, not of one list.
    */
   changesFileList: FileListMode;
+  /**
+   * Flat names or a `/`-segment tree in the branch lists.
+   *
+   * One setting for Local and Remote alike: `feat/x` and `origin/feat/x` are
+   * the same naming habit seen from two sides, and a user who asks for a tree
+   * is asking it of the panel rather than of one of its halves.
+   */
+  branchList: FileListMode;
 }
 
 /** What Settings offers for {@link AppConfig.historyLimit}. */
@@ -225,6 +233,7 @@ export function defaultConfig(): AppConfig {
     },
     diffFileList: 'flat',
     changesFileList: 'flat',
+    branchList: 'flat',
   };
 }
 
@@ -430,6 +439,7 @@ export function parseConfig(text: string | null): AppConfig {
     layout: asLayout(raw['layout']),
     diffFileList: asFileListMode(raw['diffFileList']),
     changesFileList: asFileListMode(raw['changesFileList']),
+    branchList: asFileListMode(raw['branchList']),
   };
 }
 

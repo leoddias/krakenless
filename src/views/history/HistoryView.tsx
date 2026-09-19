@@ -51,6 +51,7 @@ import {
   worktreeChangeSummary,
   worktreeName,
 } from './worktreeRows';
+import { refPath } from '../shell/refName';
 import type { WorktreeSummary } from '../../git/worktrees';
 import { requestOpenRepository } from '../../state/openRequests';
 import {
@@ -690,6 +691,7 @@ function CommitRow({
             <RefChip
               key={`${ref.kind}:${ref.name}`}
               commitRef={ref}
+              oid={commit.oid}
               current={isCurrentChip(ref, current)}
             />
           ),
@@ -934,9 +936,12 @@ export function chipSwitchesOnDoubleClick(
 
 function RefChip({
   commitRef,
+  oid,
   current = false,
 }: {
   commitRef: CommitRef;
+  /** Commit the chip is drawn on, so a click can name what it selected. */
+  oid: string;
   /** The ref the working tree is on: it gets the ✓ and the brighter chip. */
   current?: boolean;
 }): ReactNode {
@@ -950,6 +955,10 @@ function RefChip({
   const draggable = isBranch && !current;
   const dropTarget = commitRef.kind === 'branch' && current;
   const switches = chipSwitchesOnDoubleClick(commitRef, current);
+  // Everything with a row in the panel on the left. `HEAD` has none — it is
+  // where the checkout is, not a ref anybody selects — and it is folded into
+  // the branch chip beside it anyway.
+  const selects = isBranch || commitRef.kind === 'tag';
   return (
     <span
       className={
@@ -961,6 +970,26 @@ function RefChip({
       data-drop-target={dropTarget ? 'true' : undefined}
       data-switches={switches ? 'true' : undefined}
       draggable={draggable ? true : undefined}
+      // A chip that answers a click is a control, and says so — the same shape
+      // the worktree row's "Open Worktree" span uses. It stays out of the tab
+      // order (`-1`): it lives inside the row's button, and the selection it
+      // makes is reachable from the refs panel's own row.
+      {...(selects ? { role: 'button', tabIndex: -1 } : {})}
+      {...(selects
+        ? {
+            onClick: (event: ReactMouseEvent<HTMLSpanElement>) => {
+              // The row's own click selects the commit, but it cannot say which
+              // of the refs on it was clicked — and several refs sitting on one
+              // commit is the ordinary case, not the odd one. Selecting from
+              // here carries the ref path, which is what lets the panel on the
+              // left highlight the row the user actually pointed at: a branch,
+              // a remote-tracking branch or a tag. Nothing on disk moves either
+              // way.
+              event.stopPropagation();
+              void selectCommit(store, oid, refPath(commitRef.kind, commitRef.name));
+            },
+          }
+        : {})}
       {...(switches
         ? {
             onDoubleClick: (event: ReactMouseEvent<HTMLSpanElement>) => {
@@ -977,10 +1006,12 @@ function RefChip({
         : {})}
       title={
         switches
-          ? `${REF_LABEL[commitRef.kind]} ${commitRef.name} — double-click to switch to it, or drag onto the checked-out branch to merge it in`
+          ? `${REF_LABEL[commitRef.kind]} ${commitRef.name} — click to select it in the list on the left, double-click to switch to it, or drag onto the checked-out branch to merge it in`
           : draggable
-            ? `${REF_LABEL[commitRef.kind]} ${commitRef.name} — drag onto the checked-out branch to merge it in`
-            : `${current ? 'checked out ' : ''}${REF_LABEL[commitRef.kind]} ${commitRef.name}`
+            ? `${REF_LABEL[commitRef.kind]} ${commitRef.name} — click to select it in the list on the left, or drag onto the checked-out branch to merge it in`
+            : selects
+              ? `${current ? 'checked out ' : ''}${REF_LABEL[commitRef.kind]} ${commitRef.name} — click to select it in the list on the left`
+              : `${current ? 'checked out ' : ''}${REF_LABEL[commitRef.kind]} ${commitRef.name}`
       }
     >
       {current ? (

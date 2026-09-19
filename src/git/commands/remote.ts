@@ -198,6 +198,30 @@ export function buildPushTagCommand(remote: string, tag: string): GitCommand {
   };
 }
 
+/**
+ * Deletes a tag on a remote.
+ *
+ * Fully qualified for the reason the branch delete is, and here the example is
+ * not hypothetical: `git push origin --delete release` in a repository with
+ * both a branch and a tag called `release` is ambiguous, and git will either
+ * refuse or delete whichever one it happens to find. Naming `refs/tags/` says
+ * which of the two the user answered a question about.
+ *
+ * Destructive, and irreversible from the server's side the moment it returns:
+ * anyone who already fetched the tag keeps it, and everyone who has not stops
+ * being able to. The way back — a push of the object the panel had on screen —
+ * is offered in the notice afterwards, and it only works while this repository
+ * still holds that object.
+ */
+export function buildDeleteRemoteTagCommand(remote: string, tag: string): GitCommand {
+  const name = assertRefName(tag);
+  return {
+    args: ['push', '--progress', assertRefName(remote), '--delete', `refs/tags/${name}`],
+    destructive: true,
+    timeoutMs: NETWORK_TIMEOUT_MS,
+  };
+}
+
 /** Aborts an in-progress merge, returning the tree to its pre-merge state. */
 export function buildMergeAbortCommand(): GitCommand {
   return { args: ['merge', '--abort'], destructive: true };

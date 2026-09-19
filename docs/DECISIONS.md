@@ -1667,3 +1667,157 @@ asserting it does not get the *commit* menu. The command carries a 120-second
 timeout like the other tree-touching builders, not the 30-second default:
 `stash push` restores the whole working tree, and being killed part-way through
 that on a large tree is the case this is most worth offering on.
+
+## ADR-0054 — The branch lists can be a tree of the names' slashes, one setting for both halves
+
+**Decision:** Local and Remote carry the same List / Tree switch the
+working-tree and diff file lists have, over the same builder
+(`views/shell/pathTree.ts`, generic `PathNode<T>`), with the branch name
+standing where a path does. One setting for both halves, `branchList` in the
+config, defaulting to `flat`. A row inside the tree prints one segment and
+carries the whole name in its accessible name, its tooltip and every button on
+it; folded groups are remembered per half, and a selection that names a branch
+unfolds whatever hides it.
+
+**Why:** "Melhore a exibição de branches. pode ser tree." A working repository
+has fifty local branches and they nearly all start with `feat/`, `fix/` or
+`chore/` — the half of every row that says nothing, in the column narrow enough
+that the half that identifies the branch is the half clipped away. The same
+argument as ADR-0046 for the working tree, so the same answer and the same
+code: a second tree builder specialised for branches would be a second place
+the shape can be wrong. A remote name carries its remote as its first segment,
+so `origin` becomes the outermost row without anything in the panel knowing
+what a remote is.
+
+**Consequences:** `flat` stays the default, as it is for the two file lists —
+a small repository reads better as a list, and the switch is on the Branches
+header where it is one click away. The rows' buttons keep naming the full
+branch (`Delete feat/parser`, never `Delete parser`): what a destructive button
+says is what the user agreed to, and a leaf segment is shared by branches under
+different prefixes. `pathTree`'s single-child collapse applies unchanged, so
+`origin/feat` is one row when only one branch lives under it.
+
+## ADR-0055 — A selection carries the ref it was made through
+
+**Decision:** `Selection` gains `ref: string | null` — the branch name as the
+panels print it (`main`, `origin/main`) — set by `selectCommit(store, oid,
+ref)` and reset to `null` by any selection that names no ref. Clicking a
+branch or remote-branch chip in the history selects through it; so does
+clicking a row in the branch list, local or remote-tracking. The branch list
+marks the row whose name matches, falling back to the oid when the selection
+names no ref (`isBranchSelected`, pure and tested), and scrolls that row into
+view, opening the section and unfolding the groups that hide it.
+
+**Why:** "Garanta que quando eu clico em um label de branch ela também seja
+selecionada na coluna de branch seja local ou origin." The oid alone cannot
+answer which branch is being looked at: a branch and the remote-tracking ref it
+was just pushed to sit on the same commit, and matching on the oid lights both
+of them up — which is not the question the click asked. Carrying the
+name was preferred to having the refs panel guess from the history's state,
+because two panels deriving the same answer separately is how they come to
+disagree.
+
+**Consequences:** Remote rows became selectable for the first time — reading
+`origin/main` is the same question as reading `main`, and a row that cannot be
+selected is a row a chip has no way to point at. Nothing about the diff depends
+on `ref`; it decides a highlight and nothing else, so a stale or unknown name
+costs a highlight, never a wrong diff. The chip's click stops propagating and selects
+the same commit the row's click would have, so nothing is lost by taking the
+event. ADR-0052's double click still switches: a browser sends its clicks
+first, so a double click selects the branch and then checks it out — the
+selection it leaves behind is of the commit that branch is on, which is where
+the user is going anyway.
+
+## ADR-0056 — Tags are a list of their own, and can be deleted here and on the remote
+
+**Decision:** The refs panel grows a third section, Tags, read by
+`for-each-ref` over `refs/tags` (`listTags`, `src/git/commands/tag.ts`, sorted
+`-v:refname` so `v1.10` follows `v1.9`). A row selects the commit the tag
+resolves to and carries a visible Delete; its context menu — built by the pure
+`buildTagMenu` — adds Push to `<remote>`, Delete on `<remote>`, and copying.
+The same two deletes are offered on the commit row's menu, one item per tag on
+the row, beside the Push tag item that was already there. Both deletes are one
+confirmed step: `git tag --delete` locally, `git push <remote> --delete
+refs/tags/<name>` on a server, each with the question as the confirmation
+reason and a recovery command in the notice afterwards.
+
+**Why:** "Preciso ser possível deletar tags e também quero vê-las listadas na
+esquerda junto com as branches em uma seção própria." Krakenless could create
+and push a tag and never get rid of one, so a mistyped release tag was a
+terminal — and there was nowhere to *see* the tags at all, which is the half
+that makes the delete findable. A third branch list was rejected: a tag is not
+somewhere work happens, it has no upstream, no divergence and no Switch
+(checking one out detaches HEAD, which is the commit menu's question), so it
+gets rows of its own shape.
+
+The remote delete is offered without asking the server whether it has that tag,
+which is the bet `pushTagItems` already makes: a round trip per row costs more
+than git's own accurate refusal.
+
+Three things the safety review measured against a real git, each of which
+would otherwise have shipped as a quiet lie. `%(refname:short)` prints a tag as
+`tags/release` when a branch of that name exists — a name `git tag --delete`
+does not answer to — so the list reads `%(refname)` and strips the namespace
+itself. `git push --delete` for a tag the remote never had **exits 0** and
+prints `- [deleted]`, so the outcome is read from the output the way an
+autostash conflict is, and reported as "nothing was deleted there" rather than
+as success. And `%(contents:subject)` on a lightweight tag returns the
+*commit's* subject, which the parser drops: a commit message in a field called
+`subject` on a tag is a caption waiting to be printed as something it is not.
+
+**Consequences:** `tag --delete` was already classified destructive by
+`isDestructive`, and the builders carry the flag as well, so both gates agree.
+Unlike a branch this is one stage and not two — git has no safe form to try
+first and no refusal to escalate from, because "merged" says nothing about a
+tag — so the whole gate is the confirmation plus the honesty of the recovery.
+The recovery is `git update-ref refs/tags/<name> <object>` rather than
+`git tag <name> <commit>`: the second resolves an annotated tag's object to its
+commit and silently recreates it as a lightweight tag, dropping the message and
+the tagger. That is why the parser keeps both object ids (`%(objectname)` and
+`%(*objectname)`) and why `Tag` carries both: the commit is the row the history
+has, the object is what a restore has to name.
+
+## ADR-0058 — A recovery command is only offered for a name a shell reads as a name
+
+**Decision:** The commands Krakenless prints under "Run this to undo" —
+`tagRestoreCommand`, `remoteTagDeleteRecovery`, `remoteDeleteRecovery` — are
+built only when the ref name matches `^[A-Za-z0-9._][A-Za-z0-9._/-]*$` and the
+oid is an oid. Anything else gets no command at all.
+
+**Why:** `assertRefName` rejects what would confuse *git* — a leading dash, a
+space, `~ ^ : ? * [ \` — and lets `;`, `$`, a backtick, `|`, `&` and quotes
+through, because git is happy with them. A shell is not. A tag arriving from
+someone else's repository is a name they chose, and
+`git update-ref refs/tags/v1;rm -rf ~ <oid>` rendered under a label that says to
+run it is a command this app told the user to trust. Quoting was rejected:
+correct quoting depends on the shell the user will paste into, which this code
+cannot know, and offering nothing is the honest answer for a name that cannot
+be shown as typed.
+
+**Consequences:** A tag with an exotic name is still listed, selectable and
+deletable — only the undo line goes. The delete's own notice still says what
+happened. The same guard covers the pre-existing branch recovery, which had it
+missing for the same reason.
+
+## ADR-0057 — A selection names a ref by its path, not its short name (amends ADR-0055)
+
+**Decision:** `Selection.ref` holds a full ref path — `refs/heads/main`,
+`refs/remotes/origin/main`, `refs/tags/v1.0` — minted by one pure `refPath`
+(`src/views/shell/refName.ts`) wherever a selection is made through a ref: a
+chip in the history, a branch row, a tag row. `isRefSelected` compares paths,
+with the oid still the fallback for a selection that named no ref.
+
+**Why:** ADR-0055 stored the short name, which was unambiguous only while the
+panel held branches. Git allows a branch, a remote-tracking branch and a tag to
+share a short name — `release` is the one people actually hit — and with tags
+now listed, a click on the tag `release` would have highlighted the branch
+`release` as well, on a row whose Delete button means something entirely
+different. The alternative, a `{kind, name}` pair, says the same thing in two
+fields that can disagree; the path is the name git itself uses.
+
+**Consequences:** Tag chips in the history select as branch chips do, which
+they did not before — there was nothing on the left for them to point at. HEAD
+chips still do not: HEAD is where the checkout is, not a ref anybody selects,
+and it is folded into the branch chip beside it anyway. The branch tree strips
+the namespace before folding (`shortNameOf`), so `refs/heads/feat/ui` still
+lives under `feat`.

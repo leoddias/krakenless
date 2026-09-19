@@ -1,28 +1,37 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Branch, StashEntry } from '../../git/types';
+import type { Branch, StashEntry, Tag } from '../../git/types';
 import {
   createAndSwitch,
   refreshBranches,
   refreshStashes,
+  refreshTags,
+  pushTagTo,
   removeBranch,
   removeRemoteBranch,
+  removeRemoteTag,
   removeStash,
+  removeTag,
   restoreStash,
   selectCommit,
   switchTo,
 } from '../../state/actions';
 import { StoreProvider } from '../../state/hooks';
 import { createStore, type Store } from '../../state/store';
+import { registerStore, resetStoreRegistry } from '../../state/stores';
 import { RefsView } from './RefsView';
 
 vi.mock('../../state/actions', () => ({
   refreshBranches: vi.fn(),
   refreshStashes: vi.fn(),
+  refreshTags: vi.fn(),
   switchTo: vi.fn(),
   createAndSwitch: vi.fn(),
   removeBranch: vi.fn(),
   removeRemoteBranch: vi.fn(),
+  removeTag: vi.fn(),
+  removeRemoteTag: vi.fn(),
+  pushTagTo: vi.fn(),
   restoreStash: vi.fn(),
   removeStash: vi.fn(),
   selectCommit: vi.fn(),
@@ -30,10 +39,14 @@ vi.mock('../../state/actions', () => ({
 
 const refreshBranchesMock = vi.mocked(refreshBranches);
 const refreshStashesMock = vi.mocked(refreshStashes);
+const refreshTagsMock = vi.mocked(refreshTags);
 const switchToMock = vi.mocked(switchTo);
 const createMock = vi.mocked(createAndSwitch);
 const removeBranchMock = vi.mocked(removeBranch);
 const removeRemoteBranchMock = vi.mocked(removeRemoteBranch);
+const removeTagMock = vi.mocked(removeTag);
+const removeRemoteTagMock = vi.mocked(removeRemoteTag);
+const pushTagToMock = vi.mocked(pushTagTo);
 const restoreStashMock = vi.mocked(restoreStash);
 const removeStashMock = vi.mocked(removeStash);
 const selectCommitMock = vi.mocked(selectCommit);
@@ -158,6 +171,10 @@ beforeEach(() => {
   removeRemoteBranchMock.mockReset().mockResolvedValue(true);
   restoreStashMock.mockReset().mockResolvedValue(true);
   removeStashMock.mockReset().mockResolvedValue(true);
+  refreshTagsMock.mockReset().mockResolvedValue(undefined);
+  removeTagMock.mockReset().mockResolvedValue(true);
+  removeRemoteTagMock.mockReset().mockResolvedValue('deleted');
+  pushTagToMock.mockReset().mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -307,7 +324,11 @@ describe('branch list', () => {
     await click(current);
 
     expect(switchToMock).not.toHaveBeenCalled();
-    expect(selectCommitMock).toHaveBeenCalledWith(expect.anything(), 'a'.repeat(40));
+    expect(selectCommitMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'a'.repeat(40),
+      'refs/heads/main',
+    );
   });
 
   it('offers no Switch button for the branch already checked out', () => {
@@ -334,7 +355,13 @@ describe('branch list', () => {
 
     await click(screen.getByRole('button', { name: 'feature/x' }));
 
-    expect(selectCommitMock).toHaveBeenCalledWith(store, 'f'.repeat(40));
+    // The name travels with the oid: several branches routinely sit on one
+    // commit, and the row that was clicked is the one that must light up.
+    expect(selectCommitMock).toHaveBeenCalledWith(
+      store,
+      'f'.repeat(40),
+      'refs/heads/feature/x',
+    );
     expect(switchToMock).not.toHaveBeenCalled();
   });
 
@@ -460,12 +487,19 @@ describe('branch list', () => {
     });
     // Opening and closing a section is not a git command, so those headers
     // stay live while one runs — and neither is looking inside a stash, which
-    // is why the stash rows are excluded here and asserted below instead.
+    // is why the stash rows are excluded here and asserted below instead. The
+    // List / Tree switch is excluded for the same reason: it redraws this
+    // panel and touches nothing in the repository.
     const stashRows = new Set(within(region('Stashes')).getAllByRole('button'));
+    const layout = new Set(
+      within(screen.getByRole('group', { name: 'Branch list layout' })).getAllByRole(
+        'button',
+      ),
+    );
     const actions = screen
       .getAllByRole('button')
       .filter((button) => !button.hasAttribute('aria-expanded'))
-      .filter((button) => !stashRows.has(button));
+      .filter((button) => !stashRows.has(button) && !layout.has(button));
     for (const button of actions) {
       expect(button).toBeDisabled();
     }
@@ -1198,5 +1232,523 @@ describe('deleting a branch on the remote', () => {
 
     expect(screen.getAllByRole('alertdialog')).toHaveLength(1);
     expect(dialog()).toHaveTextContent(/from origin/);
+  });
+});
+
+describe('a branch named by the selection', () => {
+  // Two branches on one commit is the ordinary case — a branch and the
+  // remote-tracking ref it was just pushed to — so the oid alone cannot say
+  // which row the user pointed at.
+  const TWINS: Branch[] = [
+    branch({ name: 'main', current: true, oid: 'a'.repeat(40) }),
+    branch({ name: 'origin/main', remote: true, oid: 'a'.repeat(40) }),
+  ];
+
+  it('marks the remote row a chip in the history named, and not its local twin', async () => {
+    const store = renderLoaded(TWINS, []);
+
+    await act(async () => {
+      store.dispatch({
+        type: 'selection/commit',
+        oid: 'a'.repeat(40),
+        ref: 'refs/remotes/origin/main',
+      });
+    });
+
+    expect(screen.getByRole('button', { name: 'origin/main' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(
+      screen.getByRole('button', { name: /main\s*\(current branch\)/ }),
+    ).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('marks the local row when that is the one named', async () => {
+    const store = renderLoaded(TWINS, []);
+
+    await act(async () => {
+      store.dispatch({
+        type: 'selection/commit',
+        oid: 'a'.repeat(40),
+        ref: 'refs/heads/main',
+      });
+    });
+
+    expect(
+      screen.getByRole('button', { name: /main\s*\(current branch\)/ }),
+    ).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'origin/main' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+  });
+
+  it('marks nothing when the named branch is gone', async () => {
+    // Deleting or renaming the selected branch leaves a name nothing answers
+    // to. Falling back to the commit would light up every branch on it, which
+    // is the question nobody asked; nothing highlighted is the truth.
+    const store = renderLoaded(TWINS, []);
+    await act(async () => {
+      store.dispatch({
+        type: 'selection/commit',
+        oid: 'a'.repeat(40),
+        ref: 'refs/heads/gone/for-good',
+      });
+    });
+
+    expect(
+      screen.getByRole('button', { name: /main\s*\(current branch\)/ }),
+    ).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'origin/main' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+  });
+
+  it('leaves the branch rows alone when a tag on the same commit is selected', async () => {
+    // The case the ref path exists for: a tag names a ref no branch answers
+    // to, and the branch list must not answer for it.
+    const store = renderLoaded(TWINS, []);
+    await act(async () => {
+      store.dispatch({
+        type: 'selection/commit',
+        oid: 'a'.repeat(40),
+        ref: 'refs/tags/v1.0',
+      });
+    });
+
+    expect(
+      screen.getByRole('button', { name: /main\s*\(current branch\)/ }),
+    ).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'origin/main' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+  });
+
+  it('still marks every row on the commit when the selection named no ref', async () => {
+    // A click on a commit row in the history names nothing, so the oid is all
+    // there is to go on and both twins are honest answers.
+    const store = renderLoaded(TWINS, []);
+    await act(async () => {
+      store.dispatch({ type: 'selection/commit', oid: 'a'.repeat(40) });
+    });
+
+    expect(
+      screen.getByRole('button', { name: /main\s*\(current branch\)/ }),
+    ).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'origin/main' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+  });
+
+  it('scrolls the named row into view, and only that one', async () => {
+    // Several rows are marked at once in the oid fallback, and dragging the
+    // sidebar to whichever of them rendered is not something a click on a
+    // commit row asked for.
+    const scroll = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scroll;
+    try {
+      const store = renderLoaded(TWINS, []);
+      await act(async () => {
+        store.dispatch({ type: 'selection/commit', oid: 'a'.repeat(40) });
+      });
+      expect(scroll).not.toHaveBeenCalled();
+
+      await act(async () => {
+        store.dispatch({
+          type: 'selection/commit',
+          oid: 'a'.repeat(40),
+          ref: 'refs/remotes/origin/main',
+        });
+      });
+
+      expect(scroll).toHaveBeenCalledTimes(1);
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+
+  it('reads a remote-tracking branch without creating anything', async () => {
+    const store = renderLoaded();
+
+    await click(screen.getByRole('button', { name: 'origin/main' }));
+
+    expect(selectCommitMock).toHaveBeenCalledWith(
+      store,
+      'a'.repeat(40),
+      'refs/remotes/origin/main',
+    );
+    expect(createMock).not.toHaveBeenCalled();
+    expect(switchToMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('the branch tree', () => {
+  afterEach(resetStoreRegistry);
+
+  const NESTED: Branch[] = [
+    branch({ name: 'main', current: true }),
+    branch({ name: 'feat/ui/tabs', oid: 'f'.repeat(40) }),
+    branch({ name: 'feat/parser', oid: 'e'.repeat(40) }),
+    branch({ name: 'origin/feat/parser', remote: true, oid: 'e'.repeat(40) }),
+  ];
+
+  function inTree(branches: Branch[] = NESTED): Store {
+    const store = renderRefs((prepared) => {
+      registerStore(prepared);
+      openRepo(prepared);
+      prepared.dispatch({ type: 'branches/loaded', branches });
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Tree' }));
+    return store;
+  }
+
+  it('is a flat list until asked, and then remembers the choice', () => {
+    const store = inTree();
+
+    expect(within(region('Local branches')).getByRole('tree')).toBeInTheDocument();
+    expect(store.getState().config.branchList).toBe('tree');
+    expect(screen.getByRole('button', { name: 'Tree' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(screen.getByRole('button', { name: 'List' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+  });
+
+  it('takes the switch away with the section it redraws', async () => {
+    inTree();
+
+    await click(screen.getByRole('button', { name: 'Branches, 4' }));
+
+    expect(screen.queryByRole('button', { name: 'Tree' })).toBeNull();
+  });
+
+  it('groups the names by their slashes, printing one segment per row', () => {
+    inTree();
+
+    const local = within(region('Local branches')).getByRole('tree');
+    // `feat` holds two things, so it is a row of its own; `feat/ui` holds one
+    // branch and is collapsed into a single row the way a path is.
+    expect(within(local).getByRole('button', { name: 'feat' })).toBeInTheDocument();
+    expect(within(local).getByRole('button', { name: 'ui' })).toBeInTheDocument();
+    expect(
+      within(local).getByRole('button', { name: /^tabs\s*in feat\/ui\/tabs$/ }),
+    ).toBeInTheDocument();
+  });
+
+  it('switches both halves at once, and files a remote under its remote', () => {
+    inTree();
+
+    // The remote is the first segment of the name git prints, so it becomes
+    // the outermost row without this knowing what a remote is — and with one
+    // branch under it the two levels collapse into a single row.
+    const remote = within(region('Remote branches')).getByRole('tree');
+    expect(within(remote).getByRole('button', { name: 'origin/feat' })).toBeTruthy();
+  });
+
+  it('keeps a row acting on the whole branch name, not the segment it shows', async () => {
+    const store = inTree();
+    const row = screen.getByRole('button', { name: /^parser\s*in feat\/parser$/ })
+      .parentElement as HTMLElement;
+
+    await click(within(row).getByRole('button', { name: 'Switch' }));
+
+    expect(switchToMock).toHaveBeenCalledWith(store, 'feat/parser');
+    expect(within(row).getByTitle('Delete feat/parser')).toBeInTheDocument();
+  });
+
+  it('folds a group away and brings it back', async () => {
+    inTree();
+    const group = screen.getByRole('button', { name: 'feat' });
+
+    await click(group);
+
+    expect(
+      screen.queryByRole('button', { name: /^parser\s*in feat\/parser$/ }),
+    ).toBeNull();
+
+    await click(screen.getByRole('button', { name: 'feat' }));
+
+    expect(
+      screen.getByRole('button', { name: /^parser\s*in feat\/parser$/ }),
+    ).toBeInTheDocument();
+  });
+
+  it('leaves the groups that hide nothing folded', async () => {
+    const store = inTree([
+      ...NESTED,
+      branch({ name: 'chore/logs', oid: 'c'.repeat(40) }),
+    ]);
+    await click(screen.getByRole('button', { name: 'feat' }));
+    await click(screen.getByRole('button', { name: 'chore' }));
+
+    await act(async () => {
+      store.dispatch({
+        type: 'selection/commit',
+        oid: 'f'.repeat(40),
+        ref: 'refs/heads/feat/ui/tabs',
+      });
+    });
+
+    // `feat` had to open for the row to exist; `chore` hides nothing the
+    // selection named, and a selection is not a reason to undo somebody's
+    // folding elsewhere in the list.
+    expect(
+      screen.getByRole('button', { name: /^tabs\s*in feat\/ui\/tabs$/ }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^logs\s*in chore\/logs$/ })).toBeNull();
+  });
+
+  it('lets the user fold the same selection away again', async () => {
+    // The unfolding happens when the selection *changes*. Re-opening a group
+    // the user has just closed, over a selection they already saw, would make
+    // the fold un-closeable.
+    const store = inTree();
+    await act(async () => {
+      store.dispatch({
+        type: 'selection/commit',
+        oid: 'f'.repeat(40),
+        ref: 'refs/heads/feat/ui/tabs',
+      });
+    });
+
+    await click(screen.getByRole('button', { name: 'feat' }));
+
+    expect(
+      screen.queryByRole('button', { name: /^tabs\s*in feat\/ui\/tabs$/ }),
+    ).toBeNull();
+  });
+
+  // Without this the highlight a chip sets is drawn inside a folded group,
+  // which from the user's side looks exactly like nothing having happened.
+  it('unfolds what hides the branch a selection names', async () => {
+    const store = inTree();
+    await click(screen.getByRole('button', { name: 'feat' }));
+
+    await act(async () => {
+      store.dispatch({
+        type: 'selection/commit',
+        oid: 'f'.repeat(40),
+        ref: 'refs/heads/feat/ui/tabs',
+      });
+    });
+
+    expect(
+      screen.getByRole('button', { name: /^tabs\s*in feat\/ui\/tabs$/ }),
+    ).toHaveAttribute('aria-pressed', 'true');
+  });
+});
+
+describe('the tag list', () => {
+  const V1: Tag = {
+    name: 'v1.0',
+    oid: 'a'.repeat(40),
+    object: 'a'.repeat(40),
+    annotated: false,
+    date: '2026-09-18T10:00:00Z',
+    subject: '',
+  };
+  const V2: Tag = {
+    name: 'v2.0',
+    oid: 'f'.repeat(40),
+    object: 'b'.repeat(40),
+    annotated: true,
+    date: '2026-09-19T10:00:00Z',
+    subject: 'ship it',
+  };
+
+  function renderTags(tags: Tag[] = [V2, V1], remotes = [{ name: 'origin' }]): Store {
+    return renderRefs((store) => {
+      openRepo(store);
+      store.dispatch({ type: 'branches/loaded', branches: BRANCHES });
+      store.dispatch({ type: 'tags/loaded', tags });
+      store.dispatch({
+        type: 'remotes/loaded',
+        remotes: remotes.map((one) => ({
+          name: one.name,
+          fetchUrl: `git@example.com:o/${one.name}.git`,
+          pushUrl: `git@example.com:o/${one.name}.git`,
+        })),
+      });
+    });
+  }
+
+  function tagRow(name: string): HTMLElement {
+    return within(region('Tags')).getByRole('button', { name });
+  }
+
+  it('lists the tags in a section of their own, in the order git gave them', () => {
+    renderTags();
+    const names = within(region('Tags'))
+      .getAllByRole('button')
+      .map((button) => button.textContent)
+      .filter((text) => text !== null && text.includes('v'));
+    expect(names[0]).toContain('v2.0');
+    expect(names[1]).toContain('v1.0');
+  });
+
+  it('says how many there are, and says so when there are none', () => {
+    renderTags([]);
+    expect(screen.getByRole('button', { name: 'Tags, 0' })).toBeInTheDocument();
+    expect(screen.getByText('No tags.')).toBeInTheDocument();
+  });
+
+  it('tells an annotated tag from a lightweight one, with its message', () => {
+    renderTags();
+    expect(tagRow('v2.0')).toHaveAttribute(
+      'title',
+      expect.stringContaining('Annotated tag v2.0 — ship it'),
+    );
+    expect(tagRow('v1.0')).toHaveAttribute(
+      'title',
+      expect.stringContaining('Lightweight tag v1.0'),
+    );
+  });
+
+  it('selects the commit an annotated tag points into, not the tag object', async () => {
+    const store = renderTags();
+
+    await click(tagRow('v2.0'));
+
+    // The oid, not the object: the tag object has no row in the history, so
+    // selecting it would show nothing at all.
+    expect(selectCommitMock).toHaveBeenCalledWith(
+      store,
+      'f'.repeat(40),
+      'refs/tags/v2.0',
+    );
+  });
+
+  it('marks the tag a chip in the history named, and not a branch of the same name', async () => {
+    const store = renderTags([{ ...V1, name: 'release' }]);
+    await act(async () => {
+      store.dispatch({
+        type: 'selection/commit',
+        oid: 'a'.repeat(40),
+        ref: 'refs/heads/release',
+      });
+    });
+    expect(tagRow('release')).toHaveAttribute('aria-pressed', 'false');
+
+    await act(async () => {
+      store.dispatch({
+        type: 'selection/commit',
+        oid: 'a'.repeat(40),
+        ref: 'refs/tags/release',
+      });
+    });
+    expect(tagRow('release')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('asks before deleting, and deletes nothing until the question is answered', async () => {
+    renderTags();
+
+    await click(within(region('Tags')).getByRole('button', { name: 'Delete tag v1.0' }));
+
+    expect(removeTagMock).not.toHaveBeenCalled();
+    const question = dialog();
+    expect(question).toHaveTextContent('Delete tag "v1.0"?');
+    // Cancel holds the focus, so a stray Enter deletes nothing.
+    expect(within(question).getByRole('button', { name: 'Cancel' })).toHaveFocus();
+  });
+
+  it('deletes with the question as the confirmation, and offers the way back', async () => {
+    removeTagMock.mockResolvedValue(true);
+    const store = renderTags();
+    await click(within(region('Tags')).getByRole('button', { name: 'Delete tag v2.0' }));
+
+    await click(screen.getByRole('button', { name: 'Delete Tag' }));
+
+    // `update-ref` on the tag *object*: `git tag v2.0 <commit>` would recreate
+    // it as a lightweight tag and quietly drop the annotation.
+    expect(removeTagMock).toHaveBeenCalledWith(
+      store,
+      'v2.0',
+      'Delete tag "v2.0"?',
+      `git update-ref refs/tags/v2.0 ${'b'.repeat(40)}`,
+    );
+  });
+
+  it('cancels without deleting anything', async () => {
+    renderTags();
+    await click(within(region('Tags')).getByRole('button', { name: 'Delete tag v1.0' }));
+
+    await click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(removeTagMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+  });
+
+  it('offers the remote delete on the row menu, and says it goes for everyone', async () => {
+    removeRemoteTagMock.mockResolvedValue('deleted');
+    const store = renderTags();
+    await act(async () => {
+      fireEvent.contextMenu(tagRow('v2.0'));
+    });
+
+    await click(screen.getByRole('menuitem', { name: 'Delete tag on origin' }));
+
+    const question = dialog();
+    expect(question).toHaveTextContent('for everyone who uses that remote');
+    await click(screen.getByRole('button', { name: 'Delete on origin' }));
+
+    expect(removeRemoteTagMock).toHaveBeenCalledWith(
+      store,
+      { remote: 'origin', tag: 'v2.0' },
+      'Delete tag "v2.0" from origin — for everyone who uses that remote?',
+      `git push origin ${'b'.repeat(40)}:refs/tags/v2.0`,
+    );
+  });
+
+  it('pushes a tag from the row menu', async () => {
+    const store = renderTags();
+    await act(async () => {
+      fireEvent.contextMenu(tagRow('v1.0'));
+    });
+
+    await click(screen.getByRole('menuitem', { name: 'Push tag to origin' }));
+
+    expect(pushTagToMock).toHaveBeenCalledWith(store, 'origin', 'v1.0');
+  });
+
+  it('cannot reach a remote the repository does not have', async () => {
+    renderTags([V1], []);
+    await act(async () => {
+      fireEvent.contextMenu(tagRow('v1.0'));
+    });
+
+    expect(screen.getByRole('menuitem', { name: 'Push tag' })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+    expect(
+      screen.getByRole('menuitem', { name: 'Delete tag on remote' }),
+    ).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('refuses to act while a git command is running', async () => {
+    const store = renderTags();
+    act(() => store.dispatch({ type: 'busy', busy: true }));
+
+    expect(
+      within(region('Tags')).getByRole('button', { name: 'Delete tag v1.0' }),
+    ).toBeDisabled();
+  });
+
+  it('reports a failure to read the tags rather than showing an empty list', () => {
+    renderRefs((store) => {
+      openRepo(store);
+      store.dispatch({ type: 'tags/failed', message: 'fatal: not a git repository' });
+    });
+    expect(within(region('Tags')).getByRole('alert')).toHaveTextContent(
+      'Could not read the tags',
+    );
   });
 });

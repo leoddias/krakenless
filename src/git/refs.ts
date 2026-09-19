@@ -12,6 +12,7 @@ import {
   buildPullCommand,
   buildPullMergeCommand,
   buildDeleteRemoteBranchCommand,
+  buildDeleteRemoteTagCommand,
   buildPushCommand,
   buildPushTagCommand,
   buildRemoteListCommand,
@@ -19,6 +20,7 @@ import {
   type PushOptions,
 } from './commands/remote';
 import { buildRefSnapshotCommand } from './commands/refsnapshot';
+import { buildDeleteTagCommand, buildTagListCommand } from './commands/tag';
 import {
   buildResolveStashCommand,
   buildStashApplyCommand,
@@ -30,9 +32,10 @@ import { autostashConflictedIn } from './autostash';
 import { approve, type Confirmation } from './confirm';
 import { classifyFailure, GitError } from './errors';
 import { parseBranches, parseRemotes, parseStashes } from './parsers/branch';
+import { parseTags } from './parsers/tag';
 import { parseRefSnapshot, type RefSnapshot } from './parsers/refsnapshot';
 import { runGit } from './runner';
-import type { Branch, Remote, StashEntry } from './types';
+import type { Branch, Remote, StashEntry, Tag } from './types';
 
 /** Read-only and additive commands; nothing here can lose work. */
 const SAFE = { confirmed: true } as const;
@@ -50,6 +53,11 @@ export async function listBranches(
 export async function listRemotes(repo: string): Promise<Remote[]> {
   const output = await runGit(repo, buildRemoteListCommand());
   return parseRemotes(output.stdout);
+}
+
+export async function listTags(repo: string): Promise<Tag[]> {
+  const output = await runGit(repo, buildTagListCommand());
+  return parseTags(output.stdout);
 }
 
 export async function listStashes(repo: string): Promise<StashEntry[]> {
@@ -178,6 +186,46 @@ export function deleteRemoteBranch(
 }
 
 /**
+ * How a remote tag delete ended when git considered it a success.
+ *
+ * `nothing-there` is the outcome that must never pass as `deleted`: pushing a
+ * delete for a tag the remote does not have exits **0** and prints
+ * `- [deleted] v9.9`, with only a `warning: deleting a non-existent ref` from
+ * the receiving end to say otherwise. Reported as success it would tell the
+ * user a release tag is gone from the server while it is sitting there under a
+ * name they misspelled.
+ */
+export type RemoteTagDeleteOutcome = 'deleted' | 'nothing-there';
+
+/**
+ * Deletes a tag on a remote, which is not undoable from here.
+ *
+ * Confirmed for the reason the remote branch delete is: this is a ref other
+ * people fetch by name, and a release tag is fetched by scripts as well as by
+ * people. Git offers no refusal to lean on — a tag is never "merged" — so the
+ * confirmation token is the only gate before the server's own.
+ */
+export async function deleteRemoteTag(
+  repo: string,
+  remote: string,
+  tag: string,
+  confirmation: Confirmation,
+): Promise<RemoteTagDeleteOutcome> {
+  const output = await runGit(
+    repo,
+    buildDeleteRemoteTagCommand(remote, tag),
+    approve(confirmation),
+  );
+  // Read from the output for the reason the autostash conflict is: git exited
+  // 0, and the only thing separating "done" from "there was nothing to do" is
+  // a line it wrote on the way past. A server that errors instead (most do
+  // over ssh or https) has already come back as a failure.
+  return /deleting a non-existent ref/i.test(`${output.stdout}\n${output.stderr}`)
+    ? 'nothing-there'
+    : 'deleted';
+}
+
+/**
  * Publishes one tag. Additive: it can create a ref on the remote and can never
  * move or delete one, so git's own refusal is the whole safety story.
  */
@@ -252,6 +300,24 @@ export async function deleteBranch(
     }
     throw error;
   }
+}
+
+/**
+ * Deletes a tag locally.
+ *
+ * One step, unlike a branch delete, because git has no two: `tag -d` has no
+ * safe form to try first and no refusal to escalate from — "merged" means
+ * nothing about a tag. So the whole gate is the confirmation the caller took,
+ * plus the fact that the ref is all that goes: the object it named survives
+ * until git collects it, and `git update-ref refs/tags/<name> <object>` puts
+ * the tag back exactly as it was, annotation and all.
+ */
+export function deleteTag(
+  repo: string,
+  name: string,
+  confirmation: Confirmation,
+): Promise<unknown> {
+  return runGit(repo, buildDeleteTagCommand(name), approve(confirmation));
 }
 
 // --- stash -----------------------------------------------------------------

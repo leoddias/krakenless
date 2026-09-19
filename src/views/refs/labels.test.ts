@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { assertRefName } from '../../git/argsafety';
 import { GitError } from '../../git/errors';
-import type { Branch, StashEntry } from '../../git/types';
+import type { Branch, StashEntry, Tag } from '../../git/types';
 import {
   applyStashQuestion,
+  branchAncestors,
   branchNameError,
   deleteBranchQuestion,
   deleteRemoteBranchQuestion,
@@ -11,8 +12,18 @@ import {
   dropStashQuestion,
   forceDeleteBranchQuestion,
   formatRelativeDate,
+  branchRef,
+  deleteRemoteTagDetail,
+  deleteRemoteTagQuestion,
+  deleteTagDetail,
+  deleteTagQuestion,
   groupBranches,
+  isBranchSelected,
+  isTagSelected,
   localNameFor,
+  remoteTagDeleteRecovery,
+  tagRef,
+  tagRestoreCommand,
   popStashQuestion,
   stashLabel,
   trackingSummary,
@@ -27,6 +38,17 @@ function branch(overrides: Partial<Branch> & { name: string }): Branch {
     ahead: 0,
     behind: 0,
     remote: false,
+    ...overrides,
+  };
+}
+
+function tag(overrides: Partial<Tag> & { name: string }): Tag {
+  return {
+    oid: 'a'.repeat(40),
+    object: 'a'.repeat(40),
+    annotated: false,
+    date: '2026-09-19T10:00:00+00:00',
+    subject: '',
     ...overrides,
   };
 }
@@ -89,6 +111,54 @@ describe('trackingSummary', () => {
         branch({ name: 'main', upstream: 'origin/main', ahead: 2, behind: 3 }),
       ),
     ).toBe('Tracks origin/main, 2 ahead, 3 behind');
+  });
+});
+
+describe('isBranchSelected', () => {
+  const main = branch({ name: 'main', oid: 'a'.repeat(40) });
+  const twin = branch({ name: 'origin/main', oid: 'a'.repeat(40), remote: true });
+
+  it('marks only the branch the selection was made through', () => {
+    // The point of carrying the ref: both of these sit on the same commit, and
+    // lighting up both answers a question nobody asked.
+    expect(isBranchSelected(main, 'refs/remotes/origin/main', 'a'.repeat(40))).toBe(
+      false,
+    );
+    expect(isBranchSelected(twin, 'refs/remotes/origin/main', 'a'.repeat(40))).toBe(true);
+    expect(isBranchSelected(main, 'refs/heads/main', 'a'.repeat(40))).toBe(true);
+    expect(isBranchSelected(twin, 'refs/heads/main', 'a'.repeat(40))).toBe(false);
+  });
+
+  it('tells a tag apart from a branch of the same name', () => {
+    // Git allows both at once, and their short names are identical: the path
+    // is the only thing that says which one the click was about.
+    const release = branch({ name: 'release', oid: 'a'.repeat(40) });
+    expect(isBranchSelected(release, 'refs/tags/release', 'a'.repeat(40))).toBe(false);
+    expect(isBranchSelected(release, 'refs/heads/release', 'a'.repeat(40))).toBe(true);
+  });
+
+  it('falls back to the commit when the selection names no ref', () => {
+    expect(isBranchSelected(main, null, 'a'.repeat(40))).toBe(true);
+    expect(isBranchSelected(main, null, 'b'.repeat(40))).toBe(false);
+  });
+
+  it('marks nothing when nothing is selected', () => {
+    expect(isBranchSelected(main, null, null)).toBe(false);
+  });
+
+  it('marks nothing when the named ref is not in the list', () => {
+    expect(isBranchSelected(main, 'refs/heads/feature/x', 'a'.repeat(40))).toBe(false);
+  });
+});
+
+describe('branchAncestors', () => {
+  it('names every row that has to be open for a branch to be on screen', () => {
+    expect(branchAncestors('feat/ui/tabs')).toEqual(['feat', 'feat/ui']);
+    expect(branchAncestors('origin/feat/x')).toEqual(['origin', 'origin/feat']);
+  });
+
+  it('is empty for a branch that sits at the top of the list', () => {
+    expect(branchAncestors('main')).toEqual([]);
   });
 });
 
@@ -326,5 +396,139 @@ describe('remoteDeleteRecovery', () => {
     expect(remoteDeleteRecovery(ref, 'HEAD')).toBeNull();
     expect(remoteDeleteRecovery(ref, 'a1b2c3d')).toBeNull();
     expect(remoteDeleteRecovery(ref, '')).toBeNull();
+  });
+});
+
+describe('the ref path a row stands for', () => {
+  it('puts a local branch, a remote-tracking one and a tag in their own namespaces', () => {
+    expect(branchRef(branch({ name: 'main' }))).toBe('refs/heads/main');
+    expect(branchRef(branch({ name: 'origin/main', remote: true }))).toBe(
+      'refs/remotes/origin/main',
+    );
+    expect(tagRef(tag({ name: 'v1.0' }))).toBe('refs/tags/v1.0');
+  });
+});
+
+describe('isTagSelected', () => {
+  const v1 = tag({ name: 'v1.0', oid: 'a'.repeat(40) });
+
+  it('marks the tag the selection named', () => {
+    expect(isTagSelected(v1, 'refs/tags/v1.0', 'a'.repeat(40))).toBe(true);
+  });
+
+  it('does not answer to a branch of the same name', () => {
+    const release = tag({ name: 'release', oid: 'a'.repeat(40) });
+    expect(isTagSelected(release, 'refs/heads/release', 'a'.repeat(40))).toBe(false);
+  });
+
+  it('falls back to the commit when the selection names no ref', () => {
+    expect(isTagSelected(v1, null, 'a'.repeat(40))).toBe(true);
+    expect(isTagSelected(v1, null, 'b'.repeat(40))).toBe(false);
+    expect(isTagSelected(v1, null, null)).toBe(false);
+  });
+});
+
+describe('the tag questions', () => {
+  it('names the tag in the local question', () => {
+    expect(deleteTagQuestion('v1.0')).toBe('Delete tag "v1.0"?');
+  });
+
+  it('says the remote one goes for everyone, which is its whole difference', () => {
+    expect(deleteRemoteTagQuestion({ remote: 'origin', tag: 'v1.0' })).toBe(
+      'Delete tag "v1.0" from origin — for everyone who uses that remote?',
+    );
+  });
+});
+
+describe('the tag details', () => {
+  it('promises a way back only when there is one', () => {
+    expect(deleteTagDetail('git update-ref refs/tags/v1.0 abc')).toContain(
+      'puts it back',
+    );
+    expect(deleteTagDetail(null)).toContain('no way back');
+  });
+
+  it('does not claim a fetch removes the tag from anyone who has it', () => {
+    // It does not: that needs `--prune-tags`. Saying otherwise would have the
+    // user believe a bad release tag is gone from machines it is still on.
+    const detail = deleteRemoteTagDetail('origin');
+    expect(detail).toContain('prune-tags');
+    expect(detail).toMatch(/already fetched stay/);
+  });
+});
+
+describe('tagRestoreCommand', () => {
+  it('names the object the ref pointed at, so an annotated tag comes back whole', () => {
+    // `git tag v2.0 <commit>` would resolve the tag object to its commit and
+    // recreate the tag lightweight, dropping the message and the tagger.
+    const annotated = tag({
+      name: 'v2.0',
+      annotated: true,
+      oid: 'a'.repeat(40),
+      object: 'b'.repeat(40),
+    });
+    expect(tagRestoreCommand(annotated)).toBe(
+      `git update-ref refs/tags/v2.0 ${'b'.repeat(40)}`,
+    );
+  });
+
+  it('works the same for a lightweight tag, whose two ids are one', () => {
+    expect(tagRestoreCommand(tag({ name: 'v1.0' }))).toBe(
+      `git update-ref refs/tags/v1.0 ${'a'.repeat(40)}`,
+    );
+  });
+
+  it('offers nothing when the object is not an object id', () => {
+    // The string is handed to the user to paste into a shell: something that
+    // is not an oid must not travel there as if it were one.
+    expect(tagRestoreCommand(tag({ name: 'v1.0', object: 'HEAD' }))).toBeNull();
+    expect(tagRestoreCommand(tag({ name: 'v1.0', object: '' }))).toBeNull();
+  });
+
+  it('offers nothing for a name a shell would read as more than a name', () => {
+    // git accepts `;`, `$`, backticks and quotes in a ref name; a shell reads
+    // them as syntax. A tag out of someone else's repository is text they
+    // chose, and this line sits under a label telling the user to run it.
+    for (const name of [
+      'v1;rm -rf ~',
+      'v1$(whoami)',
+      'v1`id`',
+      "v1'|sh",
+      'v1 && curl evil',
+      '-v1',
+    ]) {
+      expect(tagRestoreCommand(tag({ name }))).toBeNull();
+    }
+  });
+
+  it('still offers one for the names tags actually have', () => {
+    for (const name of ['v1.0', 'release-1.0.4', 'release/2026.09', 'v1_rc.2']) {
+      expect(tagRestoreCommand(tag({ name }))).toContain(`refs/tags/${name}`);
+    }
+  });
+});
+
+describe('remoteTagDeleteRecovery', () => {
+  const ref = { remote: 'origin', tag: 'v1.0' };
+
+  it('pushes the object back under a fully qualified name', () => {
+    // Qualified on the right-hand side so the push cannot land on a branch
+    // that happens to share the name.
+    expect(remoteTagDeleteRecovery(ref, 'b'.repeat(40))).toBe(
+      `git push origin ${'b'.repeat(40)}:refs/tags/v1.0`,
+    );
+  });
+
+  it('offers nothing when the object is not an object id', () => {
+    expect(remoteTagDeleteRecovery(ref, 'v1.0^{}')).toBeNull();
+  });
+
+  it('offers nothing when the tag or the remote would carry shell syntax', () => {
+    expect(
+      remoteTagDeleteRecovery({ remote: 'origin', tag: 'v1;id' }, 'b'.repeat(40)),
+    ).toBeNull();
+    expect(
+      remoteTagDeleteRecovery({ remote: 'o;id', tag: 'v1.0' }, 'b'.repeat(40)),
+    ).toBeNull();
   });
 });

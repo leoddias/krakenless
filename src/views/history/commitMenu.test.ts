@@ -215,13 +215,45 @@ describe('the delete items', () => {
     expect(ids).not.toContain('delete-remote-branch-origin/HEAD');
   });
 
-  it('leaves tags and HEAD out of it', () => {
+  it('leaves HEAD out of it, and offers a tag both of its deletes', () => {
+    // HEAD is where the checkout is, not a ref anybody deletes. A tag gets two
+    // items because they are two acts: dropping the name here leaves the
+    // release tag on the server, and dropping it there takes it from everyone.
     const ids = flatten(
       buildCommitMenu(
         context(withRefs({ kind: 'tag', name: 'v1.0' }, { kind: 'head', name: 'HEAD' })),
       ),
     ).map((entry) => entry.id);
-    expect(ids.filter((id) => id.startsWith('delete-'))).toEqual([]);
+    expect(ids.filter((id) => id.startsWith('delete-'))).toEqual([
+      'delete-tag-v1.0',
+      'delete-remote-tag-v1.0',
+    ]);
+  });
+
+  it('names the remote the tag delete would reach', () => {
+    const entry = item(withRefs({ kind: 'tag', name: 'v1.0' }), 'delete-remote-tag-v1.0');
+    expect(entry.label).toBe('Delete tag v1.0 on origin');
+    expect(entry.action).toEqual({
+      kind: 'delete-remote-tag',
+      remote: 'origin',
+      tag: 'v1.0',
+    });
+  });
+
+  it('cannot delete a tag on a remote that does not exist', () => {
+    const entry = item(
+      {
+        ...withRefs({ kind: 'tag', name: 'v1.0' }),
+        remotes: { state: 'ready', value: [] },
+      },
+      'delete-remote-tag-v1.0',
+    );
+    expect(entry.disabled).toContain('No remote');
+    expect(entry.action).toBeUndefined();
+    // The local delete does not need anybody's network.
+    expect(
+      item(withRefs({ kind: 'tag', name: 'v1.0' }), 'delete-tag-v1.0').action,
+    ).toEqual({ kind: 'delete-tag', name: 'v1.0' });
   });
 
   it('is refused while another command is running, like everything else', () => {

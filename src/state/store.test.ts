@@ -75,7 +75,7 @@ describe('reduce', () => {
     expect(next.status.state).toBe('idle');
     expect(next.commits.state).toBe('idle');
     expect(next.diff.state).toBe('idle');
-    expect(next.selection).toEqual({ commitOid: null, path: null });
+    expect(next.selection).toEqual({ commitOid: null, path: null, ref: null });
   });
 
   it('keeps the loaded config across repository changes', () => {
@@ -93,7 +93,20 @@ describe('reduce', () => {
     expect(state.diff.state).toBe('ready');
     state = reduce(state, { type: 'selection/commit', oid: '9f1c2ab' });
     expect(state.diff.state).toBe('idle');
-    expect(state.selection).toEqual({ commitOid: '9f1c2ab', path: null });
+    expect(state.selection).toEqual({ commitOid: '9f1c2ab', path: null, ref: null });
+  });
+
+  it('remembers the ref a selection was made through, and forgets it otherwise', () => {
+    let state = reduce(loaded(), {
+      type: 'selection/commit',
+      oid: '9f1c2ab',
+      ref: 'origin/main',
+    });
+    expect(state.selection.ref).toBe('origin/main');
+    // A commit picked from the history names no ref, and the old name must not
+    // survive to highlight a branch this selection has nothing to do with.
+    state = reduce(state, { type: 'selection/commit', oid: 'abc1234' });
+    expect(state.selection.ref).toBeNull();
   });
 
   it('resets the selected path when the selected commit changes', () => {

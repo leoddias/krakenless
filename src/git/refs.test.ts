@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   deleteBranch,
   deleteRemoteBranch,
+  deleteRemoteTag,
+  deleteTag,
   listStashes,
+  listTags,
   pull,
   pullMerge,
   push,
@@ -334,6 +337,147 @@ describe('deleteBranch', () => {
     await expect(
       deleteBranch('C:/repo', 'topic', userConfirmed('delete topic')),
     ).rejects.toThrow(GitError);
+  });
+});
+
+describe('deleteTag', () => {
+  beforeEach(() => {
+    invoke.mockReset();
+  });
+
+  it('deletes the ref, once, with no force and no second attempt', async () => {
+    // Unlike a branch there is no safe form to try first and no refusal to
+    // escalate from: "merged" means nothing about a tag.
+    invoke.mockResolvedValue(raw());
+    await deleteTag('C:/repo', 'v1.0', userConfirmed('delete tag v1.0'));
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith(
+      'git_run',
+      expect.objectContaining({ args: ['tag', '--delete', 'v1.0'] }),
+    );
+  });
+
+  it('refuses to run without a confirmation the user gave', () => {
+    // Thrown before any promise exists: an object cast into the token type
+    // never passed through `userConfirmed`, so nobody was ever asked.
+    invoke.mockResolvedValue(raw());
+    expect(() => deleteTag('C:/repo', 'v1.0', { reason: '' } as never)).toThrow(GitError);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('propagates git\u2019s refusal for a tag that is not there', async () => {
+    invoke.mockResolvedValue(raw({ code: 1, stderr: "error: tag 'v9.9' not found." }));
+    await expect(
+      deleteTag('C:/repo', 'v9.9', userConfirmed('delete tag v9.9')),
+    ).rejects.toThrow(GitError);
+  });
+});
+
+describe('deleteRemoteTag', () => {
+  beforeEach(() => {
+    invoke.mockReset();
+  });
+
+  it('names the ref in full, so a branch of the same name is not what goes', async () => {
+    invoke.mockResolvedValue(raw());
+    await deleteRemoteTag(
+      'C:/repo',
+      'origin',
+      'release',
+      userConfirmed('delete release on origin'),
+    );
+    expect(invoke.mock.calls[0]?.[1].args).toEqual([
+      'push',
+      '--progress',
+      'origin',
+      '--delete',
+      'refs/tags/release',
+    ]);
+  });
+
+  it('refuses to run without a confirmation the user gave', async () => {
+    invoke.mockResolvedValue(raw());
+    await expect(
+      deleteRemoteTag('C:/repo', 'origin', 'v1.0', { reason: '' } as never),
+    ).rejects.toThrow(GitError);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('never reports a no-op delete as a delete', async () => {
+    // Pushing a delete for a tag the remote does not have exits 0 and prints
+    // `- [deleted] v9.9`; only the warning says nothing happened. Reported as
+    // success it tells the user a release tag is gone from the server while it
+    // is sitting there under a name they misspelled.
+    invoke.mockResolvedValue(
+      raw({
+        stderr: 'remote: warning: deleting a non-existent ref',
+        stdout: ' - [deleted]         v9.9',
+      }),
+    );
+    await expect(
+      deleteRemoteTag('C:/repo', 'origin', 'v9.9', userConfirmed('delete v9.9')),
+    ).resolves.toBe('nothing-there');
+  });
+
+  it('reports a real delete as one', async () => {
+    invoke.mockResolvedValue(raw({ stdout: ' - [deleted]         v1.0' }));
+    await expect(
+      deleteRemoteTag('C:/repo', 'origin', 'v1.0', userConfirmed('delete v1.0')),
+    ).resolves.toBe('deleted');
+  });
+});
+
+describe('listTags', () => {
+  beforeEach(() => {
+    invoke.mockReset();
+  });
+
+  it('parses the NUL-framed list, peeling an annotated tag to its commit', async () => {
+    const commit = 'a'.repeat(40);
+    const object = 'b'.repeat(40);
+    invoke.mockResolvedValue(
+      raw({
+        stdout: [
+          [
+            'refs/tags/v2.0',
+            object,
+            'tag',
+            commit,
+            '2026-09-19T11:00:00+00:00',
+            'ship it',
+          ].join('\0'),
+          ['refs/tags/v1.0', commit, 'commit', '', '2026-09-18T11:00:00+00:00', ''].join(
+            '\0',
+          ),
+          '',
+        ].join('\n'),
+      }),
+    );
+
+    await expect(listTags('C:/repo')).resolves.toEqual([
+      {
+        name: 'v2.0',
+        oid: commit,
+        object,
+        annotated: true,
+        date: '2026-09-19T11:00:00+00:00',
+        subject: 'ship it',
+      },
+      {
+        name: 'v1.0',
+        oid: commit,
+        object: commit,
+        annotated: false,
+        date: '2026-09-18T11:00:00+00:00',
+        subject: '',
+      },
+    ]);
+  });
+
+  it('needs no confirmation: it only reads', async () => {
+    invoke.mockResolvedValue(raw({ stdout: '' }));
+    await expect(listTags('C:/repo')).resolves.toEqual([]);
+    expect(isDestructive(invoke.mock.calls[0]?.[1].args as string[])).toBe(false);
   });
 });
 

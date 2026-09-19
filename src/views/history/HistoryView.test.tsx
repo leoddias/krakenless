@@ -534,7 +534,7 @@ describe('dragging a branch onto the checkout', () => {
   function chips(): { source: HTMLElement; target: HTMLElement } {
     return {
       source: screen.getByTitle(/^branch feature\/x/),
-      target: screen.getByTitle('checked out branch main'),
+      target: screen.getByTitle(/^checked out branch main/),
     };
   }
 
@@ -596,7 +596,7 @@ describe('dragging a branch onto the checkout', () => {
 
   it('ignores a drop that no drag of ours started', () => {
     renderWithCommits([headRow(1), branchRow(2, 'feature/x')]);
-    fireEvent.drop(screen.getByTitle('checked out branch main'), {
+    fireEvent.drop(screen.getByTitle(/^checked out branch main/), {
       dataTransfer: transfer(),
     });
     expect(screen.queryByRole('dialog')).toBeNull();
@@ -619,7 +619,7 @@ describe('dragging a branch onto the checkout', () => {
       headRow(1),
       makeCommit(2, { refs: [{ kind: 'tag', name: 'v1.0' }] }),
     ]);
-    expect(screen.getByTitle('tag v1.0')).not.toHaveAttribute('draggable');
+    expect(screen.getByTitle(/^tag v1\.0/)).not.toHaveAttribute('draggable');
   });
 });
 
@@ -864,6 +864,65 @@ describe('switching branch from a chip', () => {
     fireEvent.doubleClick(chip('feat/beta'));
 
     expect(selectCommitMock).not.toHaveBeenCalled();
+  });
+
+  it('selects the branch it names, so the branch list can point at it', () => {
+    renderRefs([
+      { kind: 'head', name: 'HEAD' },
+      { kind: 'branch', name: 'main' },
+      { kind: 'remote-branch', name: 'origin/feat/beta' },
+    ]);
+    selectCommitMock.mockClear();
+
+    fireEvent.click(chip('origin/feat/beta'));
+
+    // The oid the row is drawn from, and the ref path of the chip that was
+    // clicked: the row's own click knows the first and not the second, and
+    // several refs on one commit is the ordinary case. The path, not the short
+    // name, because a branch and a tag may share one.
+    const call = selectCommitMock.mock.calls[0];
+    expect(call?.[2]).toBe('refs/remotes/origin/feat/beta');
+    expect(switchToMock).not.toHaveBeenCalled();
+  });
+
+  it('names the checked-out branch too when its chip is clicked', () => {
+    renderRefs([
+      { kind: 'head', name: 'HEAD' },
+      { kind: 'branch', name: 'main' },
+    ]);
+    selectCommitMock.mockClear();
+
+    fireEvent.click(chip('main'));
+
+    expect(selectCommitMock.mock.calls[0]?.[2]).toBe('refs/heads/main');
+    expect(switchToMock).not.toHaveBeenCalled();
+  });
+
+  it('selects a tag too, now that the panel on the left lists them', () => {
+    renderRefs([
+      { kind: 'branch', name: 'main' },
+      { kind: 'tag', name: 'v0.1.0' },
+    ]);
+    selectCommitMock.mockClear();
+
+    fireEvent.click(chip('v0.1.0'));
+
+    expect(selectCommitMock.mock.calls[0]?.[2]).toBe('refs/tags/v0.1.0');
+    expect(switchToMock).not.toHaveBeenCalled();
+  });
+
+  it('leaves a HEAD chip to the row underneath it', () => {
+    // `HEAD` has no row in the panel on the left — it is where the checkout
+    // is, not a ref anybody selects — so the row's own click is what answers.
+    renderRefs([
+      { kind: 'head', name: 'HEAD' },
+      { kind: 'remote-branch', name: 'origin/main' },
+    ]);
+    selectCommitMock.mockClear();
+
+    fireEvent.click(chip('HEAD'));
+
+    expect(selectCommitMock.mock.calls[0]?.[2]).toBeUndefined();
   });
 
   it('refuses while a git command is already running', () => {

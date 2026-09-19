@@ -172,6 +172,129 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* The section header and the List / Tree switch share one row. The header is
+   itself a button, so the switch cannot live inside it; the border moves out
+   here so the two read as one bar rather than a header with a lid. */
+.sectionBar {
+  display: flex;
+  align-items: center;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.sectionBar .heading {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sectionBar .sectionHeader {
+  border-bottom: 0;
+}
+
+.modeToggle {
+  display: inline-flex;
+  flex: none;
+  margin-right: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.modeButton {
+  padding: 0 0.4rem;
+  min-height: 18px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.625rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.modeButton + .modeButton {
+  border-left: 1px solid var(--border);
+}
+
+.modeButton:hover {
+  background: var(--surface-hover);
+}
+
+.modeButton:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* The pressed half is filled, not just recoloured, so it reads at a glance. */
+.modeButton[aria-pressed='true'] {
+  background: var(--selected);
+  color: var(--fg-strong);
+}
+
+/* --- the tree --------------------------------------------------------------- */
+
+/* Each level steps in by one unit; the unit is a custom property so a deep
+   tree in a narrow sidebar can be tightened in one place. */
+.treeChildren {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 var(--tree-indent, 0.9rem);
+}
+
+.treeDir {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  width: 100%;
+  min-height: 22px;
+  padding: 0 0.5rem 0 0.75rem;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.75rem;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.treeDir:hover {
+  background: var(--surface-hover);
+}
+
+.treeDir:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.treeChevron {
+  flex: none;
+  display: inline-block;
+  width: 0.8em;
+  color: var(--faint);
+  transition: transform 0.1s ease-in-out;
+}
+
+.treeDir[aria-expanded='false'] .treeChevron {
+  transform: rotate(-90deg);
+}
+
+.treeDirName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Inside the tree a row prints one segment, so it is read left to right like
+   any other short label — the front-clipping the flat list needs would put an
+   ellipsis on a name that fits. */
+.treeChildren .nameTail,
+.treeChildren .treeDirName {
+  direction: ltr;
+}
+
 .subsection {
   padding-bottom: 0.25rem;
 }
@@ -339,6 +462,13 @@
 .marker {
   flex: none;
   font-size: 0.6875rem;
+}
+
+/* The same colour the tag chips carry in the history, so a tag reads as a tag
+   wherever it is drawn. Filled for an annotated tag, hollow for a lightweight
+   one — the glyph carries that, the colour only says "tag". */
+.tagMarker {
+  color: var(--ref-tag-fg);
 }
 
 .divergence {

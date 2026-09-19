@@ -50,9 +50,12 @@ import {
   deleteBranch,
   deleteRemoteBranch,
   dropStash,
+  deleteRemoteTag,
+  deleteTag,
   listBranches,
   listRemotes,
   listStashes,
+  listTags,
   pull,
   pullMerge,
   push,
@@ -63,6 +66,7 @@ import {
   type DeleteBranchOutcome,
   type PullMergeOutcome,
   type PullOutcome,
+  type RemoteTagDeleteOutcome,
 } from '../git/refs';
 import { getStatus } from '../git/status';
 import {
@@ -114,6 +118,7 @@ export async function openRepo(store: Store, path: string): Promise<void> {
       refreshCommits(store),
       refreshDiff(store),
       refreshBranches(store),
+      refreshTags(store),
       refreshRemotes(store),
       refreshStashes(store),
       refreshWorktrees(store),
@@ -250,14 +255,23 @@ export async function refreshDiff(store: Store): Promise<void> {
 /**
  * Selects a commit (or the working tree, with `null`) and loads its diff.
  *
+ * `ref` is the *full ref path* the selection was made through, when it was made
+ * through one — `refs/heads/main`, `refs/tags/v1.0` — as minted by `refPath`. A
+ * row in a list or a chip in the history supplies it. It only decides which row
+ * the panels highlight; nothing about the diff depends on it.
+ *
  * Selecting the working tree re-reads the *status* as well, not just the diff.
  * They are two different git commands answering one question, and refreshing
  * only one of them is how the working-tree panel ends up saying "clean" while
  * the diff beside it lists a modified file. A commit needs no status: it is
  * history, and nothing about it can have changed since the list was read.
  */
-export async function selectCommit(store: Store, oid: string | null): Promise<void> {
-  store.dispatch({ type: 'selection/commit', oid });
+export async function selectCommit(
+  store: Store,
+  oid: string | null,
+  ref: string | null = null,
+): Promise<void> {
+  store.dispatch({ type: 'selection/commit', oid, ref });
   await (oid === null
     ? Promise.all([refreshStatus(store), refreshDiff(store)])
     : refreshDiff(store));
@@ -563,6 +577,24 @@ export async function refreshBranches(store: Store): Promise<void> {
   }
 }
 
+/**
+ * Reads every tag in the repository.
+ *
+ * Its own read rather than a field of the branch one: `for-each-ref` over
+ * `refs/tags` answers a different question, and a repository with thousands of
+ * tags should not make the branch list wait for them.
+ */
+export async function refreshTags(store: Store): Promise<void> {
+  const root = currentRoot(store);
+  if (root === null) return;
+  store.dispatch({ type: 'tags/loading' });
+  try {
+    store.dispatch({ type: 'tags/loaded', tags: await listTags(root) });
+  } catch (error) {
+    store.dispatch({ type: 'tags/failed', ...describe(error) });
+  }
+}
+
 export async function refreshRemotes(store: Store): Promise<void> {
   const root = currentRoot(store);
   if (root === null) return;
@@ -726,6 +758,7 @@ async function refreshAll(store: Store): Promise<void> {
     refreshCommits(store),
     refreshDiff(store),
     refreshBranches(store),
+    refreshTags(store),
     refreshRemotes(store),
     refreshStashes(store),
     refreshWorktrees(store),
@@ -992,6 +1025,90 @@ export async function removeRemoteBranch(
     });
   }
   return deleted;
+}
+
+/**
+ * Deletes a tag locally, and says how to put it back.
+ *
+ * `restore` is the `update-ref` that recreates the tag on the object it named
+ * — the whole tag, message and date included, not a lightweight stand-in — and
+ * it is offered because it stops being possible once git collects that object.
+ * The caller supplies it, because the object id is only knowable before the
+ * delete.
+ */
+export async function removeTag(
+  store: Store,
+  name: string,
+  confirmationReason: string,
+  restore: string | null,
+): Promise<boolean> {
+  const root = currentRoot(store);
+  if (root === null) return false;
+
+  const deleted = await operate(store, () =>
+    deleteTag(root, name, userConfirmed(confirmationReason)),
+  );
+  if (deleted) {
+    store.dispatch({
+      type: 'notice',
+      notice: {
+        tone: 'info',
+        message: `Deleted tag ${name}. It is still on any remote it was pushed to.`,
+        ...(restore === null ? {} : { undoHint: restore }),
+      },
+    });
+  }
+  return deleted;
+}
+
+/**
+ * Deletes a tag on a remote.
+ *
+ * The same shape as {@link removeRemoteBranch}, and the same reason for the
+ * recovery command: the push that puts the ref back can only name the object
+ * while this repository still has it.
+ */
+export async function removeRemoteTag(
+  store: Store,
+  target: { remote: string; tag: string },
+  confirmationReason: string,
+  recovery: string | null,
+): Promise<RemoteTagDeleteOutcome | null> {
+  const root = currentRoot(store);
+  if (root === null) return null;
+
+  let outcome: RemoteTagDeleteOutcome | null = null;
+  await operate(store, async () => {
+    outcome = await deleteRemoteTag(
+      root,
+      target.remote,
+      target.tag,
+      userConfirmed(confirmationReason),
+    );
+  });
+
+  if (outcome === 'nothing-there') {
+    store.dispatch({
+      type: 'notice',
+      notice: {
+        tone: 'warning',
+        message: `${target.remote} had no tag called ${target.tag}, so nothing was deleted there. It is still here, if that is the one you meant.`,
+      },
+    });
+  } else if (outcome === 'deleted') {
+    store.dispatch({
+      type: 'notice',
+      notice: {
+        tone: 'info',
+        // Not "everyone loses it on their next fetch": a plain `git fetch`
+        // never removes a tag somebody already has — that needs
+        // `--prune-tags`. What stops is anyone getting it from there again.
+        message: `Deleted tag ${target.tag} from ${target.remote}. Nobody will get it from there again; copies already fetched stay until someone prunes tags. The command below recreates it from the object this repository has, which may not be the one ${target.remote} had.`,
+        ...(recovery === null ? {} : { undoHint: recovery }),
+      },
+    });
+  }
+  return outcome;
 }
 
 // --- one commit from the history ------------------------------------------

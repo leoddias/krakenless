@@ -15,15 +15,20 @@
  * the git layer validates is literally what they agreed to.
  */
 
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import type { Branch, StashEntry } from '../../git/types';
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import type { FileListMode } from '../../config/schema';
+import type { Branch, StashEntry, Tag } from '../../git/types';
 import {
   createAndSwitch,
   refreshBranches,
   refreshStashes,
+  refreshTags,
+  pushTagTo,
   removeBranch,
   removeRemoteBranch,
+  removeRemoteTag,
   removeStash,
+  removeTag,
   restoreStash,
   selectCommit,
   switchTo,
@@ -40,27 +45,45 @@ import {
   ChevronRightIcon,
   RepoIcon,
   StashIcon,
+  TagIcon,
 } from '../shell/icons';
+import { buildPathTree, type PathNode } from '../shell/pathTree';
+import { shortRefName } from '../shell/refName';
 import { trapTab } from '../shell/trapTab';
+import { rememberConfig } from '../shell/useLayout';
 import styles from './RefsView.module.css';
 import {
   applyStashQuestion,
+  branchAncestors,
   branchNameError,
+  branchRef,
+  deleteRemoteTagDetail,
+  deleteTagDetail,
   deleteBranchQuestion,
+  deleteRemoteTagQuestion,
+  deleteTagQuestion,
   dropRecoveryCommand,
   dropStashQuestion,
   deleteRemoteBranchQuestion,
   forceDeleteBranchQuestion,
   formatRelativeDate,
   groupBranches,
+  isBranchSelected,
+  isTagSelected,
   localNameFor,
   popStashQuestion,
   remoteDeleteRecovery,
+  remoteTagDeleteRecovery,
   splitRemoteBranch,
   stashLabel,
+  tagRef,
+  tagRestoreCommand,
   trackingSummary,
   type RemoteRef,
+  type RemoteTagRef,
 } from './labels';
+import { buildTagMenu, tagSummary } from './tagMenu';
+import { preferredRemote } from '../remote/remotes';
 
 /**
  * The delete question currently on screen.
@@ -94,6 +117,22 @@ interface RemoteDeletion {
   /** Full name as the panel shows it, for the sentences about it. */
   name: string;
   oid: string;
+  root: string;
+}
+
+/**
+ * The tag delete on screen, if any.
+ *
+ * It carries the object the row was drawn with, because that is the way back
+ * and it stops being usable once git collects it. `remote` is set when the
+ * delete is the one that reaches a server — a different question with a
+ * different blast radius, so it is a field rather than a second type only in
+ * the sense that everything else about the two is identical.
+ */
+interface TagDeletion {
+  tag: Tag;
+  /** The remote this goes to, or `null` for the local delete. */
+  remote: string | null;
   root: string;
 }
 
@@ -150,12 +189,14 @@ export function RefsView(): ReactNode {
   const store = useStore();
   const busy = useAppState(isBusy);
   const selectedOid = useAppState((state) => state.selection.commitOid);
+  const selectedRef = useAppState((state) => state.selection.ref);
   const root = useAppState((state) =>
     state.repo.state === 'ready' ? state.repo.value.root : null,
   );
 
   const [deletion, setDeletion] = useState<Deletion | null>(null);
   const [remoteDeletion, setRemoteDeletion] = useState<RemoteDeletion | null>(null);
+  const [tagDeletion, setTagDeletion] = useState<TagDeletion | null>(null);
   const [stashQuestion, setStashQuestion] = useState<StashQuestion | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
@@ -178,6 +219,7 @@ export function RefsView(): ReactNode {
   useEffect(() => {
     if (root === null) return;
     void refreshBranches(store);
+    void refreshTags(store);
     void refreshStashes(store);
   }, [store, root]);
 
@@ -192,6 +234,7 @@ export function RefsView(): ReactNode {
     setLastRoot(root);
     setDeletion(null);
     setStashQuestion(null);
+    setTagDeletion(null);
     setFailure(null);
     setOutcome(null);
   }
@@ -204,6 +247,8 @@ export function RefsView(): ReactNode {
     stashQuestion !== null && stashQuestion.root === root ? stashQuestion : null;
   const openRemoteDeletion =
     remoteDeletion !== null && remoteDeletion.root === root ? remoteDeletion : null;
+  const openTagDeletion =
+    tagDeletion !== null && tagDeletion.root === root ? tagDeletion : null;
   const shownFailure = failure !== null && failure.root === root ? failure : null;
   const shownOutcome = outcome !== null && outcome.root === root ? outcome : null;
 
@@ -380,6 +425,76 @@ export function RefsView(): ReactNode {
     });
   };
 
+  /**
+   * Deletes a tag, locally or on a remote, and says how to put it back.
+   *
+   * One function for both because they differ in exactly two things — the
+   * question and the command — and having two copies of the
+   * "did the repository change while the question was up?" guard is how one of
+   * them ends up missing it.
+   */
+  const runTagDelete = async (pending: TagDeletion): Promise<void> => {
+    if (running) return;
+    clearMessages();
+    const { tag, remote } = pending;
+    setTagDeletion(null);
+    if (!stillCurrent(pending.root)) {
+      reportHere(
+        `Nothing was deleted: the open repository changed after the question about "${tag.name}" was asked.`,
+        null,
+      );
+      return;
+    }
+
+    if (remote === null) {
+      const [ok, cause] = await perform(() =>
+        removeTag(store, tag.name, deleteTagQuestion(tag.name), tagRestoreCommand(tag)),
+      );
+      if (ok) {
+        // The object id is in the sentence, not only in the notice's undo hint:
+        // a tag has no reflog, so once both have gone the only route left is
+        // `git fsck --dangling`, and a notice lives ten seconds (ADR-0051).
+        setOutcome({
+          text: `Deleted tag "${tag.name}", which pointed at ${tag.object.slice(0, 12)}.`,
+          root: pending.root,
+        });
+        return;
+      }
+      setFailure({
+        text: `Tag "${tag.name}" was not deleted.`,
+        cause,
+        root: pending.root,
+      });
+      return;
+    }
+
+    const ref: RemoteTagRef = { remote, tag: tag.name };
+    const [outcome, cause] = await perform(() =>
+      removeRemoteTag(
+        store,
+        ref,
+        deleteRemoteTagQuestion(ref),
+        remoteTagDeleteRecovery(ref, tag.object),
+      ),
+    );
+    // `nothing-there` is not a failure and must not be reported as one — but
+    // it is certainly not "deleted" either. The action's own notice says which
+    // of the two happened; this line only stops the panel claiming the first.
+    if (outcome === 'nothing-there') return;
+    if (outcome === 'deleted') {
+      setOutcome({
+        text: `Deleted tag "${tag.name}" on ${remote}. It is still here, on ${tag.object.slice(0, 12)}.`,
+        root: pending.root,
+      });
+      return;
+    }
+    setFailure({
+      text: `Tag "${tag.name}" was not deleted. It may still be on ${remote}.`,
+      cause,
+      root: pending.root,
+    });
+  };
+
   const runStashAction = async (pending: StashQuestion): Promise<void> => {
     if (running) return;
     clearMessages();
@@ -439,7 +554,7 @@ export function RefsView(): ReactNode {
   const recoveryCommand = recovery === null ? null : dropRecoveryCommand(recovery.oid);
 
   return (
-    <section className={styles.panel} aria-label="Branches and stashes">
+    <section className={styles.panel} aria-label="Branches, tags and stashes">
       {/*
         The open question comes first, so a notice appearing or being dismissed
         underneath it cannot shift a destructive button under the pointer. Only
@@ -464,6 +579,16 @@ export function RefsView(): ReactNode {
           busy={locked}
           onCancel={() => setRemoteDeletion(null)}
           onConfirm={() => void runRemoteDelete(openRemoteDeletion)}
+        />
+      )}
+
+      {openTagDeletion !== null && (
+        <TagDeleteConfirmation
+          key={`${openTagDeletion.remote ?? 'local'}:${openTagDeletion.tag.name}`}
+          deletion={openTagDeletion}
+          busy={locked}
+          onCancel={() => setTagDeletion(null)}
+          onConfirm={() => void runTagDelete(openTagDeletion)}
         />
       )}
 
@@ -545,12 +670,15 @@ export function RefsView(): ReactNode {
         <BranchesSection
           busy={locked}
           selectedOid={selectedOid}
+          selectedRef={selectedRef}
           // Reading a branch is a selection, never a checkout: the diff panel
           // shows what the commit at its tip changed, and nothing on disk
-          // moves.
+          // moves. The branch's own ref path travels with it so the row that
+          // was clicked is the row that lights up, rather than every ref that
+          // happens to sit on that commit.
           onSelect={(branch) => {
             clearMessages();
-            void selectCommit(store, branch.oid);
+            void selectCommit(store, branch.oid, branchRef(branch));
           }}
           onSwitch={(name) => {
             clearMessages();
@@ -579,6 +707,24 @@ export function RefsView(): ReactNode {
             setStashQuestion(null);
             setDeletion(null);
             setRemoteDeletion({ ref, name: branch.name, oid: branch.oid, root });
+          }}
+        />
+
+        <TagsSection
+          busy={locked}
+          selectedOid={selectedOid}
+          selectedRef={selectedRef}
+          onSelect={(tag) => {
+            clearMessages();
+            void selectCommit(store, tag.oid, tagRef(tag));
+          }}
+          onAskDelete={(tag, remote) => {
+            if (root === null) return;
+            clearMessages();
+            setDeletion(null);
+            setRemoteDeletion(null);
+            setStashQuestion(null);
+            setTagDeletion({ tag, remote, root });
           }}
         />
 
@@ -669,6 +815,7 @@ function CollapsibleHeader({
 function BranchesSection({
   busy,
   selectedOid,
+  selectedRef,
   onSelect,
   onSwitch,
   onCreate,
@@ -677,6 +824,7 @@ function BranchesSection({
 }: {
   busy: boolean;
   selectedOid: string | null;
+  selectedRef: string | null;
   onSelect: (branch: Branch) => void;
   onSwitch: (name: string) => void;
   onCreate: CreateBranch;
@@ -684,20 +832,37 @@ function BranchesSection({
   onAskDeleteRemote: (branch: Branch) => void;
 }): ReactNode {
   const branches = useAppState((state) => state.branches);
+  const config = useAppState((state) => state.config);
   const [open, setOpen] = useState(true);
   const bodyId = useId();
+  /*
+    One setting for Local and Remote alike. `feat/x` and `origin/feat/x` are
+    the same naming habit seen from two sides, and a user who asks for a tree
+    is asking it of the panel, not of one of its halves.
+  */
+  const mode = config.branchList;
+  const setMode = (next: FileListMode): void => {
+    if (next !== mode) rememberConfig({ ...config, branchList: next });
+  };
 
   return (
     <section className={styles.section} aria-label="Branches">
-      <CollapsibleHeader
-        level="section"
-        title="Branches"
-        icon={<BranchIcon size={13} />}
-        count={branches.state === 'ready' ? branches.value.length : null}
-        open={open}
-        bodyId={bodyId}
-        onToggle={() => setOpen((was) => !was)}
-      />
+      {/* The switch sits beside the header rather than inside it: the header is
+          itself a button, and a button may not contain another one. */}
+      <div className={styles.sectionBar}>
+        <CollapsibleHeader
+          level="section"
+          title="Branches"
+          icon={<BranchIcon size={13} />}
+          count={branches.state === 'ready' ? branches.value.length : null}
+          open={open}
+          bodyId={bodyId}
+          onToggle={() => setOpen((was) => !was)}
+        />
+        {/* Gone with the section it redraws: a switch over a list nobody
+            can see is a setting changed blind. */}
+        {open && <ListModeToggle mode={mode} onMode={setMode} />}
+      </div>
 
       <div id={bodyId} hidden={!open}>
         <CreateBranchForm busy={busy} selectedOid={selectedOid} onCreate={onCreate} />
@@ -722,7 +887,9 @@ function BranchesSection({
           <BranchLists
             branches={branches.value}
             busy={busy}
+            mode={mode}
             selectedOid={selectedOid}
+            selectedRef={selectedRef}
             onSelect={onSelect}
             onSwitch={onSwitch}
             onCreate={onCreate}
@@ -735,10 +902,44 @@ function BranchesSection({
   );
 }
 
+/** The List / Tree switch, the same control the file lists carry. */
+function ListModeToggle({
+  mode,
+  onMode,
+}: {
+  mode: FileListMode;
+  onMode: (mode: FileListMode) => void;
+}): ReactNode {
+  return (
+    <div className={styles.modeToggle} role="group" aria-label="Branch list layout">
+      <button
+        type="button"
+        className={styles.modeButton}
+        aria-pressed={mode === 'flat'}
+        title="Show each branch with its full name"
+        onClick={() => onMode('flat')}
+      >
+        List
+      </button>
+      <button
+        type="button"
+        className={styles.modeButton}
+        aria-pressed={mode === 'tree'}
+        title="Group branches by the parts of their names before each slash"
+        onClick={() => onMode('tree')}
+      >
+        Tree
+      </button>
+    </div>
+  );
+}
+
 function BranchLists({
   branches,
   busy,
+  mode,
   selectedOid,
+  selectedRef,
   onSelect,
   onSwitch,
   onCreate,
@@ -747,7 +948,9 @@ function BranchLists({
 }: {
   branches: readonly Branch[];
   busy: boolean;
+  mode: FileListMode;
   selectedOid: string | null;
+  selectedRef: string | null;
   onSelect: (branch: Branch) => void;
   onSwitch: (name: string) => void;
   onCreate: CreateBranch;
@@ -755,106 +958,298 @@ function BranchLists({
   onAskDeleteRemote: (branch: Branch) => void;
 }): ReactNode {
   const { local, remote } = groupBranches(branches);
-  const [localOpen, setLocalOpen] = useState(true);
-  const [remoteOpen, setRemoteOpen] = useState(true);
-  const localId = useId();
-  const remoteId = useId();
+  /*
+    `selectedRef` is passed down as it is, and the oid fallback lives in
+    `isRefSelected` where it fires only for a selection that named no ref at
+    all. Filtering it to "a ref this list holds" was wrong in the one case the
+    whole design exists for: selecting the tag `v1.0` named a ref no branch
+    answers to, the list fell back to the oid, and every branch sitting on that
+    commit lit up — the question nobody asked. A ref that no longer exists
+    highlights nothing, which is the truth about it.
+  */
 
   return (
     <>
-      <section className={styles.subsection} aria-label="Local branches">
-        <CollapsibleHeader
-          level="subsection"
-          title="Local"
-          count={local.length}
-          open={localOpen}
-          bodyId={localId}
-          onToggle={() => setLocalOpen((was) => !was)}
-        />
-        <div id={localId} hidden={!localOpen}>
-          {local.length === 0 ? (
-            <p className={styles.empty}>No local branches yet.</p>
-          ) : (
-            <ul className={styles.list}>
-              {local.map((branch) => (
-                <li key={branch.name} className={styles.row}>
-                  <BranchButton
-                    branch={branch}
-                    busy={busy}
-                    selected={selectedOid === branch.oid}
-                    onSelect={onSelect}
-                  />
-                  <Divergence branch={branch} />
-                  {/* Checking out is the thing that moves files, so it is the
-                      thing that says so on its face, rather than something a
-                      click on a name does silently. */}
-                  <button
-                    type="button"
-                    className={styles.button}
-                    disabled={busy || branch.current}
-                    title={
-                      branch.current
-                        ? `${branch.name} is already checked out.`
-                        : `Check out ${branch.name}. This changes the files in your working tree.`
-                    }
-                    onClick={() => onSwitch(branch.name)}
-                  >
-                    Switch
-                  </button>
-                  <button
-                    type="button"
-                    className={`${styles.button} ${styles.danger}`}
-                    disabled={busy || branch.current}
-                    title={
-                      branch.current
-                        ? 'The checked-out branch cannot be deleted. Switch away first.'
-                        : `Delete ${branch.name}`
-                    }
-                    onClick={() => onAskDelete(branch.name)}
-                  >
-                    Delete
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </section>
+      <BranchSubsection
+        title="Local"
+        label="Local branches"
+        empty="No local branches yet."
+        branches={local}
+        mode={mode}
+        selectedRef={selectedRef}
+        renderRow={(branch, label, tree) => (
+          <LocalRow
+            key={branch.name}
+            branch={branch}
+            label={label}
+            tree={tree}
+            busy={busy}
+            named={selectedRef === branchRef(branch)}
+            selected={isBranchSelected(branch, selectedRef, selectedOid)}
+            onSelect={onSelect}
+            onSwitch={onSwitch}
+            onAskDelete={onAskDelete}
+          />
+        )}
+      />
 
-      <section className={styles.subsection} aria-label="Remote branches">
-        <CollapsibleHeader
-          level="subsection"
-          title="Remote"
-          icon={<RepoIcon size={12} />}
-          count={remote.length}
-          open={remoteOpen}
-          bodyId={remoteId}
-          onToggle={() => setRemoteOpen((was) => !was)}
-        />
-        <div id={remoteId} hidden={!remoteOpen}>
-          {remote.length === 0 ? (
-            <p className={styles.empty}>No remote-tracking branches.</p>
-          ) : (
-            <ul className={styles.list}>
-              {remote.map((branch) => (
-                <RemoteRow
-                  key={branch.name}
-                  branch={branch}
-                  busy={busy}
-                  onCreate={onCreate}
-                  onAskDelete={onAskDeleteRemote}
-                />
-              ))}
-            </ul>
-          )}
-        </div>
-      </section>
+      <BranchSubsection
+        title="Remote"
+        label="Remote branches"
+        icon={<RepoIcon size={12} />}
+        empty="No remote-tracking branches."
+        branches={remote}
+        mode={mode}
+        selectedRef={selectedRef}
+        renderRow={(branch, label, tree) => (
+          <RemoteRow
+            key={branch.name}
+            branch={branch}
+            label={label}
+            tree={tree}
+            busy={busy}
+            named={selectedRef === branchRef(branch)}
+            selected={isBranchSelected(branch, selectedRef, selectedOid)}
+            onSelect={onSelect}
+            onCreate={onCreate}
+            onAskDelete={onAskDeleteRemote}
+          />
+        )}
+      />
     </>
   );
 }
 
 /**
- * A local branch row's name, which *selects* rather than checks out.
+ * One half of the branch list — Local or Remote — drawn flat or as a tree.
+ *
+ * Both halves behave the same way, so they are one component: what differs is
+ * the heading and what a row offers to do, and the second is a prop. The tree
+ * is the builder the working-tree and diff file lists already use, over the
+ * slashes in a branch name instead of the slashes in a path. A remote name
+ * carries its remote as its first segment, which is how `origin` becomes a row
+ * of its own without anything here knowing what a remote is.
+ */
+function BranchSubsection({
+  title,
+  label,
+  icon,
+  empty,
+  branches,
+  mode,
+  selectedRef,
+  renderRow,
+}: {
+  title: string;
+  label: string;
+  icon?: ReactNode;
+  empty: string;
+  branches: readonly Branch[];
+  mode: FileListMode;
+  selectedRef: string | null;
+  renderRow: (branch: Branch, label: string, tree: boolean) => ReactNode;
+}): ReactNode {
+  const [open, setOpen] = useState(true);
+  const [folded, setFolded] = useState<ReadonlySet<string>>(() => new Set());
+  const bodyId = useId();
+  const tree = useMemo(
+    () => (mode === 'tree' ? buildPathTree(branches, (branch) => branch.name) : []),
+    [mode, branches],
+  );
+  const holdsSelection =
+    selectedRef !== null && branches.some((branch) => branchRef(branch) === selectedRef);
+
+  /*
+    A selection made somewhere else — a chip clicked in the history — has to
+    end up visible here, or the row it highlights is drawn inside a section
+    that is shut. Only what stands between that row and the eye is opened:
+    groups folded away elsewhere in the list stay folded, and so does this
+    section once the user closes it again over the same selection.
+
+    Adjusted during render rather than in an effect, the way this panel already
+    reacts to the open repository changing: an effect would let one paint
+    happen with the highlight drawn where nobody can see it.
+  */
+  const named = holdsSelection ? selectedRef : null;
+  const [lastNamed, setLastNamed] = useState(named);
+  if (named !== lastNamed) {
+    setLastNamed(named);
+    if (named !== null) {
+      setOpen(true);
+      setFolded((was) => {
+        const shut = branchAncestors(shortRefName(named)).filter((path) => was.has(path));
+        if (shut.length === 0) return was;
+        const next = new Set(was);
+        for (const path of shut) next.delete(path);
+        return next;
+      });
+    }
+  }
+
+  const toggleDir = (path: string): void => {
+    setFolded((was) => {
+      const next = new Set(was);
+      if (!next.delete(path)) next.add(path);
+      return next;
+    });
+  };
+
+  return (
+    <section className={styles.subsection} aria-label={label}>
+      <CollapsibleHeader
+        level="subsection"
+        title={title}
+        icon={icon}
+        count={branches.length}
+        open={open}
+        bodyId={bodyId}
+        onToggle={() => setOpen((was) => !was)}
+      />
+      <div id={bodyId} hidden={!open}>
+        {branches.length === 0 ? (
+          <p className={styles.empty}>{empty}</p>
+        ) : mode === 'tree' ? (
+          <ul className={styles.list} role="tree" aria-label={`${label} tree`}>
+            {tree.map((node) => (
+              <BranchTreeRow
+                key={node.kind === 'dir' ? `dir:${node.path}` : node.path}
+                node={node}
+                folded={folded}
+                onToggle={toggleDir}
+                renderRow={renderRow}
+              />
+            ))}
+          </ul>
+        ) : (
+          <ul className={styles.list}>
+            {branches.map((branch) => renderRow(branch, branch.name, false))}
+          </ul>
+        )}
+      </div>
+    </section>
+  );
+}
+
+/** A name segment and everything under it, or one branch row. */
+function BranchTreeRow({
+  node,
+  folded,
+  onToggle,
+  renderRow,
+}: {
+  node: PathNode<Branch>;
+  folded: ReadonlySet<string>;
+  onToggle: (path: string) => void;
+  renderRow: (branch: Branch, label: string, tree: boolean) => ReactNode;
+}): ReactNode {
+  if (node.kind === 'file') return renderRow(node.item, node.name, true);
+
+  const open = !folded.has(node.path);
+  return (
+    <li role="treeitem" aria-expanded={open} aria-selected={false}>
+      <button
+        type="button"
+        className={styles.treeDir}
+        aria-expanded={open}
+        title={node.path}
+        onClick={() => onToggle(node.path)}
+      >
+        <span className={styles.treeChevron} aria-hidden="true">
+          ▾
+        </span>
+        <span className={styles.treeDirName}>{node.name}</span>
+      </button>
+      {open && (
+        <ul className={styles.treeChildren} role="group">
+          {node.children.map((child) => (
+            <BranchTreeRow
+              key={child.kind === 'dir' ? `dir:${child.path}` : child.path}
+              node={child}
+              folded={folded}
+              onToggle={onToggle}
+              renderRow={renderRow}
+            />
+          ))}
+        </ul>
+      )}
+    </li>
+  );
+}
+
+/** A local branch: read it, check it out, or delete it. */
+function LocalRow({
+  branch,
+  label,
+  tree,
+  busy,
+  named,
+  selected,
+  onSelect,
+  onSwitch,
+  onAskDelete,
+}: {
+  branch: Branch;
+  label: string;
+  /** Drawn inside the tree, where the row is an item of it. */
+  tree: boolean;
+  busy: boolean;
+  /** The row the selection named, as opposed to one merely on its commit. */
+  named: boolean;
+  selected: boolean;
+  onSelect: (branch: Branch) => void;
+  onSwitch: (name: string) => void;
+  onAskDelete: (name: string) => void;
+}): ReactNode {
+  return (
+    <li
+      className={styles.row}
+      role={tree ? 'treeitem' : undefined}
+      aria-selected={tree ? selected : undefined}
+    >
+      <BranchButton
+        branch={branch}
+        label={label}
+        busy={busy}
+        named={named}
+        selected={selected}
+        onSelect={onSelect}
+      />
+      <Divergence branch={branch} />
+      {/* Checking out is the thing that moves files, so it is the thing that
+          says so on its face, rather than something a click on a name does
+          silently. */}
+      <button
+        type="button"
+        className={styles.button}
+        disabled={busy || branch.current}
+        title={
+          branch.current
+            ? `${branch.name} is already checked out.`
+            : `Check out ${branch.name}. This changes the files in your working tree.`
+        }
+        onClick={() => onSwitch(branch.name)}
+      >
+        Switch
+      </button>
+      <button
+        type="button"
+        className={`${styles.button} ${styles.danger}`}
+        disabled={busy || branch.current}
+        title={
+          branch.current
+            ? 'The checked-out branch cannot be deleted. Switch away first.'
+            : `Delete ${branch.name}`
+        }
+        onClick={() => onAskDelete(branch.name)}
+      >
+        Delete
+      </button>
+    </li>
+  );
+}
+
+/**
+ * A branch row's name, which *selects* rather than checks out.
  *
  * Clicking it used to run `git switch`. In a repository with a lot of
  * uncommitted work that is the most expensive thing the app can do by
@@ -865,20 +1260,52 @@ function BranchLists({
  * So a click answers "what is on this branch?" — it selects the commit the
  * branch points at, and the diff panel shows what that commit changed.
  * Checking out is still one click away, on its own button that says so.
+ *
+ * Remote-tracking rows use it too: reading `origin/main` is the same question
+ * as reading `main`, and a row that cannot be selected is a row a chip in the
+ * history has no way to point at.
  */
 function BranchButton({
   branch,
+  label,
   busy,
+  named,
   selected,
   onSelect,
 }: {
   branch: Branch;
+  /** What the row prints — the last segment only, in the tree. */
+  label: string;
   busy: boolean;
+  /** The row the selection named, as opposed to one merely on its commit. */
+  named: boolean;
   selected: boolean;
   onSelect: (branch: Branch) => void;
 }): ReactNode {
+  const ref = useRef<HTMLButtonElement>(null);
+
+  /*
+    A selection can arrive from the history, where the user clicked a chip and
+    never touched this panel. The row it names is routinely below the fold of a
+    sidebar holding fifty branches, so a highlight alone would be drawn where
+    nobody can see it. `nearest` scrolls the least that gets it on screen, and
+    only this panel scrolls: the row is not focused, so nothing is taken from
+    wherever the user was typing.
+
+    Only the row the selection *named* does this. In the oid fallback several
+    rows are marked at once — a branch and its remote-tracking twin — and an
+    ordinary click on a commit row in the history would otherwise drag the
+    sidebar to whichever of them rendered, which nobody asked it to do.
+  */
+  useEffect(() => {
+    // Not in jsdom, and not worth a polyfill: the highlight is what the tests
+    // are about, and the scroll is what a browser adds to it.
+    if (named) ref.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [named]);
+
   return (
     <button
+      ref={ref}
       type="button"
       className={`${styles.name} ${branch.current ? styles.current : ''} ${
         selected ? styles.nameSelected : ''
@@ -886,19 +1313,30 @@ function BranchButton({
       disabled={busy}
       aria-current={branch.current ? 'true' : undefined}
       aria-pressed={selected}
-      title={`Show the commit ${branch.name} points at. ${trackingSummary(branch)}`}
+      // A remote-tracking row's tooltip carries the whole name because the row
+      // usually cannot: what tells two remote branches apart is the tail
+      // (`origin/chore/…`), and `trackingSummary` on one of them is always the
+      // useless "No upstream branch".
+      title={
+        branch.remote
+          ? `${branch.name} — show the commit it points at`
+          : `Show the commit ${branch.name} points at. ${trackingSummary(branch)}`
+      }
       onClick={() => onSelect(branch)}
     >
       <span aria-hidden="true" className={styles.marker}>
         {branch.current ? '●' : '○'}
       </span>
-      {/* Clipped at the front for the reason the remote rows are: a bare text
-          node cannot be ellipsised at all, and `feature/…` prefixes are what
-          long local names share. */}
+      {/* Clipped at the front: a bare text node cannot be ellipsised at all,
+          and `feature/…` prefixes are what long names share. */}
       <span className={`${styles.nameText} ${styles.nameTail}`}>
-        <bdi>{branch.name}</bdi>
+        <bdi>{label}</bdi>
       </span>
       {branch.current && <span className={styles.srOnly}> (current branch)</span>}
+      {/* In the tree the row prints one segment, so the name a screen reader
+          hears — and a test looks a row up by — would otherwise be the segment
+          alone, which several branches share. */}
+      {label !== branch.name && <span className={styles.srOnly}> in {branch.name}</span>}
     </button>
   );
 }
@@ -910,12 +1348,24 @@ function BranchButton({
  */
 function RemoteRow({
   branch,
+  label,
+  tree,
   busy,
+  named,
+  selected,
+  onSelect,
   onCreate,
   onAskDelete,
 }: {
   branch: Branch;
+  label: string;
+  /** Drawn inside the tree, where the row is an item of it. */
+  tree: boolean;
   busy: boolean;
+  /** The row the selection named, as opposed to one merely on its commit. */
+  named: boolean;
+  selected: boolean;
+  onSelect: (branch: Branch) => void;
   onCreate: CreateBranch;
   onAskDelete: (branch: Branch) => void;
 }): ReactNode {
@@ -941,22 +1391,19 @@ function RemoteRow({
   };
 
   return (
-    <li className={styles.row}>
-      {/*
-        The tooltip carries the whole name because the row usually cannot: what
-        tells two remote branches apart is the tail (`origin/chore/…`), so the
-        text is clipped at the *front* and the full name is one hover away.
-        `trackingSummary` alone used to be the tooltip, which on a
-        remote-tracking branch is always the useless "No upstream branch".
-      */}
-      <span className={styles.name} title={`${branch.name} — ${trackingSummary(branch)}`}>
-        <span aria-hidden="true" className={styles.marker}>
-          ○
-        </span>
-        <span className={`${styles.nameText} ${styles.nameTail}`}>
-          <bdi>{branch.name}</bdi>
-        </span>
-      </span>
+    <li
+      className={styles.row}
+      role={tree ? 'treeitem' : undefined}
+      aria-selected={tree ? selected : undefined}
+    >
+      <BranchButton
+        branch={branch}
+        label={label}
+        busy={busy}
+        named={named}
+        selected={selected}
+        onSelect={onSelect}
+      />
       <Divergence branch={branch} />
       {local === null ? (
         <span className={styles.hint}>No local name can be derived</span>
@@ -1280,6 +1727,292 @@ function DeleteConfirmation({
 // --- stashes ----------------------------------------------------------------
 
 /** The stash whose context menu is open, and where the pointer opened it. */
+interface TagMenuTarget {
+  tag: Tag;
+  x: number;
+  y: number;
+}
+
+/**
+ * The tag list.
+ *
+ * Its own section rather than a third branch list: a tag is not somewhere work
+ * happens, and the two things a user does with one — read what it points at,
+ * and get rid of it — are not the two things they do with a branch. There is no
+ * Switch, because checking out a tag detaches HEAD and that is the commit
+ * menu's question to ask.
+ *
+ * Deleting is a visible button for the reason the branch rows have one: it is
+ * the thing this list exists to make possible, and hunting for it in a menu is
+ * how a user concludes the app cannot do it. Everything else — pushing, the
+ * delete that reaches a server, copying — is on the row's context menu, built
+ * by {@link buildTagMenu} so the offers are decided in a tested function
+ * rather than in the markup.
+ */
+function TagsSection({
+  busy,
+  selectedOid,
+  selectedRef,
+  onSelect,
+  onAskDelete,
+}: {
+  busy: boolean;
+  selectedOid: string | null;
+  selectedRef: string | null;
+  onSelect: (tag: Tag) => void;
+  onAskDelete: (tag: Tag, remote: string | null) => void;
+}): ReactNode {
+  const store = useStore();
+  const tags = useAppState((state) => state.tags);
+  const remotes = useAppState((state) => state.remotes);
+  const [open, setOpen] = useState(true);
+  const [menu, setMenu] = useState<TagMenuTarget | null>(null);
+  const bodyId = useId();
+  const root = useAppState((state) =>
+    state.repo.state === 'ready' ? state.repo.value.root : null,
+  );
+
+  // A menu left open across a repository change would push a name from the old
+  // one into the new one. Adjusted during render, the way this panel drops its
+  // questions when the root changes.
+  const [lastRoot, setLastRoot] = useState(root);
+  if (root !== lastRoot) {
+    setLastRoot(root);
+    setMenu(null);
+  }
+
+  // Where a push would go: `origin` when there is one, else the first remote
+  // — the same rule the commit menu follows, so the two cannot name different
+  // remotes for the same act. The menu says which one it picked in the item's
+  // own label rather than choosing silently.
+  const remote = preferredRemote(remotes);
+
+  const sectionsFor = (tag: Tag): MenuSection[] =>
+    buildTagMenu(tag, { busy, remote }).map((section) =>
+      section.map((menuItem) => {
+        const action = menuItem.action;
+        return {
+          id: menuItem.id,
+          label: menuItem.label,
+          disabled: menuItem.disabled,
+          ...(action === undefined
+            ? {}
+            : {
+                onSelect: (): void => {
+                  // No delete acts from here: both open the question this
+                  // panel already asks, and the reason the user agrees to is
+                  // what the git layer validates.
+                  if (action.kind === 'show') onSelect(tag);
+                  else if (action.kind === 'push')
+                    void pushTagTo(store, action.remote, tag.name);
+                  else if (action.kind === 'delete') onAskDelete(tag, null);
+                  else if (action.kind === 'delete-remote')
+                    onAskDelete(tag, action.remote);
+                  else if (action.kind === 'copy') void copyText(action.text);
+                },
+              }),
+        };
+      }),
+    );
+
+  return (
+    <section className={styles.section} aria-label="Tags">
+      <CollapsibleHeader
+        level="section"
+        title="Tags"
+        icon={<TagIcon size={13} />}
+        count={tags.state === 'ready' ? tags.value.length : null}
+        open={open}
+        bodyId={bodyId}
+        onToggle={() => setOpen((was) => !was)}
+      />
+
+      <div id={bodyId} hidden={!open}>
+        {tags.state === 'idle' && (
+          <Notice title="No repository open">Open a repository to see its tags.</Notice>
+        )}
+        {tags.state === 'loading' && (
+          <Notice title="Loading tags…" live>
+            Reading refs from git.
+          </Notice>
+        )}
+        {tags.state === 'error' && (
+          <Notice title="Could not read the tags" tone="error">
+            {tags.message}
+            {tags.kind !== undefined ? ` (${tags.kind})` : ''}
+          </Notice>
+        )}
+        {tags.state === 'ready' &&
+          (tags.value.length === 0 ? (
+            <p className={styles.empty}>No tags.</p>
+          ) : (
+            <ul className={styles.list}>
+              {tags.value.map((tag) => (
+                <TagRow
+                  key={tag.name}
+                  tag={tag}
+                  busy={busy}
+                  named={selectedRef === tagRef(tag)}
+                  selected={isTagSelected(tag, selectedRef, selectedOid)}
+                  onSelect={onSelect}
+                  onAskDelete={onAskDelete}
+                  onMenu={(x, y) => setMenu({ tag, x, y })}
+                />
+              ))}
+            </ul>
+          ))}
+      </div>
+
+      {menu !== null && (
+        <ContextMenu
+          sections={sectionsFor(menu.tag)}
+          x={menu.x}
+          y={menu.y}
+          label={`Actions for tag ${menu.tag.name}`}
+          onClose={() => setMenu(null)}
+        />
+      )}
+    </section>
+  );
+}
+
+/** One tag: read the commit it names, or delete the name. */
+function TagRow({
+  tag,
+  busy,
+  named,
+  selected,
+  onSelect,
+  onAskDelete,
+  onMenu,
+}: {
+  tag: Tag;
+  busy: boolean;
+  /** The row the selection named, as opposed to one merely on its commit. */
+  named: boolean;
+  selected: boolean;
+  onSelect: (tag: Tag) => void;
+  onAskDelete: (tag: Tag, remote: string | null) => void;
+  onMenu: (x: number, y: number) => void;
+}): ReactNode {
+  const ref = useRef<HTMLButtonElement>(null);
+
+  // Same rule as a branch row: a selection arriving from a chip in the history
+  // has to be visible, and only the row that was *named* moves the list.
+  useEffect(() => {
+    if (named) ref.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [named]);
+
+  return (
+    <li className={styles.row}>
+      <button
+        ref={ref}
+        type="button"
+        className={`${styles.name} ${selected ? styles.nameSelected : ''}`}
+        disabled={busy}
+        aria-pressed={selected}
+        title={`${tagSummary(tag)}\n\nShow the commit it points at. Right-click for push, delete and copy.`}
+        onClick={() => onSelect(tag)}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          onMenu(event.clientX, event.clientY);
+        }}
+      >
+        {/* Filled for an annotated tag, hollow for a lightweight one — the same
+            language the branch rows use for "this is the one you are on". */}
+        <span aria-hidden="true" className={`${styles.marker} ${styles.tagMarker}`}>
+          {tag.annotated ? '◆' : '◇'}
+        </span>
+        <span className={`${styles.nameText} ${styles.nameTail}`}>
+          <bdi>{tag.name}</bdi>
+        </span>
+      </button>
+      <button
+        type="button"
+        className={`${styles.button} ${styles.danger}`}
+        disabled={busy}
+        // Named for a screen reader, fixed-width on screen, for the reason the
+        // branch rows' buttons are: the name is what the row exists to show.
+        aria-label={`Delete tag ${tag.name}`}
+        title={`Delete tag ${tag.name}. It stays on any remote it was pushed to.`}
+        onClick={() => onAskDelete(tag, null)}
+      >
+        Delete
+      </button>
+    </li>
+  );
+}
+
+/**
+ * The tag-delete question, for both the local delete and the remote one.
+ *
+ * One stage and no arming checkbox, like the remote branch delete: there is
+ * nothing to escalate to, because git does not refuse either of these the way
+ * it refuses an unmerged branch. What stands in the way instead is the sentence
+ * saying what goes, and Cancel holding the focus, so a stray Enter deletes
+ * nothing.
+ */
+function TagDeleteConfirmation({
+  deletion,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  deletion: TagDeletion;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}): ReactNode {
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const { tag, remote } = deletion;
+
+  useEffect(() => {
+    cancelRef.current?.focus();
+  }, []);
+
+  return (
+    <div
+      className={styles.confirm}
+      role="alertdialog"
+      aria-modal="true"
+      aria-label={remote === null ? 'Confirm tag delete' : 'Confirm remote tag delete'}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') onCancel();
+        trapTab(event);
+      }}
+    >
+      <strong className={styles.noticeTitle}>
+        {remote === null
+          ? deleteTagQuestion(tag.name)
+          : deleteRemoteTagQuestion({ remote, tag: tag.name })}
+      </strong>
+      <p className={styles.noticeText}>
+        {remote === null
+          ? deleteTagDetail(tagRestoreCommand(tag))
+          : deleteRemoteTagDetail(remote)}
+      </p>
+      <div className={styles.confirmActions}>
+        <button
+          type="button"
+          className={styles.button}
+          ref={cancelRef}
+          onClick={onCancel}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          className={`${styles.button} ${styles.danger}`}
+          disabled={busy}
+          onClick={onConfirm}
+        >
+          {remote === null ? 'Delete Tag' : `Delete on ${remote}`}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 interface StashMenuTarget {
   entry: StashEntry;
   x: number;

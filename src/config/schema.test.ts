@@ -420,6 +420,16 @@ describe('layout — history columns and the diff file list', () => {
   });
 });
 
+describe('branchList', () => {
+  it('is a flat list unless the file says tree', () => {
+    expect(defaultConfig().branchList).toBe('flat');
+    expect(parseConfig('{"branchList":"tree"}').branchList).toBe('tree');
+    expect(parseConfig('{"branchList":"flat"}').branchList).toBe('flat');
+    expect(parseConfig('{"branchList":"nested"}').branchList).toBe('flat');
+    expect(parseConfig('{"branchList":7}').branchList).toBe('flat');
+  });
+});
+
 describe('diffFileList', () => {
   it('is a flat list unless the file says tree', () => {
     expect(defaultConfig().diffFileList).toBe('flat');

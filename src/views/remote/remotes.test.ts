@@ -18,6 +18,7 @@ import {
   readUpstream,
   summarize,
   type Gate,
+  preferredRemote,
 } from './remotes';
 
 function status(overrides: Partial<RepoStatus> = {}): Loadable<RepoStatus> {
@@ -194,6 +195,34 @@ describe('summarize', () => {
     expect(summarize(status({ detached: true, branch: null })).headline).toBe(
       'Detached HEAD',
     );
+  });
+});
+
+describe('preferredRemote', () => {
+  const remote = (name: string) => ({
+    name,
+    fetchUrl: `https://x/${name}`,
+    pushUrl: `https://x/${name}`,
+  });
+
+  it('picks origin when there is one', () => {
+    expect(
+      preferredRemote({ state: 'ready', value: [remote('upstream'), remote('origin')] }),
+    ).toBe('origin');
+  });
+
+  it('picks the first alphabetically when there is not', () => {
+    // Stable rather than "whatever git listed first": two menus offer acts on
+    // the same tag, and they must not name different remotes for it.
+    expect(
+      preferredRemote({ state: 'ready', value: [remote('zeta'), remote('alpha')] }),
+    ).toBe('alpha');
+  });
+
+  it('has nothing to offer before the remotes are read, or when there are none', () => {
+    expect(preferredRemote({ state: 'idle' })).toBeNull();
+    expect(preferredRemote({ state: 'loading' })).toBeNull();
+    expect(preferredRemote({ state: 'ready', value: [] })).toBeNull();
   });
 });
 
