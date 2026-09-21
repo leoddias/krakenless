@@ -492,8 +492,8 @@ describe('branch list', () => {
     // panel and touches nothing in the repository.
     const stashRows = new Set(within(region('Stashes')).getAllByRole('button'));
     const layout = new Set(
-      within(screen.getByRole('group', { name: 'Branch list layout' })).getAllByRole(
-        'button',
+      ['Branch list layout', 'Tag list layout'].flatMap((name) =>
+        within(screen.getByRole('group', { name })).getAllByRole('button'),
       ),
     );
     const actions = screen
@@ -1403,7 +1403,7 @@ describe('the branch tree', () => {
       openRepo(prepared);
       prepared.dispatch({ type: 'branches/loaded', branches });
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Tree' }));
+    fireEvent.click(within(region('Branches')).getByRole('button', { name: 'Tree' }));
     return store;
   }
 
@@ -1412,11 +1412,12 @@ describe('the branch tree', () => {
 
     expect(within(region('Local branches')).getByRole('tree')).toBeInTheDocument();
     expect(store.getState().config.branchList).toBe('tree');
-    expect(screen.getByRole('button', { name: 'Tree' })).toHaveAttribute(
+    const switches = within(region('Branches'));
+    expect(switches.getByRole('button', { name: 'Tree' })).toHaveAttribute(
       'aria-pressed',
       'true',
     );
-    expect(screen.getByRole('button', { name: 'List' })).toHaveAttribute(
+    expect(switches.getByRole('button', { name: 'List' })).toHaveAttribute(
       'aria-pressed',
       'false',
     );
@@ -1427,7 +1428,7 @@ describe('the branch tree', () => {
 
     await click(screen.getByRole('button', { name: 'Branches, 4' }));
 
-    expect(screen.queryByRole('button', { name: 'Tree' })).toBeNull();
+    expect(within(region('Branches')).queryByRole('button', { name: 'Tree' })).toBeNull();
   });
 
   it('groups the names by their slashes, printing one segment per row', () => {
@@ -1580,18 +1581,35 @@ describe('the tag list', () => {
     });
   }
 
+  /**
+   * A tag's row, found by the tag's whole name.
+   *
+   * Grouped, a row prints the segment below its group and keeps the full name
+   * for a screen reader (`2.0 in v2.0`); flat, it prints the name itself. The
+   * helper accepts either, so a test says which tag it means and not how the
+   * list happens to be drawn.
+   */
   function tagRow(name: string): HTMLElement {
-    return within(region('Tags')).getByRole('button', { name });
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return within(region('Tags')).getByRole('button', {
+      // No space before `in`: the accessible name runs the row's text and its
+      // screen-reader suffix together as `2.0in v2.0`.
+      name: new RegExp(`(^|in )${escaped}$`),
+    });
   }
 
   it('lists the tags in a section of their own, in the order git gave them', () => {
     renderTags();
+    // git sorts by version, newest first, and the panel keeps that order —
+    // inside the group these two now share as well as outside it.
     const names = within(region('Tags'))
-      .getAllByRole('button')
-      .map((button) => button.textContent)
-      .filter((text) => text !== null && text.includes('v'));
-    expect(names[0]).toContain('v2.0');
-    expect(names[1]).toContain('v1.0');
+      .getAllByRole('treeitem')
+      // A group is a treeitem too, and its text is every row under it; only
+      // the leaves are being ordered here.
+      .filter((row) => !row.hasAttribute('aria-expanded'))
+      .map((row) => row.textContent ?? '');
+    expect(names[0]).toContain('2.0');
+    expect(names[1]).toContain('1.0');
   });
 
   it('says how many there are, and says so when there are none', () => {
@@ -1750,5 +1768,188 @@ describe('the tag list', () => {
     expect(within(region('Tags')).getByRole('alert')).toHaveTextContent(
       'Could not read the tags',
     );
+  });
+});
+
+describe('folding the tag list', () => {
+  afterEach(resetStoreRegistry);
+
+  function tags(...names: string[]): Tag[] {
+    return names.map((name) => ({
+      name,
+      oid: 'a'.repeat(40),
+      object: 'a'.repeat(40),
+      annotated: false,
+      date: '2026-09-19T10:00:00Z',
+      subject: '',
+    }));
+  }
+
+  const RELEASES = tags('release-1.0.4', 'release-1.0.3', 'v2.0.0', 'v1.9.0', 'nightly');
+
+  function renderTags(list: Tag[] = RELEASES): Store {
+    return renderRefs((store) => {
+      registerStore(store);
+      openRepo(store);
+      store.dispatch({ type: 'tags/loaded', tags: list });
+    });
+  }
+
+  function inTags() {
+    return within(region('Tags'));
+  }
+
+  function group(name: string): HTMLElement {
+    return inTags().getByRole('button', { name });
+  }
+
+  function rowNames(): string[] {
+    return inTags()
+      .getAllByRole('treeitem')
+      .filter((row) => !row.hasAttribute('aria-expanded'))
+      .map((row) => row.textContent ?? '');
+  }
+
+  it('groups the tags by the prefix they share, hyphen included', () => {
+    renderTags();
+
+    // The half of every row that says nothing is said once, on the group.
+    expect(group('release')).toBeInTheDocument();
+    expect(group('v')).toBeInTheDocument();
+    expect(inTags().getByRole('button', { name: /^nightly$/ })).toBeInTheDocument();
+    expect(rowNames().some((text) => text.includes('1.0.4'))).toBe(true);
+  });
+
+  it('folds one group and leaves the others alone', async () => {
+    renderTags();
+
+    await click(group('release'));
+
+    expect(rowNames().some((text) => text.includes('1.0.4'))).toBe(false);
+    expect(rowNames().some((text) => text.includes('2.0.0'))).toBe(true);
+  });
+
+  it('folds every group at once when Shift is held', async () => {
+    // The shortcut the list exists for: ten years of `release-…` tags are not
+    // folded one at a time.
+    renderTags();
+
+    await act(async () => {
+      fireEvent.click(group('release'), { shiftKey: true });
+    });
+
+    expect(group('release')).toHaveAttribute('aria-expanded', 'false');
+    expect(group('v')).toHaveAttribute('aria-expanded', 'false');
+    // A tag in no group has nothing to fold it away, and stays a row.
+    expect(rowNames()).toEqual(['◇nightlyDelete']);
+  });
+
+  it('opens every group at once from a folded one', async () => {
+    renderTags();
+    await act(async () => {
+      fireEvent.click(group('release'), { shiftKey: true });
+    });
+
+    await act(async () => {
+      fireEvent.click(group('v'), { shiftKey: true });
+    });
+
+    expect(group('release')).toHaveAttribute('aria-expanded', 'true');
+    expect(rowNames().some((text) => text.includes('1.0.4'))).toBe(true);
+  });
+
+  it('folds the groups with the section when Shift is held on its header', async () => {
+    renderTags();
+    const header = screen.getByRole('button', { name: 'Tags, 5' });
+    expect(header).toHaveAttribute(
+      'title',
+      expect.stringContaining('Hold Shift to do the same to every group'),
+    );
+
+    await act(async () => {
+      fireEvent.click(header, { shiftKey: true });
+    });
+    // Reopened plainly: the section is back, and its groups stayed folded.
+    await click(screen.getByRole('button', { name: 'Tags, 5' }));
+
+    expect(rowNames()).toEqual(['◇nightlyDelete']);
+    expect(group('release')).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('leaves a plain click on the header alone', async () => {
+    // Shift is the shortcut; without it the header does what it always did.
+    renderTags();
+    await click(screen.getByRole('button', { name: 'Tags, 5' }));
+    await click(screen.getByRole('button', { name: 'Tags, 5' }));
+
+    expect(rowNames().some((text) => text.includes('1.0.4'))).toBe(true);
+  });
+
+  it('can be switched back to plain names, and remembers that', async () => {
+    const store = renderTags();
+
+    await click(inTags().getByRole('button', { name: 'List' }));
+
+    expect(inTags().queryByRole('tree')).toBeNull();
+    expect(inTags().getByRole('button', { name: /^release-1\.0\.4$/ })).toBeTruthy();
+    expect(store.getState().config.tagList).toBe('flat');
+  });
+});
+
+describe('folding the branch tree', () => {
+  afterEach(resetStoreRegistry);
+
+  const NESTED: Branch[] = [
+    branch({ name: 'main', current: true }),
+    branch({ name: 'feat/ui', oid: 'f'.repeat(40) }),
+    branch({ name: 'feat/parser', oid: 'e'.repeat(40) }),
+    branch({ name: 'fix/crash', oid: 'd'.repeat(40) }),
+    branch({ name: 'fix/leak', oid: 'c'.repeat(40) }),
+  ];
+
+  function inTree(): Store {
+    const store = renderRefs((prepared) => {
+      registerStore(prepared);
+      openRepo(prepared);
+      prepared.dispatch({ type: 'branches/loaded', branches: NESTED });
+    });
+    fireEvent.click(within(region('Branches')).getByRole('button', { name: 'Tree' }));
+    return store;
+  }
+
+  it('folds every group in the list when Shift is held', async () => {
+    inTree();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'feat' }), { shiftKey: true });
+    });
+
+    expect(screen.getByRole('button', { name: 'feat' })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+    expect(screen.getByRole('button', { name: 'fix' })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+    // `main` has no group to hide it, so it is still a row.
+    expect(
+      screen.getByRole('button', { name: /main\s*\(current branch\)/ }),
+    ).toBeInTheDocument();
+  });
+
+  it('does not reach the other half of the panel', async () => {
+    // "Everything" means this list. Local and Remote are two sections, and a
+    // shortcut that folded both would be one the user cannot aim.
+    inTree();
+    const local = within(region('Local branches'));
+
+    await act(async () => {
+      fireEvent.click(local.getByRole('button', { name: 'feat' }), { shiftKey: true });
+    });
+
+    expect(
+      within(region('Remote branches')).getByRole('button', { name: 'Remote, 0' }),
+    ).toHaveAttribute('aria-expanded', 'true');
   });
 });

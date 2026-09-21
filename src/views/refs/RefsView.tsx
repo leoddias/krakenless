@@ -47,7 +47,7 @@ import {
   StashIcon,
   TagIcon,
 } from '../shell/icons';
-import { buildPathTree, type PathNode } from '../shell/pathTree';
+import { buildPathTree, directoryPaths, type PathNode } from '../shell/pathTree';
 import { shortRefName } from '../shell/refName';
 import { trapTab } from '../shell/trapTab';
 import { rememberConfig } from '../shell/useLayout';
@@ -83,6 +83,7 @@ import {
   type RemoteTagRef,
 } from './labels';
 import { buildTagMenu, tagSummary } from './tagMenu';
+import { buildTagTree, tagGroupKeys, type TagNode } from './tagTree';
 import { preferredRemote } from '../remote/remotes';
 
 /**
@@ -768,6 +769,7 @@ function CollapsibleHeader({
   open,
   bodyId,
   onToggle,
+  hasGroups = false,
 }: {
   level: 'section' | 'subsection';
   title: string;
@@ -775,7 +777,13 @@ function CollapsibleHeader({
   count: number | null;
   open: boolean;
   bodyId: string;
-  onToggle: () => void;
+  /**
+   * `everything` is true when Shift was held: the caller applies what this
+   * header is about to do to every group inside it as well.
+   */
+  onToggle: (everything: boolean) => void;
+  /** True when this header has groups under it that Shift could reach. */
+  hasGroups?: boolean;
 }): ReactNode {
   const Heading = level === 'section' ? 'h2' : 'h3';
   const isSection = level === 'section';
@@ -790,8 +798,12 @@ function CollapsibleHeader({
         aria-label={count === null ? title : `${title}, ${String(count)}`}
         aria-expanded={open}
         aria-controls={bodyId}
-        title={open ? `Collapse ${title}` : `Expand ${title}`}
-        onClick={onToggle}
+        title={
+          hasGroups
+            ? `${open ? 'Collapse' : 'Expand'} ${title}. Hold Shift to do the same to every group inside it.`
+            : `${open ? 'Collapse' : 'Expand'} ${title}`
+        }
+        onClick={(event) => onToggle(event.shiftKey)}
       >
         <span className={styles.chevron} aria-hidden="true">
           {open ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
@@ -906,17 +918,24 @@ function BranchesSection({
 function ListModeToggle({
   mode,
   onMode,
+  label = 'Branch list layout',
+  flatTitle = 'Show each branch with its full name',
+  treeTitle = 'Group branches by the parts of their names before each slash',
 }: {
   mode: FileListMode;
   onMode: (mode: FileListMode) => void;
+  /** What this switch is about, for a screen reader: two lists carry one. */
+  label?: string;
+  flatTitle?: string;
+  treeTitle?: string;
 }): ReactNode {
   return (
-    <div className={styles.modeToggle} role="group" aria-label="Branch list layout">
+    <div className={styles.modeToggle} role="group" aria-label={label}>
       <button
         type="button"
         className={styles.modeButton}
         aria-pressed={mode === 'flat'}
-        title="Show each branch with its full name"
+        title={flatTitle}
         onClick={() => onMode('flat')}
       >
         List
@@ -925,7 +944,7 @@ function ListModeToggle({
         type="button"
         className={styles.modeButton}
         aria-pressed={mode === 'tree'}
-        title="Group branches by the parts of their names before each slash"
+        title={treeTitle}
         onClick={() => onMode('tree')}
       >
         Tree
@@ -1086,12 +1105,31 @@ function BranchSubsection({
     }
   }
 
-  const toggleDir = (path: string): void => {
+  /*
+    Folding, one group or all of them.
+
+    Shift means "do this to the whole list": a repository with forty `feat/`
+    branches is one where folding them one at a time is the work the tree was
+    supposed to save. The direction comes from the group that was clicked — an
+    open one collapses everything, a closed one opens everything — so the row
+    under the pointer always ends up in the state its own chevron promised.
+  */
+  const toggleDir = (path: string, everything: boolean): void => {
     setFolded((was) => {
-      const next = new Set(was);
-      if (!next.delete(path)) next.add(path);
-      return next;
+      if (!everything) {
+        const next = new Set(was);
+        if (!next.delete(path)) next.add(path);
+        return next;
+      }
+      return was.has(path) ? new Set() : new Set(directoryPaths(tree));
     });
+  };
+
+  /** Shift on the header applies what it is about to do to the groups too. */
+  const toggleSection = (everything: boolean): void => {
+    const opening = !open;
+    setOpen(opening);
+    if (everything) setFolded(opening ? new Set() : new Set(directoryPaths(tree)));
   };
 
   return (
@@ -1103,7 +1141,8 @@ function BranchSubsection({
         count={branches.length}
         open={open}
         bodyId={bodyId}
-        onToggle={() => setOpen((was) => !was)}
+        hasGroups={mode === 'tree' && tree.some((node) => node.kind === 'dir')}
+        onToggle={toggleSection}
       />
       <div id={bodyId} hidden={!open}>
         {branches.length === 0 ? (
@@ -1139,7 +1178,7 @@ function BranchTreeRow({
 }: {
   node: PathNode<Branch>;
   folded: ReadonlySet<string>;
-  onToggle: (path: string) => void;
+  onToggle: (path: string, everything: boolean) => void;
   renderRow: (branch: Branch, label: string, tree: boolean) => ReactNode;
 }): ReactNode {
   if (node.kind === 'file') return renderRow(node.item, node.name, true);
@@ -1151,8 +1190,8 @@ function BranchTreeRow({
         type="button"
         className={styles.treeDir}
         aria-expanded={open}
-        title={node.path}
-        onClick={() => onToggle(node.path)}
+        title={`${node.path} — hold Shift to ${open ? 'collapse' : 'expand'} every group in this list`}
+        onClick={(event) => onToggle(node.path, event.shiftKey)}
       >
         <span className={styles.treeChevron} aria-hidden="true">
           ▾
@@ -1727,6 +1766,9 @@ function DeleteConfirmation({
 // --- stashes ----------------------------------------------------------------
 
 /** The stash whose context menu is open, and where the pointer opened it. */
+/** One array, so `useMemo` sees the same list while the tags are unread. */
+const EMPTY_TAGS: readonly Tag[] = [];
+
 interface TagMenuTarget {
   tag: Tag;
   x: number;
@@ -1767,10 +1809,21 @@ function TagsSection({
   const remotes = useAppState((state) => state.remotes);
   const [open, setOpen] = useState(true);
   const [menu, setMenu] = useState<TagMenuTarget | null>(null);
+  const [folded, setFolded] = useState<ReadonlySet<string>>(() => new Set());
   const bodyId = useId();
+  const config = useAppState((state) => state.config);
   const root = useAppState((state) =>
     state.repo.state === 'ready' ? state.repo.value.root : null,
   );
+
+  const mode = config.tagList;
+  const setMode = (next: FileListMode): void => {
+    if (next !== mode) rememberConfig({ ...config, tagList: next });
+  };
+
+  const list = tags.state === 'ready' ? tags.value : EMPTY_TAGS;
+  const tree = useMemo(() => (mode === 'tree' ? buildTagTree(list) : []), [mode, list]);
+  const groups = useMemo(() => tagGroupKeys(tree), [tree]);
 
   // A menu left open across a repository change would push a name from the old
   // one into the new one. Adjusted during render, the way this panel drops its
@@ -1786,6 +1839,49 @@ function TagsSection({
   // remotes for the same act. The menu says which one it picked in the item's
   // own label rather than choosing silently.
   const remote = preferredRemote(remotes);
+
+  /*
+    Folding, one group or all of them.
+
+    Shift means "do this to the whole list", which is the point of the shortcut
+    on a list of releases: a repository with ten years of `release-…` tags is
+    one where folding them one at a time is the work the grouping was supposed
+    to save. The direction comes from the group under the pointer — an open one
+    collapses everything, a closed one opens everything — so that row always
+    ends up in the state its own chevron promised.
+  */
+  const toggleGroup = (key: string, everything: boolean): void => {
+    setFolded((was) => {
+      if (!everything) {
+        const next = new Set(was);
+        if (!next.delete(key)) next.add(key);
+        return next;
+      }
+      return was.has(key) ? new Set() : new Set(groups);
+    });
+  };
+
+  /** Shift on the header applies what it is about to do to the groups too. */
+  const toggleSection = (everything: boolean): void => {
+    const opening = !open;
+    setOpen(opening);
+    if (everything) setFolded(opening ? new Set() : new Set(groups));
+  };
+
+  const rowFor = (tag: Tag, label: string, inTree: boolean): ReactNode => (
+    <TagRow
+      key={tag.name}
+      tag={tag}
+      label={label}
+      tree={inTree}
+      busy={busy}
+      named={selectedRef === tagRef(tag)}
+      selected={isTagSelected(tag, selectedRef, selectedOid)}
+      onSelect={onSelect}
+      onAskDelete={onAskDelete}
+      onMenu={(x, y) => setMenu({ tag, x, y })}
+    />
+  );
 
   const sectionsFor = (tag: Tag): MenuSection[] =>
     buildTagMenu(tag, { busy, remote }).map((section) =>
@@ -1817,15 +1913,27 @@ function TagsSection({
 
   return (
     <section className={styles.section} aria-label="Tags">
-      <CollapsibleHeader
-        level="section"
-        title="Tags"
-        icon={<TagIcon size={13} />}
-        count={tags.state === 'ready' ? tags.value.length : null}
-        open={open}
-        bodyId={bodyId}
-        onToggle={() => setOpen((was) => !was)}
-      />
+      <div className={styles.sectionBar}>
+        <CollapsibleHeader
+          level="section"
+          title="Tags"
+          icon={<TagIcon size={13} />}
+          count={tags.state === 'ready' ? tags.value.length : null}
+          open={open}
+          bodyId={bodyId}
+          hasGroups={groups.length > 0}
+          onToggle={toggleSection}
+        />
+        {open && (
+          <ListModeToggle
+            mode={mode}
+            onMode={setMode}
+            label="Tag list layout"
+            flatTitle="Show each tag with its full name"
+            treeTitle="Group tags by the prefix they share"
+          />
+        )}
+      </div>
 
       <div id={bodyId} hidden={!open}>
         {tags.state === 'idle' && (
@@ -1845,20 +1953,21 @@ function TagsSection({
         {tags.state === 'ready' &&
           (tags.value.length === 0 ? (
             <p className={styles.empty}>No tags.</p>
-          ) : (
-            <ul className={styles.list}>
-              {tags.value.map((tag) => (
-                <TagRow
-                  key={tag.name}
-                  tag={tag}
-                  busy={busy}
-                  named={selectedRef === tagRef(tag)}
-                  selected={isTagSelected(tag, selectedRef, selectedOid)}
-                  onSelect={onSelect}
-                  onAskDelete={onAskDelete}
-                  onMenu={(x, y) => setMenu({ tag, x, y })}
+          ) : mode === 'tree' ? (
+            <ul className={styles.list} role="tree" aria-label="Tags tree">
+              {tree.map((node) => (
+                <TagTreeRow
+                  key={node.kind === 'group' ? `group:${node.key}` : node.tag.name}
+                  node={node}
+                  folded={folded}
+                  onToggle={toggleGroup}
+                  renderRow={rowFor}
                 />
               ))}
+            </ul>
+          ) : (
+            <ul className={styles.list}>
+              {tags.value.map((tag) => rowFor(tag, tag.name, false))}
             </ul>
           ))}
       </div>
@@ -1876,9 +1985,57 @@ function TagsSection({
   );
 }
 
+/** A shared prefix and everything under it, or one tag row. */
+function TagTreeRow({
+  node,
+  folded,
+  onToggle,
+  renderRow,
+}: {
+  node: TagNode;
+  folded: ReadonlySet<string>;
+  onToggle: (key: string, everything: boolean) => void;
+  renderRow: (tag: Tag, label: string, tree: boolean) => ReactNode;
+}): ReactNode {
+  if (node.kind === 'tag') return renderRow(node.tag, node.label, true);
+
+  const open = !folded.has(node.key);
+  return (
+    <li role="treeitem" aria-expanded={open} aria-selected={false}>
+      <button
+        type="button"
+        className={styles.treeDir}
+        aria-expanded={open}
+        title={`${node.key.replace(/\//g, ' → ')} — hold Shift to ${open ? 'collapse' : 'expand'} every group in this list`}
+        onClick={(event) => onToggle(node.key, event.shiftKey)}
+      >
+        <span className={styles.treeChevron} aria-hidden="true">
+          ▾
+        </span>
+        <span className={styles.treeDirName}>{node.name}</span>
+      </button>
+      {open && (
+        <ul className={styles.treeChildren} role="group">
+          {node.children.map((child) => (
+            <TagTreeRow
+              key={child.kind === 'group' ? `group:${child.key}` : child.tag.name}
+              node={child}
+              folded={folded}
+              onToggle={onToggle}
+              renderRow={renderRow}
+            />
+          ))}
+        </ul>
+      )}
+    </li>
+  );
+}
+
 /** One tag: read the commit it names, or delete the name. */
 function TagRow({
   tag,
+  label,
+  tree,
   busy,
   named,
   selected,
@@ -1887,6 +2044,10 @@ function TagRow({
   onMenu,
 }: {
   tag: Tag;
+  /** What the row prints — the segment below its group, in the tree. */
+  label: string;
+  /** Drawn inside the tree, where the row is an item of it. */
+  tree: boolean;
   busy: boolean;
   /** The row the selection named, as opposed to one merely on its commit. */
   named: boolean;
@@ -1904,7 +2065,11 @@ function TagRow({
   }, [named]);
 
   return (
-    <li className={styles.row}>
+    <li
+      className={styles.row}
+      role={tree ? 'treeitem' : undefined}
+      aria-selected={tree ? selected : undefined}
+    >
       <button
         ref={ref}
         type="button"
@@ -1924,8 +2089,12 @@ function TagRow({
           {tag.annotated ? '◆' : '◇'}
         </span>
         <span className={`${styles.nameText} ${styles.nameTail}`}>
-          <bdi>{tag.name}</bdi>
+          <bdi>{label}</bdi>
         </span>
+        {/* In the tree a row prints one segment, so the name a screen reader
+            hears — and a test looks a row up by — would otherwise be a segment
+            several tags share. */}
+        {label !== tag.name && <span className={styles.srOnly}> in {tag.name}</span>}
       </button>
       <button
         type="button"

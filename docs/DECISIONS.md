@@ -1821,3 +1821,38 @@ chips still do not: HEAD is where the checkout is, not a ref anybody selects,
 and it is folded into the branch chip beside it anyway. The branch tree strips
 the namespace before folding (`shortNameOf`), so `refs/heads/feat/ui` still
 lives under `feat`.
+
+## ADR-0059 — Tags group by the prefix they share, and Shift folds the whole list
+
+**Decision:** The tag list is drawn as groups of the prefix its names share,
+built by `views/refs/tagTree.ts`: a name is cut at `/`, `-`, `_` and where
+letters run into digits, a group is made only where **two or more** tags share
+that first segment, and a tag with no company keeps its whole name on its row.
+It is the one list in the app that defaults to grouped (`tagList: 'tree'`), with
+the same List / Tree switch the others carry. Holding **Shift** while clicking a
+group, or a section header, applies what that click does to every group in the
+same section — collapsing an open one folds them all, expanding a folded one
+opens them all. The branch tree answers Shift the same way.
+
+**Why:** "Precisamos de ter collapse/uncollapse para facilitar a gestão das
+tags, segurar shift faz este trabalho como forma de atalho." A repository with
+ten years of releases is a sidebar of `release-1.0.4`, `release-1.0.3`,
+`release-1.0.2` — the half of every row that identifies it is the half the
+column clips, and folding a hundred groups one at a time is the work the
+grouping was supposed to save.
+
+`pathTree` was not reused: it cuts on `/` alone, and the tags people actually
+have are separated by a hyphen or by nothing at all (`v2.0.0`). Grouping by any
+separator was chosen over grouping by longest common prefix, which would have
+made `release-1.0` and `release-1.1` share a group called `release-1.` — a name
+that is not a name.
+
+**Consequences:** The "two or more" rule is what keeps the tree honest: a group
+of one indents a name without shortening it and hides it behind a fold for
+nothing, so `hotfix-1` beside a pile of `release-…` stays a row reading
+`hotfix-1`. Tags with no seam at all (`nightly`) are rows too, which means
+Shift-folding everything leaves them on screen — they are in no group, so there
+is nothing to fold them into. Shift stops at the section it was used in: Local,
+Remote and Tags are three lists, and a shortcut that folded all of them at once
+is one nobody can aim. The outer Branches header keeps its plain toggle; its two
+halves have their own.

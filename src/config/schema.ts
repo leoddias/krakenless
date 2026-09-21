@@ -119,6 +119,15 @@ export interface AppConfig {
    * is asking it of the panel rather than of one of its halves.
    */
   branchList: FileListMode;
+  /**
+   * Flat names or shared-prefix groups in the tag list.
+   *
+   * Its own setting rather than `branchList`'s, and the one that defaults to
+   * `tree`: a branch list is read to find the branch you are working on, while
+   * a tag list is read to manage a decade of releases, where the prefix every
+   * row shares is the half worth folding away.
+   */
+  tagList: FileListMode;
 }
 
 /** What Settings offers for {@link AppConfig.historyLimit}. */
@@ -234,6 +243,7 @@ export function defaultConfig(): AppConfig {
     diffFileList: 'flat',
     changesFileList: 'flat',
     branchList: 'flat',
+    tagList: 'tree',
   };
 }
 
@@ -344,8 +354,17 @@ function asLayout(value: unknown): LayoutConfig {
 }
 
 /** `flat` unless the file says `tree`; anything else is the default. */
-function asFileListMode(value: unknown): FileListMode {
-  return value === 'tree' ? 'tree' : 'flat';
+/**
+ * A list mode from the file, falling back to what the panel defaults to.
+ *
+ * The fallback is a parameter because the two answers are not the same: a file
+ * list starts flat, a tag list starts grouped, and a missing key must land on
+ * its own panel's default rather than on a shared one.
+ */
+function asFileListMode(value: unknown, fallback: FileListMode = 'flat'): FileListMode {
+  if (value === 'tree') return 'tree';
+  if (value === 'flat') return 'flat';
+  return fallback;
 }
 
 /**
@@ -440,6 +459,7 @@ export function parseConfig(text: string | null): AppConfig {
     diffFileList: asFileListMode(raw['diffFileList']),
     changesFileList: asFileListMode(raw['changesFileList']),
     branchList: asFileListMode(raw['branchList']),
+    tagList: asFileListMode(raw['tagList'], 'tree'),
   };
 }
 

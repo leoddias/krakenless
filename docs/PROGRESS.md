@@ -9,6 +9,13 @@
 - **Phase:** v0.1 feature-complete. Every buildable item in `docs/ROADMAP.md`
   M0–M5 is checked off; the only open item is the dogfood gate, which is two
   weeks of use, not code.
+- **The tag list groups by the prefix it shares, and Shift folds the lot**
+  (2026-09-20, ADR-0059): `release-1.0.4` sits under `release`, `v2.0.0` under
+  `v`, cut at `/`, `-`, `_` and at the seam between letters and digits — and
+  only where two or more tags share that segment, so a lone `hotfix-1` keeps
+  its whole name. The one list that defaults to grouped. Shift+click on a
+  group or a section header does what that click does to every group in the
+  same section; the branch tree answers Shift the same way.
 - **A pasted-into-a-shell recovery line is only offered for a name a shell
   reads as a name** (2026-09-19, ADR-0058). Covers the branch recovery too.
 - **Tags are listed, and can be deleted** (2026-09-19, ADR-0056): a third
@@ -282,6 +289,35 @@
   until `buildPushCommand` emits a `<local>:<upstream>` refspec.
 
 ## Session log
+
+### 2026-09-20 — tags fold by what their names share, Shift does the lot
+
+"Precisamos de ter collapse/uncollapse para facilitar a gestão das tags,
+segurar shift faz este trabalho como forma de atalho." Asked what to group by,
+since the tags in the screenshot are `release-1.0.4` — hyphens, which the
+branch tree's `/` rule would not touch — and the answer was: cut at any
+separator, and Shift acts on the clicked section.
+
+`views/refs/tagTree.ts` is its own builder and not `pathTree`: it cuts at `/`,
+`-`, `_` and where letters run into digits, and it makes a group only where two
+or more tags share the segment, because a group of one indents a name without
+shortening it. What is left of a name keeps its own separators, so `1.0-rc1`
+reads as itself under `release`.
+
+Shift is one rule in two places (`toggleGroup`, `toggleSection`): the direction
+comes from the row under the pointer, so it always ends up in the state its own
+chevron promised, and it stops at the section it was used in. The branch tree
+got the same treatment — it had the same problem with forty `feat/` branches.
+
+Tags are the one list that starts grouped (`tagList`, default `tree`);
+`asFileListMode` now takes the panel's own default so a missing key cannot land
+on somebody else's.
+
+`npm test` 2491 passing (113 files); oxlint at its 11 pre-existing warnings,
+prettier clean. **Not used by hand in the running app.** One flake seen once in
+`RefsView.test.tsx` ("checks out only from the Switch button") and not
+reproduced in four further runs, full suite and file alone — noted rather than
+explained.
 
 ### 2026-09-19 (later) — tags get a list, a delete, and a way back
 

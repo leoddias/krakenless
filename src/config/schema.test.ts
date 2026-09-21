@@ -430,6 +430,24 @@ describe('branchList', () => {
   });
 });
 
+describe('tagList', () => {
+  it('is grouped unless the file says otherwise', () => {
+    // The one list that starts grouped: a tag list is read to manage a decade
+    // of releases, and the prefix every row shares is the half worth folding.
+    expect(defaultConfig().tagList).toBe('tree');
+    expect(parseConfig('{"tagList":"flat"}').tagList).toBe('flat');
+    expect(parseConfig('{"tagList":"tree"}').tagList).toBe('tree');
+    expect(parseConfig('{"tagList":"grouped"}').tagList).toBe('tree');
+    expect(parseConfig('{}').tagList).toBe('tree');
+  });
+
+  it('leaves the branch and file lists flat, which is their own default', () => {
+    expect(parseConfig('{}').branchList).toBe('flat');
+    expect(parseConfig('{}').changesFileList).toBe('flat');
+    expect(parseConfig('{}').diffFileList).toBe('flat');
+  });
+});
+
 describe('diffFileList', () => {
   it('is a flat list unless the file says tree', () => {
     expect(defaultConfig().diffFileList).toBe('flat');
