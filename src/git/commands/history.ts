@@ -82,6 +82,27 @@ export function buildMergeCommand(rev: string): GitCommand {
 }
 
 /**
+ * Moves the current branch forward to `rev`, and only forward.
+ *
+ * `--ff-only` is what makes this safe on a gesture: git refuses outright when
+ * the branch has commits `rev` does not, so no merge commit is ever written
+ * and nothing is rewritten. The one thing it does is what a `pull --ff-only`
+ * does after the fetch — the catch-up for a local branch that fell behind its
+ * remote-tracking one.
+ */
+export function buildFastForwardCommand(rev: string): GitCommand {
+  return {
+    // `--no-autostash` pins the behaviour against a `merge.autoStash` config:
+    // over uncommitted work git refuses, it does not stash-and-pop behind a
+    // double click and leave the pop's conflicts for the user to discover.
+    args: ['merge', '--ff-only', '--no-autostash', assertRevision(rev)],
+    // A fast-forward checks out every file that changed in between; a long
+    // stretch behind is not sub-second work.
+    timeoutMs: 120_000,
+  };
+}
+
+/**
  * Replays the current branch onto `onto`.
  *
  * Rewrites history — every replayed commit gets a new oid — so it is

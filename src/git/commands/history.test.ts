@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildCherryPickCommand,
+  buildFastForwardCommand,
   buildMergeCommand,
   buildRebaseCommand,
   buildResetCommand,
@@ -131,6 +132,27 @@ describe('buildResetCommand', () => {
 
   it('rejects a revision that would read as an option', () => {
     expect(() => buildResetCommand('--hard', 'soft')).toThrow(GitError);
+  });
+});
+
+describe('buildFastForwardCommand', () => {
+  it('merges forward only, so git refuses when a merge commit would be needed', () => {
+    expect(buildFastForwardCommand('origin/main').args).toEqual([
+      'merge',
+      '--ff-only',
+      '--no-autostash',
+      'origin/main',
+    ]);
+  });
+
+  it('does not need a confirmation: it moves a ref forward and writes nothing', () => {
+    const command = buildFastForwardCommand('origin/main');
+    expect(command.destructive).toBeUndefined();
+    expect(isDestructive(command.args)).toBe(false);
+  });
+
+  it('refuses a revision that reads as a flag', () => {
+    expect(() => buildFastForwardCommand('--hard')).toThrow(GitError);
   });
 });
 

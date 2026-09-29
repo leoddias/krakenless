@@ -21,7 +21,7 @@ import {
   type UIEvent,
 } from 'react';
 import type { Commit, CommitRef, RefKind, StashEntry } from '../../git/types';
-import { selectCommit, switchTo } from '../../state/actions';
+import { selectCommit, switchTo, switchToRemote } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
 import { isBusy, type Loadable } from '../../state/store';
 import { formatAbsoluteDate, formatRelativeDate } from './relativeTime';
@@ -52,6 +52,7 @@ import {
   worktreeName,
 } from './worktreeRows';
 import { refPath } from '../shell/refName';
+import { remoteSwitchFor } from './remoteSwitch';
 import type { WorktreeSummary } from '../../git/worktrees';
 import { requestOpenRepository } from '../../state/openRequests';
 import {
@@ -965,9 +966,20 @@ function CommitRow({
   const atHead = isHeadRow(commit.refs);
   const store = useStore();
   const busy = useAppState(isBusy);
+  const branches = useAppState((state) => state.branches);
   // What a double click on the row switches to: a local branch drawn on it,
-  // never the bare commit (ADR-0061). A stash row has no branch to offer.
+  // never the bare commit (ADR-0061). A stash row has no branch to offer. A
+  // row with only a remote-tracking branch goes to the local branch that
+  // stands for it, moved forward to here (ADR-0062).
   const switchesTo = stash === undefined ? rowSwitchesTo(commit.refs) : null;
+  const remoteSwitch =
+    stash !== undefined || switchesTo !== null
+      ? null
+      : remoteSwitchFor(
+          commit.refs,
+          commit.oid,
+          branches.state === 'ready' ? branches.value : null,
+        );
   return (
     <RowButton
       index={index}
@@ -979,16 +991,23 @@ function CommitRow({
       onContextMenu={onContextMenu}
       dragOid={commit.oid}
       dropHere={dropHere}
-      {...(switchesTo === null
-        ? {}
-        : {
+      {...(switchesTo !== null
+        ? {
             onDoubleClick: () => {
               if (busy) return;
               // `switchTo` goes through `git switch`, so a dirty working tree is
               // a refusal from git rather than an overwrite.
               void switchTo(store, switchesTo);
             },
-          })}
+          }
+        : remoteSwitch !== null
+          ? {
+              onDoubleClick: () => {
+                if (busy) return;
+                void switchToRemote(store, remoteSwitch);
+              },
+            }
+          : {})}
       label={
         // Dimming is only visible; a listener hears which rows matched.
         search !== '' && dimmed !== true

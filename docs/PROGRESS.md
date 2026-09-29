@@ -10,12 +10,15 @@
   M0–M5 is checked off; the only open item is the dogfood gate, which is two
   weeks of use, not code.
 - **A row can be dragged onto another, and a double click switches branch**
-  (2026-09-29, ADR-0061): dropping a commit row (or a branch chip) on any other
-  commit row opens that row's context menu at the drop point, so the gesture
-  ends in the same question a right-click asks. Double-clicking a row switches
-  to the local branch drawn on it — never a bare commit, never a remote-only
-  row — via `rowSwitchesTo` in `views/history/headRef.ts`. Not used by hand in
-  the running app.
+  (2026-09-29, ADR-0061, ADR-0062): dropping a commit row (or a branch chip) on
+  any other commit row opens that row's context menu at the drop point, so the
+  gesture ends in the same question a right-click asks. Double-clicking a row
+  switches to the local branch drawn on it — never a bare commit — via
+  `rowSwitchesTo` in `views/history/headRef.ts`. A row with only `origin/x`
+  goes to the local branch that tracks it (or shares its name), switched to and
+  fast-forwarded with `merge --ff-only`; with no such branch one is created
+  from it (`views/history/remoteSwitch.ts`, `switchToRemote`). Not used by hand
+  in the running app.
 - **Ctrl+F finds commits by their message** (2026-09-29, ADR-0060): a find bar
   floats over the History list and matches subject and body, ignoring case,
   across the *loaded* commits only (`historyLimit`). Typing selects the first
@@ -217,10 +220,12 @@
 ## Next up (in order)
 
 1. **Drag a row onto another and double-click a row in the running app**
-   (ADR-0061): check that the menu opens where the pointer let go, that the
-   outline follows the row under the drag in WebView2, that the button row
-   actually starts a drag without a click getting in the way, and that a chip
-   drop on the checkout still asks to merge.
+   (ADR-0061, ADR-0062): check that the menu opens where the pointer let go,
+   that the outline follows the row under the drag in WebView2, that the button
+   row actually starts a drag without a click getting in the way, and that a
+   chip drop on the checkout still asks to merge. Then the reported case: on a
+   stale `main`, double-click the `origin/main` row and confirm `main` moves
+   forward; on a diverged branch confirm the error notice and no merge commit.
 2. **Press Ctrl+F in the running app** (ADR-0060): search a keyword, walk the
    matches with Enter / Shift+Enter, check that the bar doesn't cover a match
    and that typing isn't slowed by the diff each move triggers. Try it from the
@@ -310,6 +315,27 @@
   until `buildPushCommand` emits a `<local>:<upstream>` refspec.
 
 ## Session log
+
+### 2026-09-29 (later still) — the remote-only row answers the double click
+
+Bug report right after ADR-0061 shipped: on a stale `main`, double-clicking
+the `origin/main` row did nothing, "neste cenario deveriamos conseguir". The
+rule only knew local chips. ADR-0062 adds the remote-only row: the local branch
+tracking it (else its namesake) is switched to and fast-forwarded to the
+remote; with neither, a local branch is created from it. `--ff-only` keeps it
+a gesture — forward or refuse, never a merge commit — and the refusal already
+classifies as `diverged` with the pull's sentence.
+
+New git surface, all with tests: `buildFastForwardCommand` (`merge --ff-only`),
+`fastForwardTo` (HEAD re-read, then the merge), `switchToRemote` (switch unless
+current, then forward; stops at the first refusal). Pure rule in
+`views/history/remoteSwitch.ts`. Safety review: no critical or major findings;
+three of its minors applied — full `refs/remotes/…` revision, `--no-autostash`,
+and a namesake tracking another remote is left alone. Left as is: the
+`diverged` notice still says "pull", which is slightly off on this path.
+
+`npm test` 2576 passing (115 files), `tsc` clean, oxlint at its 11
+pre-existing warnings. **Not used by hand in the running app.**
 
 ### 2026-09-29 (later) — a row dropped on a row asks, a double click switches
 

@@ -3,6 +3,7 @@ import {
   cherryPick,
   createTag,
   currentBranch,
+  fastForwardTo,
   mergeInto,
   rebaseOnto,
   resetTo,
@@ -256,4 +257,37 @@ describe('resetTo', () => {
       expect(invoke).not.toHaveBeenCalled();
     },
   );
+});
+
+describe('fastForwardTo', () => {
+  it('fast-forwards the branch it named, once HEAD is confirmed to be on it', async () => {
+    respond({ stdout: 'main\n' }, { stdout: 'Fast-forward\n' });
+    await expect(
+      fastForwardTo('C:/repo', 'main', 'origin/main'),
+    ).resolves.toBeUndefined();
+    expect(argsOf(0)).toEqual(['symbolic-ref', '--quiet', '--short', 'HEAD']);
+    expect(argsOf(1)).toEqual(['merge', '--ff-only', '--no-autostash', 'origin/main']);
+  });
+
+  it('refuses, and runs nothing, when HEAD is on another branch', async () => {
+    respond({ stdout: 'release\n' });
+    await expect(fastForwardTo('C:/repo', 'main', 'origin/main')).rejects.toThrow(
+      /now on "release"/,
+    );
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a branch that cannot be fast-forwarded as diverged, and writes nothing', async () => {
+    // Diverged: the local branch has commits the remote does not. `--ff-only`
+    // makes git stop here, which is the whole point of using it.
+    respond(
+      { stdout: 'main\n' },
+      { stderr: 'fatal: Not possible to fast-forward, aborting.\n', code: 128 },
+    );
+    // `classifyFailure` recognises the refusal and says what it means, as it
+    // does for the pull; the kind is what lets a caller offer the merge.
+    await expect(fastForwardTo('C:/repo', 'main', 'origin/main')).rejects.toMatchObject({
+      kind: 'diverged',
+    });
+  });
 });

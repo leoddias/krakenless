@@ -14,6 +14,7 @@
 import {
   buildCherryPickCommand,
   buildCurrentBranchCommand,
+  buildFastForwardCommand,
   buildMergeCommand,
   buildRebaseCommand,
   buildResetCommand,
@@ -122,6 +123,24 @@ export async function mergeInto(
     code: output.code,
     stderr: output.stderr,
   });
+}
+
+/**
+ * Moves `branch` forward to `rev`, and only forward.
+ *
+ * Same guard as {@link mergeInto}: git fast-forwards whatever is checked out
+ * *now*, so HEAD is re-read and the command is abandoned if it has moved off
+ * the branch the caller named. A branch that cannot be fast-forwarded — it has
+ * commits `rev` does not — is a refusal from git, thrown in git's own words,
+ * and nothing is written.
+ */
+export async function fastForwardTo(
+  repo: string,
+  branch: string,
+  rev: string,
+): Promise<void> {
+  await assertOnBranch(repo, branch);
+  await runGit(repo, buildFastForwardCommand(rev), SAFE);
 }
 
 /** git's own first line, which says what it refused and why. */

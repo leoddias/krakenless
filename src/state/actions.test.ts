@@ -10,6 +10,7 @@ import {
   removeStash,
   removeTag,
   switchTo,
+  switchToRemote,
   commitStaged,
   discard,
   forgetRepo,
@@ -53,6 +54,7 @@ const pullFn = vi.hoisted(() => vi.fn());
 const pushFn = vi.hoisted(() => vi.fn());
 const switchBranch = vi.hoisted(() => vi.fn());
 const switchNewBranch = vi.hoisted(() => vi.fn());
+const fastForwardTo = vi.hoisted(() => vi.fn());
 const deleteBranch = vi.hoisted(() => vi.fn());
 const deleteRemoteBranchFn = vi.hoisted(() => vi.fn());
 const applyStash = vi.hoisted(() => vi.fn());
@@ -63,6 +65,11 @@ vi.mock('../git/status', () => ({ getStatus }));
 vi.mock('../git/log', () => ({ readLog }));
 vi.mock('../git/diff', () => ({ getWorktreeDiff, getStagedDiff, getCommitDiff }));
 vi.mock('../config/store', () => ({ saveConfig }));
+vi.mock('../git/commits', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../git/commits')>()),
+  fastForwardTo,
+}));
+
 vi.mock('../git/refs', () => ({
   listBranches,
   listStashes,
@@ -555,6 +562,105 @@ describe('actions', () => {
     await expect(switchTo(store, 'topic')).resolves.toBe(false);
     expect(getStatus).toHaveBeenCalled();
     expect(store.getState().notice).toMatchObject({ tone: 'error' });
+  });
+
+  describe('switchToRemote', () => {
+    it('creates the local branch from the remote one, which records the upstream', async () => {
+      const store = createStore();
+      await openRepo(store, 'C:/repos/app');
+
+      await expect(
+        switchToRemote(store, { kind: 'create', name: 'main', remoteRef: 'origin/main' }),
+      ).resolves.toBe(true);
+
+      expect(switchNewBranch).toHaveBeenCalledWith(
+        'C:/repos/app',
+        'main',
+        'refs/remotes/origin/main',
+      );
+      expect(fastForwardTo).not.toHaveBeenCalled();
+    });
+
+    it('switches first, then fast-forwards, when the branch is not the checkout', async () => {
+      const store = createStore();
+      await openRepo(store, 'C:/repos/app');
+
+      await switchToRemote(store, {
+        kind: 'forward',
+        name: 'main',
+        remoteRef: 'origin/main',
+        current: false,
+      });
+
+      expect(switchBranch).toHaveBeenCalledWith('C:/repos/app', 'main');
+      expect(fastForwardTo).toHaveBeenCalledWith(
+        'C:/repos/app',
+        'main',
+        'refs/remotes/origin/main',
+      );
+      expect(switchBranch.mock.invocationCallOrder[0]).toBeLessThan(
+        fastForwardTo.mock.invocationCallOrder[0] ?? 0,
+      );
+    });
+
+    it('only fast-forwards when the branch is already checked out', async () => {
+      const store = createStore();
+      await openRepo(store, 'C:/repos/app');
+      switchBranch.mockClear();
+
+      await switchToRemote(store, {
+        kind: 'forward',
+        name: 'main',
+        remoteRef: 'origin/main',
+        current: true,
+      });
+
+      expect(switchBranch).not.toHaveBeenCalled();
+      expect(fastForwardTo).toHaveBeenCalledWith(
+        'C:/repos/app',
+        'main',
+        'refs/remotes/origin/main',
+      );
+    });
+
+    it('stops at a refused switch and never fast-forwards the wrong branch', async () => {
+      switchBranch.mockRejectedValue(new GitError('command-failed', 'local changes'));
+      const store = createStore();
+      await openRepo(store, 'C:/repos/app');
+
+      await expect(
+        switchToRemote(store, {
+          kind: 'forward',
+          name: 'main',
+          remoteRef: 'origin/main',
+          current: false,
+        }),
+      ).resolves.toBe(false);
+
+      expect(fastForwardTo).not.toHaveBeenCalled();
+      expect(store.getState().notice).toMatchObject({ tone: 'error' });
+    });
+
+    it('reports a branch that cannot be fast-forwarded in git\u2019s words', async () => {
+      fastForwardTo.mockRejectedValue(
+        new GitError('command-failed', 'Not possible to fast-forward, aborting.'),
+      );
+      const store = createStore();
+      await openRepo(store, 'C:/repos/app');
+
+      await expect(
+        switchToRemote(store, {
+          kind: 'forward',
+          name: 'main',
+          remoteRef: 'origin/main',
+          current: true,
+        }),
+      ).resolves.toBe(false);
+      expect(store.getState().notice).toMatchObject({
+        tone: 'error',
+        message: expect.stringContaining('Not possible to fast-forward'),
+      });
+    });
   });
 
   it('surfaces the unmerged warning instead of deleting', async () => {

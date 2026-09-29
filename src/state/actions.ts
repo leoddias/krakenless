@@ -37,6 +37,7 @@ import {
   rebaseOnto,
   resetTo,
   revertCommit,
+  fastForwardTo,
   type MergeOutcome,
   type RebaseOutcome,
   type ResetMode,
@@ -945,6 +946,42 @@ export async function switchTo(store: Store, name: string): Promise<boolean> {
   const root = currentRoot(store);
   if (root === null) return false;
   return operate(store, () => switchBranch(root, name));
+}
+
+/**
+ * What a double click on a row that carries only a remote-tracking branch
+ * asks for (ADR-0062). Decided by `views/history/remoteSwitch.ts`; run here.
+ */
+export type RemoteSwitch =
+  /** No local branch tracks it yet: create one from it, which records the upstream. */
+  | { kind: 'create'; name: string; remoteRef: string }
+  /**
+   * A local branch already tracks it (or shares its name): switch to it
+   * unless it is the checkout, then move it forward to the remote — only
+   * forward, so a branch with commits of its own is refused, never merged.
+   */
+  | { kind: 'forward'; name: string; remoteRef: string; current: boolean };
+
+export async function switchToRemote(
+  store: Store,
+  target: RemoteSwitch,
+): Promise<boolean> {
+  const root = currentRoot(store);
+  if (root === null) return false;
+  // The full ref, not the short name: a local branch that happens to be called
+  // `origin/main` would win the short name's resolution, and the branch moved
+  // forward would not be the one the chip showed.
+  const rev = `refs/remotes/${target.remoteRef}`;
+  if (target.kind === 'create') {
+    return operate(store, () => switchNewBranch(root, target.name, rev));
+  }
+  return operate(store, async () => {
+    // `git switch` refuses over uncommitted work that the switch would touch,
+    // and the fast-forward never runs when it does: the sequence stops at the
+    // first refusal, and the working tree is where the user left it.
+    if (!target.current) await switchBranch(root, target.name);
+    await fastForwardTo(root, target.name, rev);
+  });
 }
 
 export async function createAndSwitch(

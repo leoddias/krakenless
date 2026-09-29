@@ -1927,3 +1927,42 @@ target is outlined while a drag is over it (`data-drop-row`); the working-tree
 row and the row a drag started on are not targets. A drag still carries a
 plain-text payload (the branch name, or the sha for a row) so Firefox starts
 it and so it can be dropped into an editor.
+
+## ADR-0062 — A double click on a remote-only row goes to the local branch that stands for it, moved forward
+
+**Decision:** Amends ADR-0061 for the row whose only branch is a remote-tracking
+one (`origin/main` with no local chip beside it). A double click there runs,
+in this order of preference (`views/history/remoteSwitch.ts`): the local branch
+whose upstream is that remote branch; else the local branch sharing its short
+name; else a new local branch created from it with `git switch --create <name>
+<remote>`, which records the upstream. An existing branch is switched to
+(unless it is the checkout) and then moved to the remote with
+`git merge --ff-only --no-autostash refs/remotes/<remote>` (`fastForwardTo`, guarded by the same HEAD
+re-read as `mergeInto`). Nothing happens before the branch list has been read,
+when no local name can be derived (`origin/HEAD`), or when the checkout already
+stands on that commit. A namesake that tracks a *different* remote (a fork's
+`main` following `upstream/main`) is neither moved nor shadowed: nothing
+happens. HEAD is never detached.
+
+**Why:** "Se eu estou em uma branch, e tento fazer checkout com o double click
+para origin/main e havendo uma main local defasada, ao dar o double click ele
+não deixa. neste cenario deveriamos conseguir." The click is aimed at a commit
+the remote branch is on; landing on a stale local branch three commits back
+would read as the click not working, and `git switch origin/main` — the literal
+reading — leaves HEAD detached, which ADR-0061 rules out. `--ff-only` is what
+keeps this a gesture: it moves a ref forward or refuses, writes no merge commit
+and rewrites nothing, and its refusal is already classified as `diverged` with
+the pull's own sentence. Ahead/behind counts are not consulted because they are
+only as fresh as the last fetch; git's check cannot be stale.
+
+**Consequences:** A local branch with commits of its own is switched to and
+then refused by the fast-forward — the user ends on the branch they named, one
+error notice tells them why it did not move, and the merge is a context menu
+away as before. The sequence stops at the first refusal, so a dirty working
+tree that blocks the switch never reaches the fast-forward. The refs panel's
+"Check out" button and this double click derive the local name by the same
+rule (`localNameFor`). The chip's own double click still does nothing on a
+remote chip; the row underneath is what answers. The revision is the full
+`refs/remotes/…` path so a local branch that happens to be named `origin/main`
+cannot win the short name's resolution, and `--no-autostash` pins the refusal
+over uncommitted work against a `merge.autoStash` config (safety review).

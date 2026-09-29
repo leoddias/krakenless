@@ -9,8 +9,14 @@ import {
 } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defaultConfig } from '../../config/schema';
-import type { Commit, StatusEntry } from '../../git/types';
-import { mergeRefInto, selectCommit, stashAll, switchTo } from '../../state/actions';
+import type { Branch, Commit, StatusEntry } from '../../git/types';
+import {
+  mergeRefInto,
+  selectCommit,
+  stashAll,
+  switchTo,
+  switchToRemote,
+} from '../../state/actions';
 import { StoreProvider } from '../../state/hooks';
 import { createStore, type Store } from '../../state/store';
 import { subscribeOpenRequests } from '../../state/openRequests';
@@ -27,12 +33,14 @@ vi.mock('../../state/actions', () => ({
   selectCommit: vi.fn(),
   mergeRefInto: vi.fn(),
   switchTo: vi.fn(),
+  switchToRemote: vi.fn(),
   stashAll: vi.fn(),
 }));
 
 const selectCommitMock = vi.mocked(selectCommit);
 const mergeRefIntoMock = vi.mocked(mergeRefInto);
 const switchToMock = vi.mocked(switchTo);
+const switchToRemoteMock = vi.mocked(switchToRemote);
 const stashAllMock = vi.mocked(stashAll);
 
 const NOW = new Date('2026-08-20T12:00:00Z');
@@ -80,6 +88,7 @@ beforeEach(() => {
   selectCommitMock.mockReset();
   mergeRefIntoMock.mockReset().mockResolvedValue(true);
   switchToMock.mockReset().mockResolvedValue(true);
+  switchToRemoteMock.mockReset().mockResolvedValue(true);
   stashAllMock.mockReset().mockResolvedValue(true);
   // The real action dispatches the selection; keep that behaviour so the view
   // can be observed reacting to it.
@@ -649,14 +658,77 @@ describe('double-clicking a row', () => {
     expect(switchToMock).not.toHaveBeenCalled();
   });
 
-  it('does nothing on a row with only a remote-tracking branch', () => {
-    renderWithCommits([
-      makeCommit(1, { refs: [{ kind: 'remote-branch', name: 'origin/feat/beta' }] }),
-    ]);
+  describe('on a row with only a remote-tracking branch', () => {
+    const REMOTE_ROW = makeCommit(1, {
+      refs: [{ kind: 'remote-branch', name: 'origin/main' }],
+    });
+    function branch(name: string, overrides: Partial<Branch> = {}): Branch {
+      return {
+        name,
+        current: false,
+        oid: makeCommit(2).oid,
+        ahead: 0,
+        behind: 0,
+        remote: false,
+        ...overrides,
+      };
+    }
+    function renderRemoteRow(branches: Branch[] | null): void {
+      renderHistory((store) => {
+        store.dispatch({ type: 'commits/loaded', commits: [REMOTE_ROW, makeCommit(2)] });
+        if (branches !== null) store.dispatch({ type: 'branches/loaded', branches });
+      });
+    }
 
-    fireEvent.doubleClick(row('Commit 1'));
+    it('never detaches HEAD onto the commit', () => {
+      renderRemoteRow([branch('origin/main', { remote: true })]);
 
-    expect(switchToMock).not.toHaveBeenCalled();
+      fireEvent.doubleClick(row('Commit 1'));
+
+      expect(switchToMock).not.toHaveBeenCalled();
+    });
+
+    it('moves the checked-out branch forward when it tracks the remote from behind', () => {
+      // The reported bug: on a stale `main`, double-clicking `origin/main`
+      // did nothing, and the user wanted to end up there.
+      renderRemoteRow([
+        branch('main', { current: true, upstream: 'origin/main', behind: 4 }),
+        branch('origin/main', { remote: true, oid: REMOTE_ROW.oid }),
+      ]);
+
+      fireEvent.doubleClick(row('Commit 1'));
+
+      expect(switchToRemoteMock).toHaveBeenCalledTimes(1);
+      expect(switchToRemoteMock.mock.calls[0]?.[1]).toEqual({
+        kind: 'forward',
+        name: 'main',
+        remoteRef: 'origin/main',
+        current: true,
+      });
+    });
+
+    it('creates the local branch when none stands for the remote', () => {
+      renderRemoteRow([
+        branch('feat/x', { current: true }),
+        branch('origin/main', { remote: true, oid: REMOTE_ROW.oid }),
+      ]);
+
+      fireEvent.doubleClick(row('Commit 1'));
+
+      expect(switchToRemoteMock.mock.calls[0]?.[1]).toEqual({
+        kind: 'create',
+        name: 'main',
+        remoteRef: 'origin/main',
+      });
+    });
+
+    it('does nothing before the branch list has been read', () => {
+      renderRemoteRow(null);
+
+      fireEvent.doubleClick(row('Commit 1'));
+
+      expect(switchToRemoteMock).not.toHaveBeenCalled();
+    });
   });
 
   it('waits while a command is running', () => {
@@ -1002,11 +1074,10 @@ describe('switching branch from a chip', () => {
     expect(switchToMock).not.toHaveBeenCalled();
   });
 
-  it('never switches to a remote-tracking chip', () => {
+  it('never runs `git switch` on a remote-tracking chip itself', () => {
     // `git switch origin/main` detaches HEAD rather than checking that branch
-    // out, and creating the local branch that tracks it needs a name the
-    // repository does not have yet — that is the refs panel's question to ask.
-    // A row with nothing but the remote chip on it therefore does nothing.
+    // out. The row underneath answers instead, with the local branch that
+    // stands for the remote (see "double-clicking a row").
     renderRefs([{ kind: 'remote-branch', name: 'origin/feat/beta' }]);
 
     fireEvent.doubleClick(chip('origin/feat/beta'));
