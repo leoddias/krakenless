@@ -60,6 +60,13 @@ import {
   isHeadRow,
   isRedundantHeadChip,
 } from './headRef';
+import {
+  FIND_COMMITS_EVENT,
+  commitMessage,
+  findMatches,
+  splitMatches,
+  stepMatch,
+} from './commitSearch';
 import styles from './history.module.css';
 
 /** Height of one row in pixels; must match `.row` in the stylesheet. */
@@ -69,6 +76,11 @@ export const ROW_HEIGHT = 30;
  * 2x display, and small enough that a cached picture is a couple of kilobytes.
  */
 const AVATAR_PIXELS = 32;
+/**
+ * Height the find bar covers at the top of the list, so a match is never
+ * scrolled to just underneath it.
+ */
+const FIND_BAR_INSET = 44;
 /** Rows kept mounted above and below the viewport, to hide scroll latency. */
 const OVERSCAN = 6;
 /**
@@ -83,8 +95,44 @@ export function HistoryView(): ReactNode {
   const commits = useAppState((state) => state.commits);
   const layout = useLayout();
   const columns = layout.layout.historyColumns;
+  const panel = useRef<HTMLElement | null>(null);
+  /**
+   * Whether the find bar is open. Kept here, above the list, because the list
+   * unmounts whenever the history is not ready — state inside it would reset
+   * and a stale request could reopen the bar by itself.
+   */
+  const [findOpen, setFindOpen] = useState(false);
+  /**
+   * Bumped by every Ctrl+F. A counter rather than a flag, so pressing it again
+   * with the bar already open still moves focus back into it.
+   */
+  const [findRequest, setFindRequest] = useState(0);
+  const ready = commits.state === 'ready';
+  // A history that is loading or failed has nothing to search, and a bar left
+  // open over it would come back unasked when the list does.
+  if (!ready && findOpen) setFindOpen(false);
+  useEffect(() => {
+    const element = panel.current;
+    // Not listening at all until the list is ready: a request is dropped rather
+    // than queued, because a bar that opens seconds later, when the list
+    // arrives, takes focus from whatever the user moved on to.
+    if (element === null || !ready) return;
+    const onFind = (): void => {
+      setFindOpen(true);
+      setFindRequest((count) => count + 1);
+    };
+    element.addEventListener(FIND_COMMITS_EVENT, onFind);
+    return () => element.removeEventListener(FIND_COMMITS_EVENT, onFind);
+  }, [ready]);
+  const find: FindState = {
+    open: findOpen,
+    request: findRequest,
+    close: () => setFindOpen(false),
+  };
   return (
     <section
+      ref={panel}
+      data-find-commits="true"
       className={styles.panel}
       aria-label="History"
       // The saved widths reach every row through the stylesheet, so a drag
@@ -130,7 +178,7 @@ export function HistoryView(): ReactNode {
         <span className={`${styles.columnDate} ${styles.columnLabel}`}>When</span>
         <ColumnEdge layout={layout} column="date" label="Resize the when column" />
       </div>
-      <Body commits={commits} />
+      <Body commits={commits} find={find} />
     </section>
   );
 }
@@ -176,7 +224,21 @@ function ColumnEdge({
   );
 }
 
-function Body({ commits }: { commits: Loadable<Commit[]> }): ReactNode {
+/** The find bar's state, owned by {@link HistoryView}. */
+interface FindState {
+  open: boolean;
+  /** Counts Ctrl+F presses; each new one focuses the box. */
+  request: number;
+  close: () => void;
+}
+
+function Body({
+  commits,
+  find,
+}: {
+  commits: Loadable<Commit[]>;
+  find: FindState;
+}): ReactNode {
   switch (commits.state) {
     case 'idle':
       return <p className={styles.notice}>Open a repository to see its history.</p>;
@@ -197,11 +259,17 @@ function Body({ commits }: { commits: Loadable<Commit[]> }): ReactNode {
         </div>
       );
     case 'ready':
-      return <CommitList commits={commits.value} />;
+      return <CommitList commits={commits.value} find={find} />;
   }
 }
 
-function CommitList({ commits: loaded }: { commits: Commit[] }): ReactNode {
+function CommitList({
+  commits: loaded,
+  find,
+}: {
+  commits: Commit[];
+  find: FindState;
+}): ReactNode {
   const store = useStore();
   const selectedOid = useAppState((state) => state.selection.commitOid);
   // `git log --all` walks `refs/stash` too, so a stash arrives as three rows of
@@ -272,11 +340,32 @@ function CommitList({ commits: loaded }: { commits: Commit[] }): ReactNode {
   useEffect(() => {
     if (!focusSelected.current) return;
     focusSelected.current = false;
-    const row = viewportRef.current?.querySelector<HTMLElement>(
-      `[data-index="${selectedIndex}"]`,
-    );
+    const viewport = viewportRef.current;
+    // A selection outside the loaded page has no row; the tabbable one is
+    // still somewhere in the list for the keyboard to be.
+    const row =
+      viewport?.querySelector<HTMLElement>(`[data-index="${selectedIndex}"]`) ??
+      viewport?.querySelector<HTMLElement>('[data-index][tabindex="0"]');
     row?.focus();
   });
+
+  /**
+   * Scrolls as little as it takes to bring a row into view, below the top
+   * `inset` pixels when something floats over them.
+   */
+  const reveal = useCallback(
+    (index: number, inset = 0): void => {
+      const next = Math.max(
+        0,
+        scrollOffsetFor(index, scrollTop + inset, viewportHeight - inset) - inset,
+      );
+      if (next !== scrollTop) {
+        setScrollTop(next);
+        if (viewportRef.current !== null) viewportRef.current.scrollTop = next;
+      }
+    },
+    [scrollTop, viewportHeight],
+  );
 
   const select = useCallback(
     (index: number, viaKeyboard: boolean): void => {
@@ -287,11 +376,7 @@ function CommitList({ commits: loaded }: { commits: Commit[] }): ReactNode {
       if (target !== 0 && commit === undefined) return;
       if (viaKeyboard) {
         focusSelected.current = true;
-        const next = scrollOffsetFor(target, scrollTop, viewportHeight);
-        if (next !== scrollTop) {
-          setScrollTop(next);
-          if (viewportRef.current !== null) viewportRef.current.scrollTop = next;
-        }
+        reveal(target);
       }
       // A worktree's WIP row stands for uncommitted work in another checkout:
       // there is no object to show a diff of, and asking git for one would be
@@ -303,8 +388,84 @@ function CommitList({ commits: loaded }: { commits: Commit[] }): ReactNode {
         commit === null || commit === undefined ? null : commit.oid,
       );
     },
-    [commits, scrollTop, store, total, viewportHeight],
+    [commits, reveal, store, total],
   );
+
+  // --- find (Ctrl+F) ---------------------------------------------------------
+  const findOpen = find.open;
+  const findRequest = find.request;
+  /**
+   * The request the box was last focused for. Starts at the count this list
+   * mounted with, so mounting alone never pulls focus into the box.
+   */
+  const focusedRequest = useRef(findRequest);
+  const [query, setQuery] = useState('');
+  const findInput = useRef<HTMLInputElement | null>(null);
+  /** Positions in `commits` whose message matches; row `i + 1` on screen. */
+  // A stash row shows what was set aside, not git's "WIP on main: …" subject,
+  // so that label is what it is searched by: a match must be visible.
+  const messageOf = useCallback(
+    (commit: Commit): string => {
+      const entry = stashes.get(commit.oid);
+      return entry === undefined ? commitMessage(commit) : stashRowLabel(entry);
+    },
+    [stashes],
+  );
+  const matches = useMemo(
+    () => (findOpen ? findMatches(commits, query, messageOf) : []),
+    [commits, findOpen, messageOf, query],
+  );
+  const matched = useMemo(() => new Set(matches), [matches]);
+  /** Rows only dim once there is something to look for. */
+  const searching = findOpen && query.trim() !== '';
+  // -1 for the working-tree row and for a selection outside the loaded page:
+  // both mean "start from the top".
+  const currentPosition = Math.max(-1, selectedIndex - 1);
+
+  useEffect(() => {
+    if (!findOpen || focusedRequest.current === findRequest) return;
+    focusedRequest.current = findRequest;
+    findInput.current?.focus();
+    findInput.current?.select();
+  }, [findOpen, findRequest]);
+
+  /**
+   * Selects a match without taking focus from the find box, so the user can
+   * keep typing or press Enter again.
+   */
+  const goToMatch = (found: number[], direction: -1 | 0 | 1): void => {
+    const position = stepMatch(found, currentPosition, direction);
+    if (position === null) return;
+    reveal(position + 1, FIND_BAR_INSET);
+    if (position !== currentPosition) select(position + 1, false);
+  };
+
+  const onQueryChange = (next: string): void => {
+    setQuery(next);
+    goToMatch(findMatches(commits, next, messageOf), 0);
+  };
+
+  const closeFind = (): void => {
+    find.close();
+    setQuery('');
+    // Back to the list, on the commit the search left selected.
+    focusSelected.current = true;
+    reveal(Math.max(0, selectedIndex));
+  };
+
+  const onFindKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      goToMatch(matches, event.shiftKey ? -1 : 1);
+      return;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeFind();
+    }
+  };
+
+  const matchNumber = matches.indexOf(currentPosition) + 1;
 
   /**
    * Right-click on a commit: select it, then open the menu where the pointer is.
@@ -448,6 +609,7 @@ function CommitList({ commits: loaded }: { commits: Commit[] }): ReactNode {
       index,
       selected: index === selectedIndex,
       tabbable: index === tabbableIndex,
+      dimmed: searching && !matched.has(index - 1),
       onSelect: select,
     };
     if (index === 0) {
@@ -489,6 +651,7 @@ function CommitList({ commits: loaded }: { commits: Commit[] }): ReactNode {
         laneCount={graph.laneCount}
         avatarUrl={identity === null ? null : (pictures.get(identity) ?? null)}
         stash={stashes.get(commit.oid)}
+        search={searching ? query : ''}
         onContextMenu={(event) => openMenu(commit, event)}
         {...shared}
       />,
@@ -496,68 +659,131 @@ function CommitList({ commits: loaded }: { commits: Commit[] }): ReactNode {
   }
 
   return (
-    <div
-      className={styles.viewport}
-      ref={viewportRef}
-      role="group"
-      aria-label="Commits"
-      onScroll={onScroll}
-      onKeyDown={onKeyDown}
-      onDragStart={onDragStart}
-      onDragOver={onDragOver}
-      onDrop={onDrop}
-      onDragEnd={() => setDragged(null)}
-      // Drives the affordance: while a branch is in the air, the chip it can
-      // be dropped on says so. One target, so one attribute is enough.
-      data-merge-drag={dragged === null ? undefined : 'true'}
-    >
-      <div className={styles.spacer} style={{ height: total * ROW_HEIGHT }}>
-        {rows}
+    <div className={styles.listArea}>
+      {findOpen && (
+        <div className={styles.find} role="search" aria-label="Find commits">
+          <input
+            ref={findInput}
+            className={styles.findInput}
+            type="text"
+            aria-label="Find commits by message"
+            placeholder="Find in commit messages"
+            spellCheck={false}
+            value={query}
+            onChange={(event) => onQueryChange(event.target.value)}
+            onKeyDown={onFindKeyDown}
+          />
+          <span
+            className={styles.findCount}
+            role="status"
+            // A miss is about the loaded page, not the repository: say how far
+            // back the search looked (ADR-0060).
+            title={`Searches the ${String(commits.length)} most recent commits loaded; the History limit in Settings sets how far back that goes.`}
+          >
+            {!searching
+              ? ''
+              : matches.length === 0
+                ? 'No matches'
+                : matchNumber === 0
+                  ? `${String(matches.length)} found`
+                  : `${String(matchNumber)} of ${String(matches.length)}`}
+          </span>
+          <button
+            type="button"
+            className={styles.findButton}
+            aria-label="Previous match"
+            title="Previous match (Shift+Enter)"
+            disabled={matches.length === 0}
+            onClick={() => goToMatch(matches, -1)}
+          >
+            ↑
+          </button>
+          <button
+            type="button"
+            className={styles.findButton}
+            aria-label="Next match"
+            title="Next match (Enter)"
+            disabled={matches.length === 0}
+            onClick={() => goToMatch(matches, 1)}
+          >
+            ↓
+          </button>
+          <button
+            type="button"
+            className={styles.findButton}
+            aria-label="Close find"
+            title="Close (Escape)"
+            onClick={closeFind}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+      <div
+        className={styles.viewport}
+        ref={viewportRef}
+        role="group"
+        aria-label="Commits"
+        onScroll={onScroll}
+        onKeyDown={onKeyDown}
+        onDragStart={onDragStart}
+        onDragOver={onDragOver}
+        onDrop={onDrop}
+        onDragEnd={() => setDragged(null)}
+        // Drives the affordance: while a branch is in the air, the chip it can
+        // be dropped on says so. One target, so one attribute is enough.
+        data-merge-drag={dragged === null ? undefined : 'true'}
+      >
+        <div className={styles.spacer} style={{ height: total * ROW_HEIGHT }}>
+          {rows}
+        </div>
+        {commits.length === 0 && (
+          <p className={styles.notice}>
+            No commits yet — this repository has no history.
+          </p>
+        )}
+        {menuTarget !== null && (
+          <CommitActions target={menuTarget} onDismiss={() => setMenuTarget(null)} />
+        )}
+        {treeMenu !== null && (
+          <ContextMenu
+            sections={[
+              [
+                {
+                  id: 'stash',
+                  label: 'Stash tracked changes…',
+                  disabled: stashRefusal,
+                  ...(stashRefusal === null
+                    ? {
+                        onSelect: () => {
+                          setStashing(true);
+                        },
+                      }
+                    : {}),
+                },
+              ],
+            ]}
+            x={treeMenu.x}
+            y={treeMenu.y}
+            label="Working tree"
+            onClose={() => setTreeMenu(null)}
+          />
+        )}
+        {stashing && (
+          <DialogHost
+            dialog={stashDialog(store, trackedTally)}
+            busy={busy}
+            onClose={() => setStashing(false)}
+          />
+        )}
+        {dropMerge !== null && (
+          <DialogHost
+            dialog={mergeDialog(store, dropMerge.branch, dropMerge.ref, dropMerge.ref)}
+            busy={busy}
+            onClose={() => setDropMerge(null)}
+          />
+        )}
       </div>
-      {commits.length === 0 && (
-        <p className={styles.notice}>No commits yet — this repository has no history.</p>
-      )}
-      {menuTarget !== null && (
-        <CommitActions target={menuTarget} onDismiss={() => setMenuTarget(null)} />
-      )}
-      {treeMenu !== null && (
-        <ContextMenu
-          sections={[
-            [
-              {
-                id: 'stash',
-                label: 'Stash tracked changes…',
-                disabled: stashRefusal,
-                ...(stashRefusal === null
-                  ? {
-                      onSelect: () => {
-                        setStashing(true);
-                      },
-                    }
-                  : {}),
-              },
-            ],
-          ]}
-          x={treeMenu.x}
-          y={treeMenu.y}
-          label="Working tree"
-          onClose={() => setTreeMenu(null)}
-        />
-      )}
-      {stashing && (
-        <DialogHost
-          dialog={stashDialog(store, trackedTally)}
-          busy={busy}
-          onClose={() => setStashing(false)}
-        />
-      )}
-      {dropMerge !== null && (
-        <DialogHost
-          dialog={mergeDialog(store, dropMerge.branch, dropMerge.ref, dropMerge.ref)}
-          busy={busy}
-          onClose={() => setDropMerge(null)}
-        />
-      )}
     </div>
   );
 }
@@ -566,6 +792,8 @@ interface RowProps {
   index: number;
   selected: boolean;
   tabbable: boolean;
+  /** Set while a search is open and this row is not one of its matches. */
+  dimmed?: boolean;
   onSelect: (index: number, viaKeyboard: boolean) => void;
 }
 
@@ -584,6 +812,7 @@ function WorkingTreeRow({
   index,
   selected,
   tabbable,
+  dimmed,
   onSelect,
   tally,
   onContextMenu,
@@ -598,6 +827,7 @@ function WorkingTreeRow({
       index={index}
       selected={selected}
       tabbable={tabbable}
+      dimmed={dimmed}
       onSelect={onSelect}
       onContextMenu={onContextMenu}
       label={`Working tree, uncommitted changes: ${sentence}`}
@@ -632,9 +862,11 @@ function CommitRow({
   laneCount,
   avatarUrl,
   stash,
+  search,
   index,
   selected,
   tabbable,
+  dimmed,
   onSelect,
   onContextMenu,
 }: RowProps &
@@ -650,6 +882,8 @@ function CommitRow({
     avatarUrl: string | null;
     /** Set when this row is a stash rather than a commit on a branch. */
     stash: StashEntry | undefined;
+    /** The query to mark in the subject; empty when nothing is searched. */
+    search: string;
   }): ReactNode {
   // A stash says what was set aside, not what git named the bookkeeping commit
   // ("On main: …"), and it is not attributed to anyone: it is not on a branch
@@ -672,9 +906,15 @@ function CommitRow({
       selected={selected}
       head={atHead}
       tabbable={tabbable}
+      dimmed={dimmed}
       onSelect={onSelect}
       onContextMenu={onContextMenu}
-      label={rowLabel(commit, subject, relative, stash)}
+      label={
+        // Dimming is only visible; a listener hears which rows matched.
+        search !== '' && dimmed !== true
+          ? `${rowLabel(commit, subject, relative, stash)}, matches the search`
+          : rowLabel(commit, subject, relative, stash)
+      }
     >
       <span className={styles.columnRefs}>
         {stash !== undefined && (
@@ -716,7 +956,17 @@ function CommitRow({
             : `${styles.columnSubject} ${styles.stashSubject}`
         }
       >
-        {subject}
+        {search === ''
+          ? subject
+          : splitMatches(subject, search).map((part, at) =>
+              part.match ? (
+                <mark key={at} className={styles.findMark}>
+                  {part.text}
+                </mark>
+              ) : (
+                part.text
+              ),
+            )}
       </span>
       <span className={styles.columnAuthor}>
         {stash === undefined ? commit.authorName : ''}
@@ -762,6 +1012,7 @@ function RowButton({
   selected,
   head = false,
   tabbable,
+  dimmed = false,
   onSelect,
   onContextMenu,
   label,
@@ -777,7 +1028,7 @@ function RowButton({
     <button
       type="button"
       aria-label={label}
-      className={rowClass(selected, head)}
+      className={rowClass(selected, head, dimmed)}
       style={{ top: index * ROW_HEIGHT, height: ROW_HEIGHT }}
       data-index={index}
       data-head={head ? 'true' : undefined}
@@ -791,10 +1042,11 @@ function RowButton({
   );
 }
 
-function rowClass(selected: boolean, head: boolean): string {
+function rowClass(selected: boolean, head: boolean, dimmed: boolean): string {
   const classes = [styles.row];
   if (head) classes.push(styles.rowHead);
   if (selected) classes.push(styles.rowSelected);
+  if (dimmed) classes.push(styles.rowDimmed);
   return classes.join(' ');
 }
 
@@ -826,6 +1078,7 @@ function WorktreeRow({
   index,
   selected,
   tabbable,
+  dimmed,
   onSelect,
 }: {
   worktree: WorktreeSummary;
@@ -841,6 +1094,7 @@ function WorktreeRow({
       index={index}
       selected={selected}
       tabbable={tabbable}
+      dimmed={dimmed}
       onSelect={onSelect}
       label={`Worktree ${name}, on ${where}${changes === null ? '' : `, ${changes}`}`}
     >

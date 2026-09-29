@@ -1,6 +1,7 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
+import { FIND_COMMITS_EVENT } from './views/history/commitSearch';
 import { StoreProvider, useStore } from './state/hooks';
 import { createStore, type Store } from './state/store';
 import type { RepoInfo } from './git/types';
@@ -54,7 +55,7 @@ vi.mock('./views/welcome', () => ({
   },
 }));
 vi.mock('./views/history/HistoryView', () => ({
-  HistoryView: () => <div>history view</div>,
+  HistoryView: () => <div data-find-commits="true">history view</div>,
 }));
 vi.mock('./views/diff', () => ({ DiffView: () => <div>diff view</div> }));
 vi.mock('./views/changes', () => ({ ChangesView: () => <div>changes view</div> }));
@@ -191,6 +192,41 @@ describe('App', () => {
 
     fireEvent.keyDown(window, { key: 'w', ctrlKey: true });
     expect(store.getState().repo.state).toBe('idle');
+  });
+
+  it('asks the History panel to open its find bar on Ctrl+F', () => {
+    const store = createStore();
+    store.dispatch({ type: 'repo/opened', repo: REPO });
+    renderApp(store);
+
+    const onFind = vi.fn();
+    screen.getByText('history view').addEventListener(FIND_COMMITS_EVENT, onFind);
+    const event = createEvent.keyDown(window, { key: 'f', ctrlKey: true });
+    fireEvent(window, event);
+
+    expect(onFind).toHaveBeenCalledTimes(1);
+    // The webview's own page search must not open on top of it.
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('leaves the find bar alone on Ctrl+F from inside a dialog', () => {
+    const store = createStore();
+    store.dispatch({ type: 'repo/opened', repo: REPO });
+    renderApp(store);
+
+    const onFind = vi.fn();
+    screen.getByText('history view').addEventListener(FIND_COMMITS_EVENT, onFind);
+    const dialog = document.createElement('div');
+    dialog.setAttribute('aria-modal', 'true');
+    const input = document.createElement('input');
+    dialog.appendChild(input);
+    document.body.appendChild(dialog);
+    const event = createEvent.keyDown(input, { key: 'f', ctrlKey: true });
+    fireEvent(input, event);
+
+    expect(onFind).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(true);
+    dialog.remove();
   });
 
   it('ignores shortcuts fired from a text field', () => {

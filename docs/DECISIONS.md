@@ -1856,3 +1856,37 @@ is nothing to fold them into. Shift stops at the section it was used in: Local,
 Remote and Tags are three lists, and a shortcut that folded all of them at once
 is one nobody can aim. The outer Branches header keeps its plain toggle; its two
 halves have their own.
+
+## ADR-0060 — Ctrl+F finds commits by their message, within the loaded history
+
+**Decision:** Ctrl+F in a repository tab opens a find bar over the History list.
+It matches the query as plain text, ignoring case, against the **subject and
+body** of the commits already loaded (`views/history/commitSearch.ts`) — no
+`git log --grep`. Typing selects the first match at or after the current
+selection, and leaves a selection that still matches where it is; Enter and
+Shift+Enter walk the matches with wrap-around; rows that do not match dim
+rather than disappear, and the matched text is marked in the subject. Escape
+closes the bar, clears the query and hands focus back to the selected row.
+Ctrl+F is honoured from inside text fields too — it has no text-editing
+meaning — and is always swallowed so the webview's own page search never opens,
+but from inside a modal dialog it opens nothing. A stash row is searched by the
+label it shows, not git's `WIP on main: <sha> …` subject, so every match is
+visible. The bar's open state lives above the list, and a request that arrives
+while the history is loading or failed is dropped, not queued.
+
+**Why:** "Quando eu apertar CTRL F na tela do projeto, o que eu quero é
+encontrar algum commit message com aquela keyword que estou pesquisando." A
+match is only useful if it can be selected and its diff shown, and a commit
+older than the loaded page has no row to select; asking git for the whole
+history would return answers the list cannot point at. Filtering the loaded
+list is instant, touches no git command, and keeps the graph intact so a match
+is read on the branch it sits on.
+
+**Consequences:** How far back the search looks is the `historyLimit` setting
+(200 by default); the match counter's tooltip says so, so "No matches" reads as
+"not in the loaded commits", not "does not exist". Searching the full history —
+`git log --grep` with a way to load up to the hit — is the natural follow-up
+and is in the backlog. The bar floats over the list instead of pushing it down,
+because the windowing measures the viewport height once. Ctrl+F is claimed in
+text fields, so the commit message box no longer reaches the webview's page
+search, which only ever found the rows that happened to be mounted.

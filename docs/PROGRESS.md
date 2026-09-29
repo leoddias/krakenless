@@ -9,6 +9,11 @@
 - **Phase:** v0.1 feature-complete. Every buildable item in `docs/ROADMAP.md`
   M0–M5 is checked off; the only open item is the dogfood gate, which is two
   weeks of use, not code.
+- **Ctrl+F finds commits by their message** (2026-09-29, ADR-0060): a find bar
+  floats over the History list and matches subject and body, ignoring case,
+  across the *loaded* commits only (`historyLimit`). Typing selects the first
+  match, Enter / Shift+Enter walk them, non-matches dim, Escape closes. Pure
+  rules in `views/history/commitSearch.ts`. Not used by hand in the running app.
 - **The tag list groups by the prefix it shares, and Shift folds the lot**
   (2026-09-20, ADR-0059): `release-1.0.4` sits under `release`, `v2.0.0` under
   `v`, cut at `/`, `-`, `_` and at the seam between letters and digits — and
@@ -204,7 +209,11 @@
 
 ## Next up (in order)
 
-1. **Validate the update flow end to end.** v0.1.10-alpha is the first release
+1. **Press Ctrl+F in the running app** (ADR-0060): search a keyword, walk the
+   matches with Enter / Shift+Enter, check that the bar doesn't cover a match
+   and that typing isn't slowed by the diff each move triggers. Try it from the
+   commit message box too.
+2. **Validate the update flow end to end.** v0.1.10-alpha is the first release
    carrying the updater, and the *swap* cannot be proven by it alone — a v0.1.9
    binary has no updater in it to do the swapping.
 
@@ -232,32 +241,32 @@
    d. Look in the folder for `krakenless.displaced-*.exe`, close and reopen the
       app, and confirm it is gone.
    e. Repeat (c) with the NSIS installer to exercise the plugin's path.
-2. **Use the diverged-branch flow by hand** (ADR-0035): make a repo diverge,
+3. **Use the diverged-branch flow by hand** (ADR-0035): make a repo diverge,
    watch Push refuse with the reason, run "Pull (merge)" through its dialog —
    including a conflicted one. Also watch the background fetch tick (ADR-0034)
    report an arriving tag. Neither has been seen running, only asserted.
-3. **Use the 2026-08-27 batch by hand.** All of it is tested and none of it has
+4. **Use the 2026-08-27 batch by hand.** All of it is tested and none of it has
    been run: a push while switching tabs (ADR-0028 — the whole point is that the
    window stays alive), dragging a branch chip onto the checkout to merge
    (ADR-0026), a repository with a real `git worktree` so the WIP row and the
    toolbar picker have something to show (ADR-0027), and pushing a tag
    (ADR-0029). The worktree row and the picker are the two that have never been
    *seen*, only asserted.
-4. **Right-click a commit in the running app** — the context menu (ADR-less,
+5. **Right-click a commit in the running app** — the context menu (ADR-less,
    ROADMAP § v0.2) has tests behind it but has never been used by hand. Worth
    checking the menu and its submenu near the bottom edge of the list, where the
    clamping code runs.
-5. **Try the new editor on a real file** — it is the only code that writes to
+6. **Try the new editor on a real file** — it is the only code that writes to
    your disk, and it has not been used by hand yet. Consider a
    `safety-reviewer` pass over `src-tauri/src/worktree.rs` first.
-6. **Look at the panels not yet seen running**: the diff, the working tree and
+7. **Look at the panels not yet seen running**: the diff, the working tree and
    its commit box, settings, welcome — plus dragging each edge, and the toolbar
    at narrow widths.
-7. **The dogfood gate** (`docs/ROADMAP.md` § M5): use Krakenless as the only
+8. **The dogfood gate** (`docs/ROADMAP.md` § M5): use Krakenless as the only
    Git client for two weeks. Everything else in v0.1 is done, so this is the
    next real step and it produces the list that shapes v0.2.
-8. Fix whatever the gate surfaces, in the order it hurts.
-9. Then the validation checkpoint in `PLAN.md`: builds to 3–5 friends, and the
+9. Fix whatever the gate surfaces, in the order it hurts.
+10. Then the validation checkpoint in `PLAN.md`: builds to 3–5 friends, and the
    decision to invest in v0.2 or stop.
 
 ## Blockers / open questions
@@ -289,6 +298,39 @@
   until `buildPushCommand` emits a `<local>:<upstream>` refspec.
 
 ## Session log
+
+### 2026-09-29 — Ctrl+F finds commits by their message
+
+"Quando eu apertar CTRL F na tela do projeto, o que eu quero é encontrar algum
+commit message com aquela keyword que estou pesquisando." There was no search
+anywhere in the history before this.
+
+It filters the commits already loaded rather than asking `git log --grep`,
+because a hit is only useful if it has a row to select (ADR-0060). The full-
+history search is in the ROADMAP backlog. No git command was built or parsed,
+so no safety review was needed. `resolveShortcut` gained `find`, which works
+from inside text fields and is always `preventDefault`ed so the webview's own
+page search never opens. App dispatches `krakenless:find-commits` on the
+pane's `[data-find-commits]` element. That is not the `aria-label="History"`
+region, because App wraps the panel in its own section with that label, and
+the first version sent the event there, where it never arrived.
+
+The conventions review failed the first pass on one major finding. The bar's
+closed state lived in `CommitList`, which remounts after a failed load, so the
+bar could reopen by itself and take focus. The open state now lives in
+`HistoryView`, and requests are dropped while the list isn't ready. Also fixed
+from the review:
+- focus goes back to the list on close even when the selection is off the page;
+- stash rows are searched by the label they show;
+- Ctrl+F inside a modal dialog opens nothing;
+- a match is revealed below the floating bar, not under it;
+- matching rows say so in their accessible name.
+
+Left as is: each keystroke that moves the selection runs a diff
+(`selectCommit`). It's correct but could be debounced if it feels slow.
+
+`npm test` 2533 passing (114 files); oxlint at its 11 pre-existing warnings,
+prettier clean, `tsc -b` clean. **Not used by hand in the running app.**
 
 ### 2026-09-20 — tags fold by what their names share, Shift does the lot
 

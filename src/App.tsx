@@ -26,6 +26,7 @@ import { DiffView } from './views/diff';
 import { SettingsView } from './views/settings';
 import { RefsView } from './views/refs';
 import { resolveShortcut } from './views/shell/shortcuts';
+import { FIND_COMMITS_EVENT, FIND_COMMITS_TARGET } from './views/history/commitSearch';
 import { RemoteBar } from './views/remote';
 import { DiscardBackups, NoticeBar } from './views/shell';
 import { CheckoutPicker } from './views/shell/CheckoutPicker';
@@ -333,6 +334,17 @@ function focusPanel(within: HTMLElement | null, label: string): void {
   (focusable ?? panel).focus();
 }
 
+/**
+ * Opens the history's find bar in this pane. An event on the panel rather than
+ * shared state: every open tab has a History panel, and only the one on screen
+ * is asked.
+ */
+function requestFind(within: HTMLElement | null): void {
+  (within ?? document)
+    .querySelector<HTMLElement>(FIND_COMMITS_TARGET)
+    ?.dispatchEvent(new CustomEvent(FIND_COMMITS_EVENT));
+}
+
 const PANEL_LABEL: Record<string, string> = {
   'focus-history': 'History',
   'focus-refs': 'Branches and stashes',
@@ -388,6 +400,18 @@ function RepoPane({
       if (shortcut === 'settings') {
         event.preventDefault();
         setSettingsOpen(true);
+        return;
+      }
+      if (shortcut === 'find') {
+        // Swallowed even when there is no history on screen: the webview's own
+        // page search is never the thing being asked for.
+        event.preventDefault();
+        // From inside a dialog the find box would take focus from behind the
+        // dialog, and Escape would then close the wrong thing.
+        const inDialog =
+          event.target instanceof Element &&
+          event.target.closest('[aria-modal="true"]') !== null;
+        if (!inDialog) requestFind(pane.current);
         return;
       }
       if (shortcut === 'close-repo') {

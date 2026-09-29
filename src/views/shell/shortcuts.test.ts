@@ -51,6 +51,20 @@ describe('resolveShortcut', () => {
     expect(resolveShortcut(press('Enter', { ctrlKey: true }), IDLE)).toBe('commit');
   });
 
+  it('finds commits with Ctrl+F, even from inside a text field', () => {
+    expect(resolveShortcut(press('f', { ctrlKey: true }), IDLE)).toBe('find');
+    expect(resolveShortcut(press('F', { metaKey: true }), IDLE)).toBe('find');
+    expect(resolveShortcut(press('f', { ctrlKey: true }), TYPING)).toBe('find');
+  });
+
+  it('does not find on a bare F or a shifted Ctrl+F', () => {
+    expect(resolveShortcut(press('f'), IDLE)).toBeNull();
+    expect(
+      resolveShortcut(press('f', { ctrlKey: true, shiftKey: true }), IDLE),
+    ).toBeNull();
+    expect(resolveShortcut(press('f', { ctrlKey: true, altKey: true }), IDLE)).toBeNull();
+  });
+
   it('does not commit on a bare Enter', () => {
     expect(resolveShortcut(press('Enter'), IDLE)).toBeNull();
     expect(resolveShortcut(press('Enter'), TYPING)).toBeNull();
@@ -85,5 +99,6 @@ describe('SHORTCUT_HELP', () => {
     expect(documented).toContain('Ctrl+Enter');
     expect(documented).toContain('Ctrl+,');
     expect(documented).toContain('Ctrl+W');
+    expect(documented).toContain('Ctrl+F');
   });
 });

@@ -531,3 +531,93 @@
 .worktreeOpen:hover {
   background: var(--worktree-bg);
 }
+
+/* --- find (Ctrl+F) --------------------------------------------------------- */
+
+/* Holds the find bar over the list without taking height from it: the list's
+   windowing measures the viewport once, and a bar pushing it down would leave
+   that measurement a row too tall. */
+.listArea {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.find {
+  position: absolute;
+  top: 0.375rem;
+  right: 1.25rem;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 35%);
+}
+
+.findInput {
+  width: 15rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg-strong);
+  font: inherit;
+}
+
+.findInput:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.findCount {
+  min-width: 5.5rem;
+  color: var(--muted);
+  font-size: 0.85em;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.findButton {
+  width: 1.625rem;
+  height: 1.625rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+
+.findButton:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.findButton:disabled {
+  color: var(--faint);
+  cursor: default;
+}
+
+.findButton:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Rows that do not match step back rather than disappear: the graph keeps its
+   shape, so a match is still read in the context of the branch it sits on. */
+.rowDimmed {
+  opacity: 0.5;
+}
+
+.findMark {
+  border-radius: 2px;
+  background: var(--ref-tag-bg);
+  box-shadow: 0 0 0 1px var(--warning);
+  color: var(--fg-strong);
+}

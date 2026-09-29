@@ -86,6 +86,11 @@ after 2 more weeks → proceed to v0.2. Else: keep as personal tool, stop invest
 
 ## Backlog (ideas parking lot — not scheduled)
 
+**Find commits beyond the loaded history.** ADR-0060: Ctrl+F searches only the
+commits the history list has loaded (`historyLimit`). A `git log --grep`
+fallback that reports older hits — and loads the list far enough back to select
+one — would make a miss mean "no such commit".
+
 **Discard backups do not survive the app closing by name.** ADR-0045: the
 blobs do (two weeks before `git gc` touches them), but the list that names
 them is in memory. Persisting "Recent discards" per repository would make the

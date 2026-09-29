@@ -17,6 +17,7 @@ import { subscribeOpenRequests } from '../../state/openRequests';
 import { registerStore, resetStoreRegistry } from '../../state/stores';
 import { HistoryView, ROW_HEIGHT } from './HistoryView';
 import { resetAvatarCache } from './avatarCache';
+import { FIND_COMMITS_EVENT, FIND_COMMITS_TARGET } from './commitSearch';
 import { sha256Hex } from './remoteAvatar';
 
 const invoke = vi.hoisted(() => vi.fn());
@@ -1121,5 +1122,167 @@ describe('the working tree row', () => {
     const [, options, reason] = stashAllMock.mock.calls[0] ?? [];
     expect(options).toEqual({});
     expect(reason).toContain('1 modified, 1 deleted');
+  });
+});
+
+describe('HistoryView find (Ctrl+F)', () => {
+  function openFind(): HTMLElement {
+    act(() => {
+      document
+        .querySelector(FIND_COMMITS_TARGET)
+        ?.dispatchEvent(new CustomEvent(FIND_COMMITS_EVENT));
+    });
+    return screen.getByRole('textbox', { name: 'Find commits by message' });
+  }
+
+  const commits = [
+    makeCommit(1, { subject: 'feat: add tags' }),
+    makeCommit(2, { subject: 'fix: parser', body: 'Closes the Tag bug' }),
+    makeCommit(3, { subject: 'chore: release' }),
+    makeCommit(4, { subject: 'feat: tag groups' }),
+  ];
+
+  it('stays hidden until asked for', () => {
+    renderWithCommits(commits);
+    expect(screen.queryByRole('search', { name: 'Find commits' })).toBeNull();
+  });
+
+  it('opens with the box focused', () => {
+    renderWithCommits(commits);
+    const input = openFind();
+    expect(document.activeElement).toBe(input);
+  });
+
+  it('selects the first commit whose subject or body matches, and counts them', () => {
+    const store = renderWithCommits(commits);
+    const input = openFind();
+    fireEvent.change(input, { target: { value: 'TAG' } });
+    expect(selectCommitMock).toHaveBeenLastCalledWith(store, makeCommit(1).oid);
+    expect(screen.getByRole('status')).toHaveTextContent('1 of 3');
+    // Typing does not take focus away from the box.
+    expect(document.activeElement).toBe(input);
+  });
+
+  it('walks the matches with Enter and back with Shift+Enter, wrapping', () => {
+    const store = renderWithCommits(commits);
+    const input = openFind();
+    fireEvent.change(input, { target: { value: 'tag' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(selectCommitMock).toHaveBeenLastCalledWith(store, makeCommit(2).oid);
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(selectCommitMock).toHaveBeenLastCalledWith(store, makeCommit(4).oid);
+    expect(screen.getByRole('status')).toHaveTextContent('3 of 3');
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(selectCommitMock).toHaveBeenLastCalledWith(store, makeCommit(1).oid);
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
+    expect(selectCommitMock).toHaveBeenLastCalledWith(store, makeCommit(4).oid);
+  });
+
+  it('keeps a selection that still matches as the query narrows', () => {
+    renderWithCommits(commits);
+    const input = openFind();
+    fireEvent.change(input, { target: { value: 'feat' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    selectCommitMock.mockClear();
+    fireEvent.change(input, { target: { value: 'feat: tag' } });
+    expect(selectCommitMock).not.toHaveBeenCalled();
+  });
+
+  it('dims the rows that do not match and marks the text that does', () => {
+    renderWithCommits(commits);
+    const input = openFind();
+    fireEvent.change(input, { target: { value: 'release' } });
+    const rows = rowButtons();
+    const release = rows.find((row) => row.getAttribute('data-index') === '3');
+    const other = rows.find((row) => row.getAttribute('data-index') === '1');
+    expect(release?.className).not.toMatch(/rowDimmed/);
+    expect(other?.className).toMatch(/rowDimmed/);
+    expect(release?.querySelector('mark')?.textContent).toBe('release');
+  });
+
+  it('says so when nothing matches, and moves nothing', () => {
+    renderWithCommits(commits);
+    const input = openFind();
+    fireEvent.change(input, { target: { value: 'nowhere' } });
+    expect(screen.getByRole('status')).toHaveTextContent('No matches');
+    expect(selectCommitMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Next match' })).toBeDisabled();
+  });
+
+  it('closes on Escape, clearing the search and handing focus back to the list', () => {
+    renderWithCommits(commits);
+    const input = openFind();
+    fireEvent.change(input, { target: { value: 'release' } });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(screen.queryByRole('search', { name: 'Find commits' })).toBeNull();
+    expect(rowButtons().some((row) => /rowDimmed/.test(row.className))).toBe(false);
+    expect(document.activeElement?.getAttribute('data-index')).toBe('3');
+  });
+
+  it('focuses and selects the query again on a second Ctrl+F', () => {
+    renderWithCommits(commits);
+    const input = openFind() as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'feat' } });
+    act(() => screen.getAllByRole('button')[0]?.focus());
+    openFind();
+    expect(document.activeElement).toBe(input);
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(4);
+  });
+
+  it('names the matching rows for a screen reader', () => {
+    renderWithCommits(commits);
+    fireEvent.change(openFind(), { target: { value: 'release' } });
+    expect(
+      screen.getByRole('button', { name: /chore: release.*matches the search/ }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /feat: add tags.*matches/ })).toBeNull();
+  });
+
+  it('ignores Ctrl+F while the history is not ready, and does not open later', () => {
+    const store = renderHistory((prepared) =>
+      prepared.dispatch({ type: 'commits/loading' }),
+    );
+    act(() => {
+      document
+        .querySelector(FIND_COMMITS_TARGET)
+        ?.dispatchEvent(new CustomEvent(FIND_COMMITS_EVENT));
+    });
+    act(() => store.dispatch({ type: 'commits/loaded', commits }));
+    expect(screen.queryByRole('search', { name: 'Find commits' })).toBeNull();
+  });
+
+  it('does not reopen by itself when the list comes back after a failed load', () => {
+    const store = renderWithCommits(commits);
+    fireEvent.keyDown(openFind(), { key: 'Escape' });
+    act(() => store.dispatch({ type: 'commits/failed', message: 'boom' }));
+    act(() => store.dispatch({ type: 'commits/loaded', commits }));
+    expect(screen.queryByRole('search', { name: 'Find commits' })).toBeNull();
+  });
+
+  it('closes when the history fails under it, and stays closed', () => {
+    const store = renderWithCommits(commits);
+    openFind();
+    act(() => store.dispatch({ type: 'commits/failed', message: 'boom' }));
+    act(() => store.dispatch({ type: 'commits/loaded', commits }));
+    expect(screen.queryByRole('search', { name: 'Find commits' })).toBeNull();
+  });
+
+  it('hands focus back to the list even when the selection is not on the page', () => {
+    renderHistory((store) => {
+      store.dispatch({ type: 'commits/loaded', commits });
+      store.dispatch({ type: 'selection/commit', oid: 'f'.repeat(40) });
+    });
+    fireEvent.keyDown(openFind(), { key: 'Escape' });
+    expect(document.activeElement?.hasAttribute('data-index')).toBe(true);
+  });
+
+  it('opens empty again after being closed', () => {
+    renderWithCommits(commits);
+    let input = openFind();
+    fireEvent.change(input, { target: { value: 'feat' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Close find' }));
+    input = openFind();
+    expect(input).toHaveValue('');
   });
 });

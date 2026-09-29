@@ -13,6 +13,7 @@ export type Shortcut =
   | 'focus-diff'
   | 'focus-refs'
   | 'commit'
+  | 'find'
   | 'settings'
   | 'close-repo';
 
@@ -53,6 +54,14 @@ export function resolveShortcut(event: KeyLike, origin: Origin): Shortcut | null
   // that has to work *while* typing.
   if (primary && event.key === 'Enter') return 'commit';
 
+  // Ctrl+F means nothing to a text field, so it is honoured from inside one
+  // too: from the commit message box, and from the find box itself, where it
+  // selects the query to type over. Left alone it would open the webview's own
+  // page search, which finds text in whatever rows happen to be mounted.
+  if (primary && event.key.toLowerCase() === 'f' && !event.shiftKey && !event.altKey) {
+    return 'find';
+  }
+
   if (origin.editable) return null;
 
   if (event.key === 'F5' && !primary) return 'refresh';
@@ -73,6 +82,7 @@ export const SHORTCUT_HELP: readonly { keys: string; does: string }[] = [
   { keys: 'Ctrl+1 … Ctrl+4', does: 'Focus history, branches, working tree, diff' },
   { keys: 'Ctrl+R or F5', does: 'Re-read the repository' },
   { keys: 'Ctrl+Enter', does: 'Commit what is staged' },
+  { keys: 'Ctrl+F', does: 'Find commits by their message' },
   { keys: 'Ctrl+,', does: 'Open settings' },
   { keys: 'Ctrl+W', does: 'Close the repository' },
 ];
