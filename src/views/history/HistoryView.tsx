@@ -59,6 +59,7 @@ import {
   isCurrentChip,
   isHeadRow,
   isRedundantHeadChip,
+  rowSwitchesTo,
 } from './headRef';
 import {
   FIND_COMMITS_EVENT,
@@ -298,6 +299,13 @@ function CommitList({
    * no business acting on.
    */
   const [dragged, setDragged] = useState<string | null>(null);
+  /**
+   * The commit whose row is being dragged, or `null`. A row drag ends in a
+   * context menu on the row it lands on — a question, never an action.
+   */
+  const [draggedRow, setDraggedRow] = useState<string | null>(null);
+  /** The row a drag is currently over and may be dropped on, for the outline. */
+  const [dropRow, setDropRow] = useState<string | null>(null);
   /** The merge a drop asked for, waiting on its question. */
   const [dropMerge, setDropMerge] = useState<{ branch: string; ref: string } | null>(
     null,
@@ -474,8 +482,7 @@ function CommitList({
    * highlighted row both name the commit the menu is about, so an item chosen a
    * second later cannot be read as applying to whatever was selected before.
    */
-  const openMenu = (commit: Commit, event: ReactMouseEvent<HTMLElement>): void => {
-    event.preventDefault();
+  const openMenuAt = (commit: Commit, x: number, y: number): void => {
     // The row index is looked up rather than captured from the render loop, so
     // the handler holds no reference to a variable the loop goes on to change.
     const index = indexOfOid(commits, commit.oid);
@@ -484,10 +491,15 @@ function CommitList({
     const entry = stashes.get(commit.oid);
     setMenuTarget({
       commit,
-      x: event.clientX,
-      y: event.clientY,
+      x,
+      y,
       ...(entry === undefined ? {} : { stash: entry }),
     });
+  };
+
+  const openMenu = (commit: Commit, event: ReactMouseEvent<HTMLElement>): void => {
+    event.preventDefault();
+    openMenuAt(commit, event.clientX, event.clientY);
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
@@ -562,38 +574,79 @@ function CommitList({
     return target.closest(selector)?.getAttribute('data-ref-name') ?? null;
   };
 
+  /** The commit row under the pointer, by the oid it carries, or `null`. */
+  const rowUnder = (event: ReactDragEvent<HTMLElement>): string | null => {
+    const target = event.target;
+    if (!(target instanceof Element)) return null;
+    return target.closest('[data-drag-oid]')?.getAttribute('data-drag-oid') ?? null;
+  };
+
+  const endDrag = (): void => {
+    setDragged(null);
+    setDraggedRow(null);
+    setDropRow(null);
+  };
+
+  /**
+   * A drag starts on a branch chip, or failing that on the row itself. Either
+   * way the row's oid is kept too: a chip dropped somewhere other than the
+   * checkout's chip lands on a row, and a row is answered with its menu.
+   */
   const onDragStart = (event: ReactDragEvent<HTMLElement>): void => {
     const name = chipUnder(event, '[data-ref-name][draggable="true"]');
-    if (name === null) return;
+    const oid = rowUnder(event);
+    if (name === null && oid === null) return;
     setDragged(name);
+    setDraggedRow(oid);
     // Firefox refuses to start a drag with an empty payload, and a plain-text
-    // branch name is a reasonable thing to drop into an editor besides.
-    event.dataTransfer.setData('text/plain', name);
+    // branch name (or sha) is a reasonable thing to drop into an editor besides.
+    event.dataTransfer.setData('text/plain', name ?? oid ?? '');
     event.dataTransfer.effectAllowed = 'move';
   };
 
-  const dropTargetFor = (event: ReactDragEvent<HTMLElement>): string | null => {
-    if (dragged === null) return null;
-    const onto = chipUnder(event, '[data-drop-target="true"]');
-    // Dropping a branch on itself is the one merge that can never mean
-    // anything, and the chip is its own nearest target while being dragged.
-    return onto === null || onto === dragged ? null : onto;
+  /**
+   * What a drop here would do. A branch chip over the checkout's chip is the
+   * merge (ADR-0026); anything of ours over another commit's row opens that
+   * row's context menu where the pointer is (ADR-0061). The row a drag started
+   * on is not a target: a menu for the commit already in hand is a right-click.
+   */
+  const dropTargetFor = (
+    event: ReactDragEvent<HTMLElement>,
+  ): { kind: 'merge'; branch: string } | { kind: 'menu'; oid: string } | null => {
+    if (dragged === null && draggedRow === null) return null;
+    if (dragged !== null) {
+      const onto = chipUnder(event, '[data-drop-target="true"]');
+      // Dropping a branch on itself is the one merge that can never mean
+      // anything, and the chip is its own nearest target while being dragged.
+      if (onto !== null && onto !== dragged) return { kind: 'merge', branch: onto };
+    }
+    const oid = rowUnder(event);
+    if (oid === null || oid === draggedRow) return null;
+    return { kind: 'menu', oid };
   };
 
   const onDragOver = (event: ReactDragEvent<HTMLElement>): void => {
-    if (dropTargetFor(event) === null) return;
-    // Without this the browser treats the chip as a place a drop cannot land.
+    const target = dropTargetFor(event);
+    const over = target?.kind === 'menu' ? target.oid : null;
+    if (over !== dropRow) setDropRow(over);
+    if (target === null) return;
+    // Without this the browser treats the spot as a place a drop cannot land.
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
   };
 
   const onDrop = (event: ReactDragEvent<HTMLElement>): void => {
-    const onto = dropTargetFor(event);
-    if (onto === null) return;
+    const target = dropTargetFor(event);
+    if (target === null) return;
     event.preventDefault();
     const ref = dragged;
-    setDragged(null);
-    if (ref !== null) setDropMerge({ branch: onto, ref });
+    endDrag();
+    if (target.kind === 'merge') {
+      if (ref !== null) setDropMerge({ branch: target.branch, ref });
+      return;
+    }
+    const commit = commits.find((one) => one.oid === target.oid);
+    if (commit !== undefined) openMenuAt(commit, event.clientX, event.clientY);
   };
 
   const readyStatus = status.state === 'ready' ? status.value : null;
@@ -652,6 +705,7 @@ function CommitList({
         avatarUrl={identity === null ? null : (pictures.get(identity) ?? null)}
         stash={stashes.get(commit.oid)}
         search={searching ? query : ''}
+        dropHere={dropRow === commit.oid}
         onContextMenu={(event) => openMenu(commit, event)}
         {...shared}
       />,
@@ -729,7 +783,13 @@ function CommitList({
         onDragStart={onDragStart}
         onDragOver={onDragOver}
         onDrop={onDrop}
-        onDragEnd={() => setDragged(null)}
+        onDragEnd={endDrag}
+        onDragLeave={(event) => {
+          // Leaving the list altogether: nothing is under the pointer any more.
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+            setDropRow(null);
+          }
+        }}
         // Drives the affordance: while a branch is in the air, the chip it can
         // be dropped on says so. One target, so one attribute is enough.
         data-merge-drag={dragged === null ? undefined : 'true'}
@@ -863,6 +923,7 @@ function CommitRow({
   avatarUrl,
   stash,
   search,
+  dropHere,
   index,
   selected,
   tabbable,
@@ -872,6 +933,8 @@ function CommitRow({
 }: RowProps &
   MenuRowProps & {
     commit: Commit;
+    /** Set while a dragged row is over this one and may be dropped on it. */
+    dropHere: boolean;
     graphRow: GraphRow | undefined;
     laneCount: number;
     /**
@@ -900,6 +963,11 @@ function CommitRow({
   // the user reads some other commit.
   const current = checkedOutBranch(commit.refs);
   const atHead = isHeadRow(commit.refs);
+  const store = useStore();
+  const busy = useAppState(isBusy);
+  // What a double click on the row switches to: a local branch drawn on it,
+  // never the bare commit (ADR-0061). A stash row has no branch to offer.
+  const switchesTo = stash === undefined ? rowSwitchesTo(commit.refs) : null;
   return (
     <RowButton
       index={index}
@@ -909,6 +977,18 @@ function CommitRow({
       dimmed={dimmed}
       onSelect={onSelect}
       onContextMenu={onContextMenu}
+      dragOid={commit.oid}
+      dropHere={dropHere}
+      {...(switchesTo === null
+        ? {}
+        : {
+            onDoubleClick: () => {
+              if (busy) return;
+              // `switchTo` goes through `git switch`, so a dirty working tree is
+              // a refusal from git rather than an overwrite.
+              void switchTo(store, switchesTo);
+            },
+          })}
       label={
         // Dimming is only visible; a listener hears which rows matched.
         search !== '' && dimmed !== true
@@ -1015,12 +1095,24 @@ function RowButton({
   dimmed = false,
   onSelect,
   onContextMenu,
+  onDoubleClick,
+  dragOid,
+  dropHere = false,
   label,
   children,
 }: RowProps &
   Partial<MenuRowProps> & {
     /** The row HEAD is on; tinted even when the selection is elsewhere. */
     head?: boolean;
+    /** Set on rows a double click does something to (a branch switch). */
+    onDoubleClick?: () => void;
+    /**
+     * Set on rows that can be picked up and dropped on one another; the oid is
+     * what the list reads back off the element at both ends of the gesture.
+     */
+    dragOid?: string;
+    /** A drag is over this row and a drop would open its menu. */
+    dropHere?: boolean;
     label: string;
     children: ReactNode;
   }): ReactNode {
@@ -1032,10 +1124,14 @@ function RowButton({
       style={{ top: index * ROW_HEIGHT, height: ROW_HEIGHT }}
       data-index={index}
       data-head={head ? 'true' : undefined}
+      data-drag-oid={dragOid}
+      data-drop-row={dropHere ? 'true' : undefined}
+      draggable={dragOid === undefined ? undefined : true}
       aria-current={selected ? 'true' : undefined}
       tabIndex={tabbable ? 0 : -1}
       onClick={() => onSelect(index, false)}
       {...(onContextMenu === undefined ? {} : { onContextMenu })}
+      {...(onDoubleClick === undefined ? {} : { onDoubleClick })}
     >
       {children}
     </button>

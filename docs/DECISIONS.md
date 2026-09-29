@@ -1890,3 +1890,40 @@ and is in the backlog. The bar floats over the list instead of pushing it down,
 because the windowing measures the viewport height once. Ctrl+F is claimed in
 text fields, so the commit message box no longer reaches the webview's page
 search, which only ever found the rows that happened to be mounted.
+
+## ADR-0061 — A row dropped on another opens that row's menu, and a double click switches to the branch on the row, never to the commit
+
+**Decision:** Every commit row in the History list is draggable. Dropping it —
+or a branch chip — on any *other* commit row opens that row's context menu
+where the pointer let go, after selecting the row, exactly as a right-click
+would. Nothing runs from the drop itself. The one exception stays as ADR-0026
+left it: a branch chip dropped on the checked-out branch's own chip goes
+straight to the merge question. Separately, a double click anywhere on a
+commit row runs `git switch` to the first local branch drawn on that row that
+is not the checkout (`rowSwitchesTo` in `views/history/headRef.ts`). A row
+with no local branch — a bare commit, a remote-tracking branch, a tag — does
+nothing on double click, and the row of the checkout does nothing either. The
+chip's own double click (a specific branch when several share a row) is
+unchanged and still wins, because it stops the event.
+
+**Why:** "Eu quero que seja possivel arrastar uma linha na outra … Quando eu
+soltar o click deveria abrir o menu de contexto." ADR-0026 refused a drop on a
+branch that is not checked out because GitKraken's answer is to silently check
+it out first; opening the menu is the other answer — the gesture ends in a
+question the user already knows, with every option ADR-0026 wanted them to
+choose consciously (merge, rebase, reset, cherry-pick) and nothing chosen for
+them. Both ends of the gesture read as rows, so the whole row is the handle,
+not the chip alone. On the double click: the user's correction was explicit,
+"nunca direto em um commit". A detached HEAD from a double click is a state
+nobody asked for and the way out of it is the reflog; switching to the branch
+whose tip is that commit is what the click meant.
+
+**Consequences:** `Checkout this commit` remains on the menu as the deliberate
+route to a detached HEAD; the cheap gesture never reaches it. A double click on
+a row carrying only `origin/x` is silent rather than creating a tracking
+branch — that needs a name, and the refs panel asks for it. The keyboard path
+to everything a drop offers is still the context menu, unchanged. The drop
+target is outlined while a drag is over it (`data-drop-row`); the working-tree
+row and the row a drag started on are not targets. A drag still carries a
+plain-text payload (the branch name, or the sha for a row) so Firefox starts
+it and so it can be dropped into an editor.

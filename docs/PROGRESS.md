@@ -9,6 +9,13 @@
 - **Phase:** v0.1 feature-complete. Every buildable item in `docs/ROADMAP.md`
   M0–M5 is checked off; the only open item is the dogfood gate, which is two
   weeks of use, not code.
+- **A row can be dragged onto another, and a double click switches branch**
+  (2026-09-29, ADR-0061): dropping a commit row (or a branch chip) on any other
+  commit row opens that row's context menu at the drop point, so the gesture
+  ends in the same question a right-click asks. Double-clicking a row switches
+  to the local branch drawn on it — never a bare commit, never a remote-only
+  row — via `rowSwitchesTo` in `views/history/headRef.ts`. Not used by hand in
+  the running app.
 - **Ctrl+F finds commits by their message** (2026-09-29, ADR-0060): a find bar
   floats over the History list and matches subject and body, ignoring case,
   across the *loaded* commits only (`historyLimit`). Typing selects the first
@@ -209,11 +216,16 @@
 
 ## Next up (in order)
 
-1. **Press Ctrl+F in the running app** (ADR-0060): search a keyword, walk the
+1. **Drag a row onto another and double-click a row in the running app**
+   (ADR-0061): check that the menu opens where the pointer let go, that the
+   outline follows the row under the drag in WebView2, that the button row
+   actually starts a drag without a click getting in the way, and that a chip
+   drop on the checkout still asks to merge.
+2. **Press Ctrl+F in the running app** (ADR-0060): search a keyword, walk the
    matches with Enter / Shift+Enter, check that the bar doesn't cover a match
    and that typing isn't slowed by the diff each move triggers. Try it from the
    commit message box too.
-2. **Validate the update flow end to end.** v0.1.10-alpha is the first release
+3. **Validate the update flow end to end.** v0.1.10-alpha is the first release
    carrying the updater, and the *swap* cannot be proven by it alone — a v0.1.9
    binary has no updater in it to do the swapping.
 
@@ -298,6 +310,29 @@
   until `buildPushCommand` emits a `<local>:<upstream>` refspec.
 
 ## Session log
+
+### 2026-09-29 (later) — a row dropped on a row asks, a double click switches
+
+"Eu quero que seja possivel arrastar uma linha na outra … Quando eu soltar o
+click deveria abrir o menu de contexto." And, corrected mid-task: "nunca
+direto em um commit" — the double click goes to the branch on the row, not to
+the commit.
+
+Both live in `HistoryView.tsx` (ADR-0061). The drag reuses the delegated
+handlers ADR-0026 put on the list: `dragStart` now also reads the row's
+`data-drag-oid`, and a drop resolves to either the existing merge (chip on the
+checkout's chip) or `openMenuAt` for the row underneath. The row under the
+drag carries `data-drop-row` for the outline. The double click is a row-level
+handler behind `rowSwitchesTo`, a pure rule in `headRef.ts` with its own
+tests; the chip's double click is untouched and still stops propagation. Two
+older chip tests changed meaning: a double click on a remote chip or a tag
+chip beside a local branch now switches to that local branch, because the
+click falls through to the row.
+
+No git command was built or parsed — `switchTo` and the menu already existed —
+so no safety review was needed. `npm test` 2550 passing (114 files), `tsc`
+clean, oxlint at its pre-existing warnings. **Not used by hand in the running
+app.**
 
 ### 2026-09-29 — Ctrl+F finds commits by their message
 

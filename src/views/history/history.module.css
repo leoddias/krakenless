@@ -621,3 +621,13 @@
   box-shadow: 0 0 0 1px var(--warning);
   color: var(--fg-strong);
 }
+
+/* --- dragging a row onto another ------------------------------------------ */
+
+/* The row a dragged commit is over, and would open its menu on if let go. An
+   inset dashed line rather than a fill: the fill already means "selected",
+   and the drop target is not selected until the drop. */
+.row[data-drop-row='true'] {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+}

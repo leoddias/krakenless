@@ -502,6 +502,177 @@ describe('HistoryView author pictures', () => {
   });
 });
 
+describe('dragging a commit row onto another', () => {
+  function transfer(): {
+    setData: () => void;
+    effectAllowed: string;
+    dropEffect: string;
+  } {
+    return { setData: () => {}, effectAllowed: '', dropEffect: '' };
+  }
+
+  function row(subject: string): HTMLElement {
+    return screen.getByRole('button', { name: new RegExp(subject) });
+  }
+
+  function dragRow(from: HTMLElement, onto: HTMLElement): void {
+    const dataTransfer = transfer();
+    fireEvent.dragStart(from, { dataTransfer });
+    fireEvent.dragOver(onto, { dataTransfer });
+    fireEvent.drop(onto, { dataTransfer, clientX: 120, clientY: 80 });
+  }
+
+  it('makes every commit row draggable', () => {
+    renderWithCommits([makeCommit(1), makeCommit(2)]);
+    expect(row('Commit 1')).toHaveAttribute('draggable', 'true');
+    expect(row('Commit 2')).toHaveAttribute('draggable', 'true');
+    // The working tree is not a commit and has no menu of this kind.
+    expect(screen.getByRole('button', { name: /Working tree/ })).not.toHaveAttribute(
+      'draggable',
+    );
+  });
+
+  it('opens the context menu of the row it lands on, where it was dropped', () => {
+    renderWithCommits([makeCommit(1), makeCommit(2), makeCommit(3)]);
+
+    dragRow(row('Commit 3'), row('Commit 1'));
+
+    const menu = screen.getByRole('menu', {
+      name: `Actions for commit ${makeCommit(1).shortOid}`,
+    });
+    expect(menu).toBeInTheDocument();
+    // Nothing ran: the drop is a question, and this is what it asks.
+    expect(mergeRefIntoMock).not.toHaveBeenCalled();
+    expect(switchToMock).not.toHaveBeenCalled();
+  });
+
+  it('selects the row it lands on, so the menu is about what is on screen', () => {
+    const store = renderWithCommits([makeCommit(1), makeCommit(2), makeCommit(3)]);
+    selectCommitMock.mockClear();
+
+    dragRow(row('Commit 3'), row('Commit 1'));
+
+    expect(selectCommitMock).toHaveBeenCalledWith(store, makeCommit(1).oid);
+  });
+
+  it('outlines the row under the drag while it is over it', () => {
+    renderWithCommits([makeCommit(1), makeCommit(2)]);
+    const dataTransfer = transfer();
+
+    fireEvent.dragStart(row('Commit 2'), { dataTransfer });
+    fireEvent.dragOver(row('Commit 1'), { dataTransfer });
+    expect(row('Commit 1')).toHaveAttribute('data-drop-row', 'true');
+    // The row in hand is not a place it can land.
+    expect(row('Commit 2')).not.toHaveAttribute('data-drop-row');
+
+    fireEvent.dragEnd(row('Commit 2'), { dataTransfer });
+    expect(row('Commit 1')).not.toHaveAttribute('data-drop-row');
+  });
+
+  it('does nothing when dropped on the row it came from', () => {
+    renderWithCommits([makeCommit(1), makeCommit(2)]);
+
+    dragRow(row('Commit 2'), row('Commit 2'));
+
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('does nothing when dropped on the working tree row', () => {
+    renderWithCommits([makeCommit(1), makeCommit(2)]);
+
+    dragRow(row('Commit 2'), screen.getByRole('button', { name: /Working tree/ }));
+
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('ignores a drop that no drag of ours started', () => {
+    renderWithCommits([makeCommit(1), makeCommit(2)]);
+
+    fireEvent.drop(row('Commit 1'), { dataTransfer: transfer() });
+
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+});
+
+describe('double-clicking a row', () => {
+  function row(subject: string): HTMLElement {
+    return screen.getByRole('button', { name: new RegExp(subject) });
+  }
+
+  it('switches to the local branch drawn on the row', () => {
+    renderWithCommits([
+      makeCommit(1, {
+        refs: [
+          { kind: 'head', name: 'HEAD' },
+          { kind: 'branch', name: 'main' },
+        ],
+      }),
+      makeCommit(2, {
+        refs: [
+          { kind: 'branch', name: 'feat/beta' },
+          { kind: 'remote-branch', name: 'origin/feat/beta' },
+        ],
+      }),
+    ]);
+
+    fireEvent.doubleClick(row('Commit 2'));
+
+    expect(switchToMock).toHaveBeenCalledTimes(1);
+    expect(switchToMock.mock.calls[0]?.[1]).toBe('feat/beta');
+  });
+
+  it('never checks a bare commit out', () => {
+    // A double click on a commit with no branch would leave HEAD detached — a
+    // state the user did not ask for, from a gesture too cheap to mean it.
+    renderWithCommits([
+      makeCommit(1, { refs: [{ kind: 'branch', name: 'main' }] }),
+      makeCommit(2),
+    ]);
+
+    fireEvent.doubleClick(row('Commit 2'));
+
+    expect(switchToMock).not.toHaveBeenCalled();
+  });
+
+  it('does nothing on the row of the branch already checked out', () => {
+    renderWithCommits([
+      makeCommit(1, {
+        refs: [
+          { kind: 'head', name: 'HEAD' },
+          { kind: 'branch', name: 'main' },
+        ],
+      }),
+    ]);
+
+    fireEvent.doubleClick(row('Commit 1'));
+
+    expect(switchToMock).not.toHaveBeenCalled();
+  });
+
+  it('does nothing on a row with only a remote-tracking branch', () => {
+    renderWithCommits([
+      makeCommit(1, { refs: [{ kind: 'remote-branch', name: 'origin/feat/beta' }] }),
+    ]);
+
+    fireEvent.doubleClick(row('Commit 1'));
+
+    expect(switchToMock).not.toHaveBeenCalled();
+  });
+
+  it('waits while a command is running', () => {
+    const store = renderWithCommits([
+      makeCommit(1, { refs: [{ kind: 'branch', name: 'feat/beta' }] }),
+    ]);
+    act(() => {
+      store.dispatch({ type: 'busy', busy: true });
+    });
+
+    fireEvent.doubleClick(row('Commit 1'));
+
+    expect(switchToMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('dragging a branch onto the checkout', () => {
   /** A row whose refs are HEAD -> main, i.e. the checked-out branch. */
   function headRow(index: number): Commit {
@@ -581,18 +752,23 @@ describe('dragging a branch onto the checkout', () => {
     expect(mergeRefIntoMock).not.toHaveBeenCalled();
   });
 
-  it('only lets go of a branch over the checked-out one', () => {
+  it('only merges when let go over the checked-out one', () => {
     renderWithCommits([headRow(1), branchRow(2, 'feature/x'), branchRow(3, 'feature/y')]);
     const dataTransfer = transfer();
     const source = screen.getByTitle(/^branch feature\/x/);
     const other = screen.getByTitle(/^branch feature\/y/);
 
     fireEvent.dragStart(source, { dataTransfer });
-    fireEvent.drop(other, { dataTransfer });
+    fireEvent.drop(other, { dataTransfer, clientX: 40, clientY: 50 });
 
     // Dropping onto another branch would mean checking it out first, which is
-    // not something a 200px gesture should do to somebody's working tree.
+    // not something a 200px gesture should do to somebody's working tree. What
+    // it gets instead is that row's menu, which asks (ADR-0061).
     expect(screen.queryByRole('dialog')).toBeNull();
+    expect(mergeRefIntoMock).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole('menu', { name: `Actions for commit ${makeCommit(3).shortOid}` }),
+    ).toBeInTheDocument();
   });
 
   it('ignores a drop that no drag of ours started', () => {
@@ -826,10 +1002,21 @@ describe('switching branch from a chip', () => {
     expect(switchToMock).not.toHaveBeenCalled();
   });
 
-  it('leaves a remote-tracking chip alone', () => {
+  it('never switches to a remote-tracking chip', () => {
     // `git switch origin/main` detaches HEAD rather than checking that branch
     // out, and creating the local branch that tracks it needs a name the
     // repository does not have yet — that is the refs panel's question to ask.
+    // A row with nothing but the remote chip on it therefore does nothing.
+    renderRefs([{ kind: 'remote-branch', name: 'origin/feat/beta' }]);
+
+    fireEvent.doubleClick(chip('origin/feat/beta'));
+
+    expect(switchToMock).not.toHaveBeenCalled();
+  });
+
+  it('answers a double click on a remote chip with the local branch beside it', () => {
+    // The chip itself has nothing to switch to, so the click falls through to
+    // the row, and the row switches to the local branch drawn on it.
     renderRefs([
       { kind: 'branch', name: 'main' },
       { kind: 'remote-branch', name: 'origin/feat/beta' },
@@ -837,14 +1024,12 @@ describe('switching branch from a chip', () => {
 
     fireEvent.doubleClick(chip('origin/feat/beta'));
 
-    expect(switchToMock).not.toHaveBeenCalled();
+    expect(switchToMock).toHaveBeenCalledTimes(1);
+    expect(switchToMock.mock.calls[0]?.[1]).toBe('main');
   });
 
-  it('leaves a tag alone', () => {
-    renderRefs([
-      { kind: 'branch', name: 'main' },
-      { kind: 'tag', name: 'v0.1.0' },
-    ]);
+  it('never switches to a tag', () => {
+    renderRefs([{ kind: 'tag', name: 'v0.1.0' }]);
 
     fireEvent.doubleClick(chip('v0.1.0'));
 
