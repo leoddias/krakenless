@@ -1966,3 +1966,29 @@ remote chip; the row underneath is what answers. The revision is the full
 `refs/remotes/…` path so a local branch that happens to be named `origin/main`
 cannot win the short name's resolution, and `--no-autostash` pins the refusal
 over uncommitted work against a `merge.autoStash` config (safety review).
+
+## ADR-0063 — The chip is the double-click target, not the row
+
+**Decision:** Amends ADR-0061 and ADR-0062. A double click on a commit row
+does nothing. The chips on it answer: a local branch chip switches to that
+branch (as before), a remote-tracking chip goes to the local branch that stands
+for *that* remote, moved forward (ADR-0062's rule, now applied per chip via
+`remoteSwitchFor([chip], …)`). Tag and HEAD chips stay inert, and a bare
+commit is never checked out. The chip's tooltip says what its double click
+does — "switch to main and move it here", "create main from it and switch to
+it".
+
+**Why:** "Nos precisamos que o checkout da branch aconteça quando a pessoa
+double click na tag pois isso permite o checkout de um commit que pode estar
+em mais de uma branch e/ou tag." A commit with two branches on it has two
+answers, and a row-level rule that took the first one was choosing for the
+user. The chip is the one thing on the row that names a single ref, so it is
+the one thing a switch can be hung on. The same goes for two remotes on one
+commit in a fork workflow: `origin/main` and `upstream/main` are different
+branches to move.
+
+**Consequences:** `rowSwitchesTo` is gone; `chipSwitchesOnDoubleClick` and
+`remoteSwitchFor` are the two rules left, both pure and tested. A double click
+on the row's empty space or its message does nothing, which is also what
+keeps a mis-aimed double click from moving the working tree. Chips are
+narrow: hitting one is the cost of being asked which branch was meant.

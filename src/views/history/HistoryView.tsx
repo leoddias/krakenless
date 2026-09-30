@@ -60,7 +60,6 @@ import {
   isCurrentChip,
   isHeadRow,
   isRedundantHeadChip,
-  rowSwitchesTo,
 } from './headRef';
 import {
   FIND_COMMITS_EVENT,
@@ -964,22 +963,6 @@ function CommitRow({
   // the user reads some other commit.
   const current = checkedOutBranch(commit.refs);
   const atHead = isHeadRow(commit.refs);
-  const store = useStore();
-  const busy = useAppState(isBusy);
-  const branches = useAppState((state) => state.branches);
-  // What a double click on the row switches to: a local branch drawn on it,
-  // never the bare commit (ADR-0061). A stash row has no branch to offer. A
-  // row with only a remote-tracking branch goes to the local branch that
-  // stands for it, moved forward to here (ADR-0062).
-  const switchesTo = stash === undefined ? rowSwitchesTo(commit.refs) : null;
-  const remoteSwitch =
-    stash !== undefined || switchesTo !== null
-      ? null
-      : remoteSwitchFor(
-          commit.refs,
-          commit.oid,
-          branches.state === 'ready' ? branches.value : null,
-        );
   return (
     <RowButton
       index={index}
@@ -991,23 +974,6 @@ function CommitRow({
       onContextMenu={onContextMenu}
       dragOid={commit.oid}
       dropHere={dropHere}
-      {...(switchesTo !== null
-        ? {
-            onDoubleClick: () => {
-              if (busy) return;
-              // `switchTo` goes through `git switch`, so a dirty working tree is
-              // a refusal from git rather than an overwrite.
-              void switchTo(store, switchesTo);
-            },
-          }
-        : remoteSwitch !== null
-          ? {
-              onDoubleClick: () => {
-                if (busy) return;
-                void switchToRemote(store, remoteSwitch);
-              },
-            }
-          : {})}
       label={
         // Dimming is only visible; a listener hears which rows matched.
         search !== '' && dimmed !== true
@@ -1114,7 +1080,6 @@ function RowButton({
   dimmed = false,
   onSelect,
   onContextMenu,
-  onDoubleClick,
   dragOid,
   dropHere = false,
   label,
@@ -1123,8 +1088,6 @@ function RowButton({
   Partial<MenuRowProps> & {
     /** The row HEAD is on; tinted even when the selection is elsewhere. */
     head?: boolean;
-    /** Set on rows a double click does something to (a branch switch). */
-    onDoubleClick?: () => void;
     /**
      * Set on rows that can be picked up and dropped on one another; the oid is
      * what the list reads back off the element at both ends of the gesture.
@@ -1150,7 +1113,6 @@ function RowButton({
       tabIndex={tabbable ? 0 : -1}
       onClick={() => onSelect(index, false)}
       {...(onContextMenu === undefined ? {} : { onContextMenu })}
-      {...(onDoubleClick === undefined ? {} : { onDoubleClick })}
     >
       {children}
     </button>
@@ -1284,14 +1246,16 @@ function WorktreeRow({
 }
 
 /**
- * Whether double-clicking this chip switches to it.
+ * Whether double-clicking this chip runs `git switch` to it.
  *
  * Local branches only, and not the one already checked out. A remote-tracking
- * chip is deliberately excluded: `git switch origin/main` detaches HEAD rather
- * than checking that branch out, and the thing a user means by it — create the
- * local branch that tracks it — is a ref this repository does not have yet.
- * That belongs to the refs panel's `RemoteRow`, which asks for the name first.
- * Tags and HEAD have nothing to switch to.
+ * chip is answered differently — `git switch origin/main` detaches HEAD — by
+ * the local branch that stands for it (`remoteSwitchFor`, ADR-0062). Tags and
+ * HEAD have nothing to switch to: a tag is a commit, and a double click never
+ * checks a bare commit out (ADR-0061).
+ *
+ * The chip, not the row, is the target on purpose (ADR-0063): a commit with
+ * two branches on it has two answers, and the chip is how the user gives one.
  *
  * Pure and exported so the one rule that decides whether a double click moves
  * somebody's working tree is asserted on its own.
@@ -1316,6 +1280,7 @@ function RefChip({
 }): ReactNode {
   const store = useStore();
   const busy = useAppState(isBusy);
+  const branches = useAppState((state) => state.branches);
   const kind = REF_CHIP_CLASS[commitRef.kind];
   const isBranch = commitRef.kind === 'branch' || commitRef.kind === 'remote-branch';
   // A branch you are not on can be picked up; the branch you *are* on is where
@@ -1324,6 +1289,17 @@ function RefChip({
   const draggable = isBranch && !current;
   const dropTarget = commitRef.kind === 'branch' && current;
   const switches = chipSwitchesOnDoubleClick(commitRef, current);
+  // A remote-tracking chip goes to the local branch that stands for it, moved
+  // forward to this commit (ADR-0062) — decided per chip, so two remotes on
+  // one row are two different answers.
+  const remoteSwitch =
+    commitRef.kind === 'remote-branch'
+      ? remoteSwitchFor(
+          [commitRef],
+          oid,
+          branches.state === 'ready' ? branches.value : null,
+        )
+      : null;
   // Everything with a row in the panel on the left. `HEAD` has none — it is
   // where the checkout is, not a ref anybody selects — and it is folded into
   // the branch chip beside it anyway.
@@ -1372,15 +1348,25 @@ function RefChip({
               void switchTo(store, commitRef.name);
             },
           }
-        : {})}
+        : remoteSwitch !== null
+          ? {
+              onDoubleClick: (event: ReactMouseEvent<HTMLSpanElement>) => {
+                event.stopPropagation();
+                if (busy) return;
+                void switchToRemote(store, remoteSwitch);
+              },
+            }
+          : {})}
       title={
         switches
           ? `${REF_LABEL[commitRef.kind]} ${commitRef.name} — click to select it in the list on the left, double-click to switch to it, or drag onto the checked-out branch to merge it in`
-          : draggable
-            ? `${REF_LABEL[commitRef.kind]} ${commitRef.name} — click to select it in the list on the left, or drag onto the checked-out branch to merge it in`
-            : selects
-              ? `${current ? 'checked out ' : ''}${REF_LABEL[commitRef.kind]} ${commitRef.name} — click to select it in the list on the left`
-              : `${current ? 'checked out ' : ''}${REF_LABEL[commitRef.kind]} ${commitRef.name}`
+          : remoteSwitch !== null
+            ? `${REF_LABEL[commitRef.kind]} ${commitRef.name} — click to select it in the list on the left, double-click to ${remoteSwitch.kind === 'create' ? `create ${remoteSwitch.name} from it and switch to it` : `switch to ${remoteSwitch.name} and move it here`}, or drag onto the checked-out branch to merge it in`
+            : draggable
+              ? `${REF_LABEL[commitRef.kind]} ${commitRef.name} — click to select it in the list on the left, or drag onto the checked-out branch to merge it in`
+              : selects
+                ? `${current ? 'checked out ' : ''}${REF_LABEL[commitRef.kind]} ${commitRef.name} — click to select it in the list on the left`
+                : `${current ? 'checked out ' : ''}${REF_LABEL[commitRef.kind]} ${commitRef.name}`
       }
     >
       {current ? (

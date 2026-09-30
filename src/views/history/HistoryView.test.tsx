@@ -608,26 +608,41 @@ describe('double-clicking a row', () => {
     return screen.getByRole('button', { name: new RegExp(subject) });
   }
 
-  it('switches to the local branch drawn on the row', () => {
-    renderWithCommits([
-      makeCommit(1, {
-        refs: [
-          { kind: 'head', name: 'HEAD' },
-          { kind: 'branch', name: 'main' },
+  it('does nothing, even with a branch on the row: the chip is the target (ADR-0063)', () => {
+    // A commit with two branches on it has two answers; the row cannot say
+    // which one was meant, so it says nothing and the chips answer.
+    renderHistory((store) => {
+      store.dispatch({
+        type: 'commits/loaded',
+        commits: [
+          makeCommit(1, {
+            refs: [
+              { kind: 'branch', name: 'feat/beta' },
+              { kind: 'branch', name: 'feat/gamma' },
+              { kind: 'remote-branch', name: 'origin/feat/beta' },
+            ],
+          }),
         ],
-      }),
-      makeCommit(2, {
-        refs: [
-          { kind: 'branch', name: 'feat/beta' },
-          { kind: 'remote-branch', name: 'origin/feat/beta' },
+      });
+      store.dispatch({
+        type: 'branches/loaded',
+        branches: [
+          {
+            name: 'feat/beta',
+            current: false,
+            oid: makeCommit(1).oid,
+            ahead: 0,
+            behind: 0,
+            remote: false,
+          },
         ],
-      }),
-    ]);
+      });
+    });
 
-    fireEvent.doubleClick(row('Commit 2'));
+    fireEvent.doubleClick(row('Commit 1'));
 
-    expect(switchToMock).toHaveBeenCalledTimes(1);
-    expect(switchToMock.mock.calls[0]?.[1]).toBe('feat/beta');
+    expect(switchToMock).not.toHaveBeenCalled();
+    expect(switchToRemoteMock).not.toHaveBeenCalled();
   });
 
   it('never checks a bare commit out', () => {
@@ -641,107 +656,7 @@ describe('double-clicking a row', () => {
     fireEvent.doubleClick(row('Commit 2'));
 
     expect(switchToMock).not.toHaveBeenCalled();
-  });
-
-  it('does nothing on the row of the branch already checked out', () => {
-    renderWithCommits([
-      makeCommit(1, {
-        refs: [
-          { kind: 'head', name: 'HEAD' },
-          { kind: 'branch', name: 'main' },
-        ],
-      }),
-    ]);
-
-    fireEvent.doubleClick(row('Commit 1'));
-
-    expect(switchToMock).not.toHaveBeenCalled();
-  });
-
-  describe('on a row with only a remote-tracking branch', () => {
-    const REMOTE_ROW = makeCommit(1, {
-      refs: [{ kind: 'remote-branch', name: 'origin/main' }],
-    });
-    function branch(name: string, overrides: Partial<Branch> = {}): Branch {
-      return {
-        name,
-        current: false,
-        oid: makeCommit(2).oid,
-        ahead: 0,
-        behind: 0,
-        remote: false,
-        ...overrides,
-      };
-    }
-    function renderRemoteRow(branches: Branch[] | null): void {
-      renderHistory((store) => {
-        store.dispatch({ type: 'commits/loaded', commits: [REMOTE_ROW, makeCommit(2)] });
-        if (branches !== null) store.dispatch({ type: 'branches/loaded', branches });
-      });
-    }
-
-    it('never detaches HEAD onto the commit', () => {
-      renderRemoteRow([branch('origin/main', { remote: true })]);
-
-      fireEvent.doubleClick(row('Commit 1'));
-
-      expect(switchToMock).not.toHaveBeenCalled();
-    });
-
-    it('moves the checked-out branch forward when it tracks the remote from behind', () => {
-      // The reported bug: on a stale `main`, double-clicking `origin/main`
-      // did nothing, and the user wanted to end up there.
-      renderRemoteRow([
-        branch('main', { current: true, upstream: 'origin/main', behind: 4 }),
-        branch('origin/main', { remote: true, oid: REMOTE_ROW.oid }),
-      ]);
-
-      fireEvent.doubleClick(row('Commit 1'));
-
-      expect(switchToRemoteMock).toHaveBeenCalledTimes(1);
-      expect(switchToRemoteMock.mock.calls[0]?.[1]).toEqual({
-        kind: 'forward',
-        name: 'main',
-        remoteRef: 'origin/main',
-        current: true,
-      });
-    });
-
-    it('creates the local branch when none stands for the remote', () => {
-      renderRemoteRow([
-        branch('feat/x', { current: true }),
-        branch('origin/main', { remote: true, oid: REMOTE_ROW.oid }),
-      ]);
-
-      fireEvent.doubleClick(row('Commit 1'));
-
-      expect(switchToRemoteMock.mock.calls[0]?.[1]).toEqual({
-        kind: 'create',
-        name: 'main',
-        remoteRef: 'origin/main',
-      });
-    });
-
-    it('does nothing before the branch list has been read', () => {
-      renderRemoteRow(null);
-
-      fireEvent.doubleClick(row('Commit 1'));
-
-      expect(switchToRemoteMock).not.toHaveBeenCalled();
-    });
-  });
-
-  it('waits while a command is running', () => {
-    const store = renderWithCommits([
-      makeCommit(1, { refs: [{ kind: 'branch', name: 'feat/beta' }] }),
-    ]);
-    act(() => {
-      store.dispatch({ type: 'busy', busy: true });
-    });
-
-    fireEvent.doubleClick(row('Commit 1'));
-
-    expect(switchToMock).not.toHaveBeenCalled();
+    expect(switchToRemoteMock).not.toHaveBeenCalled();
   });
 });
 
@@ -1074,29 +989,148 @@ describe('switching branch from a chip', () => {
     expect(switchToMock).not.toHaveBeenCalled();
   });
 
-  it('never runs `git switch` on a remote-tracking chip itself', () => {
-    // `git switch origin/main` detaches HEAD rather than checking that branch
-    // out. The row underneath answers instead, with the local branch that
-    // stands for the remote (see "double-clicking a row").
-    renderRefs([{ kind: 'remote-branch', name: 'origin/feat/beta' }]);
-
-    fireEvent.doubleClick(chip('origin/feat/beta'));
-
-    expect(switchToMock).not.toHaveBeenCalled();
-  });
-
-  it('answers a double click on a remote chip with the local branch beside it', () => {
-    // The chip itself has nothing to switch to, so the click falls through to
-    // the row, and the row switches to the local branch drawn on it.
+  it('picks the branch the chip names when several share the row', () => {
+    // The whole reason the chip is the target (ADR-0063): the row could not
+    // say which of these two was meant.
     renderRefs([
+      { kind: 'head', name: 'HEAD' },
       { kind: 'branch', name: 'main' },
-      { kind: 'remote-branch', name: 'origin/feat/beta' },
+      { kind: 'branch', name: 'feat/beta' },
+      { kind: 'branch', name: 'feat/gamma' },
     ]);
 
-    fireEvent.doubleClick(chip('origin/feat/beta'));
+    fireEvent.doubleClick(chip('feat/gamma'));
 
     expect(switchToMock).toHaveBeenCalledTimes(1);
-    expect(switchToMock.mock.calls[0]?.[1]).toBe('main');
+    expect(switchToMock.mock.calls[0]?.[1]).toBe('feat/gamma');
+  });
+
+  describe('on a remote-tracking chip', () => {
+    function branch(name: string, overrides: Partial<Branch> = {}): Branch {
+      return {
+        name,
+        current: false,
+        oid: makeCommit(2).oid,
+        ahead: 0,
+        behind: 0,
+        remote: false,
+        ...overrides,
+      };
+    }
+    function renderRemoteChip(refs: Commit['refs'], branches: Branch[] | null): void {
+      renderHistory((store) => {
+        store.dispatch({
+          type: 'commits/loaded',
+          commits: [makeCommit(1, { refs }), makeCommit(2)],
+        });
+        if (branches !== null) store.dispatch({ type: 'branches/loaded', branches });
+      });
+    }
+    const ORIGIN_MAIN: Commit['refs'] = [{ kind: 'remote-branch', name: 'origin/main' }];
+
+    it('never runs `git switch` on the remote name itself', () => {
+      // `git switch origin/main` detaches HEAD rather than checking that
+      // branch out.
+      renderRemoteChip(ORIGIN_MAIN, [branch('origin/main', { remote: true })]);
+
+      fireEvent.doubleClick(chip('origin/main'));
+
+      expect(switchToMock).not.toHaveBeenCalled();
+    });
+
+    it('moves the checked-out branch forward when it tracks the remote from behind', () => {
+      // The reported bug: on a stale `main`, double-clicking `origin/main`
+      // did nothing, and the user wanted to end up there.
+      renderRemoteChip(ORIGIN_MAIN, [
+        branch('main', { current: true, upstream: 'origin/main', behind: 4 }),
+        branch('origin/main', { remote: true, oid: makeCommit(1).oid }),
+      ]);
+
+      fireEvent.doubleClick(chip('origin/main'));
+
+      expect(switchToRemoteMock).toHaveBeenCalledTimes(1);
+      expect(switchToRemoteMock.mock.calls[0]?.[1]).toEqual({
+        kind: 'forward',
+        name: 'main',
+        remoteRef: 'origin/main',
+        current: true,
+      });
+    });
+
+    it('creates the local branch when none stands for the remote', () => {
+      renderRemoteChip(ORIGIN_MAIN, [
+        branch('feat/x', { current: true }),
+        branch('origin/main', { remote: true, oid: makeCommit(1).oid }),
+      ]);
+
+      fireEvent.doubleClick(chip('origin/main'));
+
+      expect(switchToRemoteMock.mock.calls[0]?.[1]).toEqual({
+        kind: 'create',
+        name: 'main',
+        remoteRef: 'origin/main',
+      });
+    });
+
+    it('answers for the chip that was clicked, not the first remote on the row', () => {
+      renderRemoteChip(
+        [
+          { kind: 'remote-branch', name: 'origin/main' },
+          { kind: 'remote-branch', name: 'upstream/main' },
+        ],
+        [
+          branch('main', { upstream: 'upstream/main' }),
+          branch('origin/main', { remote: true, oid: makeCommit(1).oid }),
+          branch('upstream/main', { remote: true, oid: makeCommit(1).oid }),
+        ],
+      );
+
+      fireEvent.doubleClick(chip('upstream/main'));
+
+      expect(switchToRemoteMock.mock.calls[0]?.[1]).toMatchObject({
+        kind: 'forward',
+        name: 'main',
+        remoteRef: 'upstream/main',
+      });
+    });
+
+    it('does not also select the commit under the chip', () => {
+      renderRemoteChip(ORIGIN_MAIN, [
+        branch('main', { current: true, upstream: 'origin/main' }),
+        branch('origin/main', { remote: true, oid: makeCommit(1).oid }),
+      ]);
+      selectCommitMock.mockClear();
+
+      fireEvent.doubleClick(chip('origin/main'));
+
+      expect(selectCommitMock).not.toHaveBeenCalled();
+    });
+
+    it('does nothing before the branch list has been read', () => {
+      renderRemoteChip(ORIGIN_MAIN, null);
+
+      fireEvent.doubleClick(chip('origin/main'));
+
+      expect(switchToRemoteMock).not.toHaveBeenCalled();
+    });
+
+    it('waits while a command is running', () => {
+      renderHistory((store) => {
+        store.dispatch({
+          type: 'commits/loaded',
+          commits: [makeCommit(1, { refs: ORIGIN_MAIN })],
+        });
+        store.dispatch({
+          type: 'branches/loaded',
+          branches: [branch('origin/main', { remote: true, oid: makeCommit(1).oid })],
+        });
+        store.dispatch({ type: 'busy', busy: true });
+      });
+
+      fireEvent.doubleClick(chip('origin/main'));
+
+      expect(switchToRemoteMock).not.toHaveBeenCalled();
+    });
   });
 
   it('never switches to a tag', () => {

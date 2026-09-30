@@ -5,7 +5,6 @@ import {
   isCurrentChip,
   isHeadRow,
   isRedundantHeadChip,
-  rowSwitchesTo,
 } from './headRef';
 
 const HEAD: CommitRef = { kind: 'head', name: 'HEAD' };
@@ -74,38 +73,5 @@ describe('isRedundantHeadChip', () => {
 
   it('never drops a chip that is not HEAD', () => {
     expect(isRedundantHeadChip(branch('main'), 'main')).toBe(false);
-  });
-});
-
-describe('rowSwitchesTo', () => {
-  it('names the local branch on the row', () => {
-    expect(rowSwitchesTo([{ kind: 'branch', name: 'feat/x' }])).toBe('feat/x');
-  });
-
-  it('skips the branch already checked out and takes the next local one', () => {
-    expect(
-      rowSwitchesTo([
-        { kind: 'head', name: 'HEAD' },
-        { kind: 'branch', name: 'main' },
-        { kind: 'branch', name: 'feat/x' },
-      ]),
-    ).toBe('feat/x');
-  });
-
-  it('is null when the only branch is the checkout', () => {
-    expect(
-      rowSwitchesTo([
-        { kind: 'head', name: 'HEAD' },
-        { kind: 'branch', name: 'main' },
-      ]),
-    ).toBeNull();
-  });
-
-  it('never answers a remote-tracking branch, a tag or a bare commit', () => {
-    expect(rowSwitchesTo([{ kind: 'remote-branch', name: 'origin/feat/x' }])).toBeNull();
-    expect(rowSwitchesTo([{ kind: 'tag', name: 'v1.0' }])).toBeNull();
-    expect(rowSwitchesTo([])).toBeNull();
-    // Detached HEAD on a commit with nothing else: still nothing to switch to.
-    expect(rowSwitchesTo([{ kind: 'head', name: 'HEAD' }])).toBeNull();
   });
 });

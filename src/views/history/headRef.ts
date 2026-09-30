@@ -40,19 +40,3 @@ export function isCurrentChip(ref: CommitRef, current: string | null): boolean {
 export function isRedundantHeadChip(ref: CommitRef, current: string | null): boolean {
   return ref.kind === 'head' && current !== null;
 }
-
-/**
- * The branch a double click on this row switches to, or `null`.
- *
- * The first local branch on the row that is not the checkout. A row is never
- * checked out as a bare commit from a gesture this cheap — that leaves HEAD
- * detached, and the way back is a reflog nobody asked to learn — so a row with
- * no local branch on it, or only the one already checked out, answers `null`.
- * Remote-tracking branches and tags do not count for the same reason the chip
- * rule (`chipSwitchesOnDoubleClick`) leaves them alone.
- */
-export function rowSwitchesTo(refs: CommitRef[]): string | null {
-  const current = checkedOutBranch(refs);
-  const branch = refs.find((ref) => ref.kind === 'branch' && ref.name !== current);
-  return branch === undefined ? null : branch.name;
-}

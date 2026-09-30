@@ -12,13 +12,12 @@
 - **A row can be dragged onto another, and a double click switches branch**
   (2026-09-29, ADR-0061, ADR-0062): dropping a commit row (or a branch chip) on
   any other commit row opens that row's context menu at the drop point, so the
-  gesture ends in the same question a right-click asks. Double-clicking a row
-  switches to the local branch drawn on it — never a bare commit — via
-  `rowSwitchesTo` in `views/history/headRef.ts`. A row with only `origin/x`
-  goes to the local branch that tracks it (or shares its name), switched to and
-  fast-forwarded with `merge --ff-only`; with no such branch one is created
-  from it (`views/history/remoteSwitch.ts`, `switchToRemote`). Not used by hand
-  in the running app.
+  gesture ends in the same question a right-click asks. Double-clicking a
+  *chip* (ADR-0063, not the row) switches to the branch it names — never a
+  bare commit. A remote chip `origin/x` goes to the local branch that tracks it
+  (or shares its name), switched to and fast-forwarded with `merge --ff-only`;
+  with no such branch one is created from it (`views/history/remoteSwitch.ts`,
+  `switchToRemote`). Not used by hand in the running app.
 - **Ctrl+F finds commits by their message** (2026-09-29, ADR-0060): a find bar
   floats over the History list and matches subject and body, ignoring case,
   across the *loaded* commits only (`historyLimit`). Typing selects the first
@@ -219,13 +218,14 @@
 
 ## Next up (in order)
 
-1. **Drag a row onto another and double-click a row in the running app**
-   (ADR-0061, ADR-0062): check that the menu opens where the pointer let go,
+1. **Drag a row onto another and double-click a chip in the running app**
+   (ADR-0061 to ADR-0063): check that the menu opens where the pointer let go,
    that the outline follows the row under the drag in WebView2, that the button
    row actually starts a drag without a click getting in the way, and that a
    chip drop on the checkout still asks to merge. Then the reported case: on a
    stale `main`, double-click the `origin/main` row and confirm `main` moves
    forward; on a diverged branch confirm the error notice and no merge commit.
+   Chips are narrow — see whether the double click lands on them comfortably.
 2. **Press Ctrl+F in the running app** (ADR-0060): search a keyword, walk the
    matches with Enter / Shift+Enter, check that the bar doesn't cover a match
    and that typing isn't slowed by the diff each move triggers. Try it from the
@@ -315,6 +315,19 @@
   until `buildPushCommand` emits a `<local>:<upstream>` refspec.
 
 ## Session log
+
+### 2026-09-30 — the chip, not the row, answers the double click
+
+"Nos precisamos que o checkout da branch aconteça quando a pessoa double click
+na tag pois isso permite o checkout de um commit que pode estar em mais de uma
+branch e/ou tag." The row-level rule from ADR-0061 took the first branch on
+the row, which chose for the user. ADR-0063 moves the target to the chip:
+local chip switches (unchanged), remote chip runs ADR-0062's rule for that
+remote alone, row does nothing. `rowSwitchesTo` removed with its tests; chip
+tooltips now say what the double click does. No git command changed.
+
+`npm test` 2572 passing (115 files), `tsc` clean, oxlint at its 11
+pre-existing warnings. **Not used by hand in the running app.**
 
 ### 2026-09-29 (later still) — the remote-only row answers the double click
 
