@@ -161,14 +161,38 @@ export interface ConfirmDialog {
   escalate?: (result: unknown) => ConfirmDialog | null;
 }
 
-type Dialog = NameDialog | ConfirmDialog;
+/**
+ * A question whose answer is a commit message: the text arrives filled in and
+ * the user edits it. Used to reword HEAD (see `rewordDialog.ts`).
+ */
+export interface MessageDialog {
+  kind: 'message';
+  title: string;
+  /** What will happen, in the words that become the confirmation reason. */
+  question: string;
+  /** Shown as a danger notice when the rewrite is one others may notice. */
+  warning?: string;
+  /** The message as it stands, exactly as git has it. */
+  initial: string;
+  confirmLabel: string;
+  run: (message: string, reason: string) => Promise<unknown>;
+}
+
+type Dialog = NameDialog | ConfirmDialog | MessageDialog;
 
 export function CommitActions({
   target,
   onDismiss,
+  onEditMessage,
 }: {
   target: CommitMenuTarget;
   onDismiss: () => void;
+  /**
+   * Opens HEAD's message for editing. The history list owns that dialog,
+   * because the message has to be read from git first and this host closes
+   * with the menu when no question is set by then.
+   */
+  onEditMessage: (commit: Commit) => void;
 }): ReactNode {
   const store = useStore();
   const busy = useAppState(isBusy);
@@ -177,6 +201,7 @@ export function CommitActions({
   const repo = useAppState((state) => state.repo);
   const branches = useAppState((state) => state.branches);
   const tags = useAppState((state) => state.tags);
+  const operation = useAppState((state) => state.operation);
   const [menuOpen, setMenuOpen] = useState(true);
   const [dialog, setDialog] = useState<Dialog | null>(null);
 
@@ -265,6 +290,9 @@ export function CommitActions({
         return;
       case 'revert':
         void revertCommitOnHead(store, commit.oid);
+        return;
+      case 'reword':
+        onEditMessage(commit);
         return;
       case 'branch':
         setDialog({
@@ -508,6 +536,7 @@ export function CommitActions({
           hasConflicts: status.state === 'ready' && status.value.hasConflicts,
           hasLocalChanges: status.state === 'ready' && hasTrackedChanges(status.value),
           remotes,
+          operation: operation.kind,
         })
       : buildStashMenu(stash, {
           busy,
@@ -643,6 +672,8 @@ export function DialogHost({
             onClose={onClose}
             onRun={finish}
           />
+        ) : dialog.kind === 'message' ? (
+          <MessageBody dialog={dialog} locked={locked} onClose={onClose} onRun={finish} />
         ) : (
           <NameBody dialog={dialog} locked={locked} onClose={onClose} onRun={finish} />
         )}
@@ -842,6 +873,98 @@ function NameBody({
           disabled={locked || (touched && error !== null)}
         >
           Create
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function MessageBody({
+  dialog,
+  locked,
+  onClose,
+  onRun,
+}: {
+  dialog: MessageDialog;
+  locked: boolean;
+  onClose: () => void;
+  onRun: (result: Promise<unknown>) => void;
+}): ReactNode {
+  const [message, setMessage] = useState(dialog.initial);
+  const textRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // The caret goes to the end of the subject, where a typo is usually fixed
+  // from, and nothing is selected: a stray keystroke must not replace it all.
+  useEffect(() => {
+    const text = textRef.current;
+    if (text === null) return;
+    text.focus();
+    const subjectEnd = dialog.initial.indexOf('\n');
+    const at = subjectEnd === -1 ? dialog.initial.length : subjectEnd;
+    text.setSelectionRange(at, at);
+  }, [dialog.initial]);
+
+  const empty = message.trim().length === 0;
+  // Saving an unchanged message would still give the commit a new hash (a new
+  // committer date) for nothing, so it is not offered.
+  const unchanged = message === dialog.initial;
+  const disabled = locked || empty || unchanged;
+
+  const submit = (): void => {
+    if (disabled) return;
+    onRun(dialog.run(message, dialog.question));
+  };
+
+  return (
+    <form
+      className={styles.form}
+      onSubmit={(event) => {
+        event.preventDefault();
+        submit();
+      }}
+    >
+      <p className={styles.question}>{dialog.question}</p>
+      {dialog.warning !== undefined && (
+        <p className={styles.questionDanger} role="status">
+          {dialog.warning}
+        </p>
+      )}
+      <label className={styles.field}>
+        <span className={styles.fieldLabel}>Message</span>
+        <textarea
+          className={`${styles.textarea} ${styles.message}`}
+          ref={textRef}
+          value={message}
+          disabled={locked}
+          rows={6}
+          spellCheck
+          onChange={(event) => setMessage(event.target.value)}
+          onKeyDown={(event) => {
+            // Enter is a newline in a message, so saving from the keyboard
+            // takes Ctrl+Enter.
+            if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+              event.preventDefault();
+              submit();
+            }
+          }}
+        />
+      </label>
+      {empty && (
+        <p className={styles.fieldError} role="alert">
+          A commit needs a message.
+        </p>
+      )}
+      <div className={styles.actions}>
+        <button
+          type="button"
+          className={styles.secondary}
+          disabled={locked}
+          onClick={onClose}
+        >
+          Cancel
+        </button>
+        <button type="submit" className={styles.primary} disabled={disabled}>
+          {dialog.confirmLabel}
         </button>
       </div>
     </form>

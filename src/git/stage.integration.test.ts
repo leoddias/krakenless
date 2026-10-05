@@ -7,16 +7,19 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   buildCommitCommand,
+  buildRewordHeadCommand,
   buildStageCommand,
+  buildTreeOfCommand,
   buildUnstageCommand,
 } from './commands/stage';
+import { buildResetCommand } from './commands/history';
 
 // These spawn dozens of real git processes against fresh repositories. Under
 // the parallel runner that comfortably exceeds the 5s default, and a timeout
@@ -118,5 +121,72 @@ describe('commit', () => {
 
     expect(git(['rev-list', '--count', 'HEAD']).trim()).toBe(before);
     expect(git(['log', '-1', '--format=%s'])).toContain('amended message');
+  });
+});
+
+describe('reword HEAD', () => {
+  it('replaces the message and leaves staged and unstaged work where it was', () => {
+    const before = git(['rev-parse', 'HEAD']).trim();
+    const tree = git(['rev-parse', 'HEAD^{tree}']).trim();
+    write('drop.txt', 'staged edit\n');
+    git(buildStageCommand(['drop.txt']).args);
+    write('keep.txt', 'unstaged edit\n');
+
+    git(buildRewordHeadCommand('seed, spelled right\n\nwith a body').args);
+
+    expect(git(['log', '-1', '--format=%B']).trim()).toBe(
+      'seed, spelled right\n\nwith a body',
+    );
+    expect(git(['rev-list', '--count', 'HEAD']).trim()).toBe('1');
+    // Same tree: the staged change did not ride along into the commit.
+    expect(git(['rev-parse', 'HEAD^{tree}']).trim()).toBe(tree);
+    expect(git(['diff', '--cached', '--name-only']).trim()).toBe('drop.txt');
+    expect(git(['diff', '--name-only']).trim()).toBe('keep.txt');
+    expect(read('keep.txt')).toBe('unstaged edit\n');
+    // The way back: the old commit is the reflog's previous entry.
+    expect(git(['rev-parse', 'HEAD@{1}']).trim()).toBe(before);
+  });
+
+  it('rewords a commit that was empty to begin with', () => {
+    git(['commit', '--quiet', '--allow-empty', '--message', 'empyt']);
+    git(buildRewordHeadCommand('empty').args);
+    expect(git(['log', '-1', '--format=%s']).trim()).toBe('empty');
+    expect(git(['rev-list', '--count', 'HEAD']).trim()).toBe('2');
+  });
+
+  it('keeps the author and author date', () => {
+    const before = git(['log', '-1', '--format=%an <%ae> %aI']).trim();
+    git(buildRewordHeadCommand('seed again').args);
+    expect(git(['log', '-1', '--format=%an <%ae> %aI']).trim()).toBe(before);
+  });
+
+  it('sees a pre-commit hook that adds files, and the soft reset puts everything back', () => {
+    // The tree check in `rewordHead` exists for exactly this: `--only` keeps
+    // the index out, but a hook's `git add` lands in the commit anyway.
+    const before = git(['rev-parse', 'HEAD']).trim();
+    const tree = git(['rev-parse', `${before}^{tree}`]).trim();
+    mkdirSync(join(repo, '.git', 'hooks'), { recursive: true });
+    writeFileSync(join(repo, '.git', 'hooks', 'pre-commit'), '#!/bin/sh\ngit add -u\n', {
+      mode: 0o755,
+    });
+    write('drop.txt', 'staged edit\n');
+    git(buildStageCommand(['drop.txt']).args);
+    write('keep.txt', 'unstaged edit\n');
+
+    git(buildRewordHeadCommand('seed, reworded').args);
+    expect(git(buildTreeOfCommand('HEAD').args).trim()).not.toBe(tree);
+    expect(git(buildTreeOfCommand(before).args).trim()).toBe(tree);
+
+    git(buildResetCommand(before, 'soft').args);
+
+    expect(git(['rev-parse', 'HEAD']).trim()).toBe(before);
+    expect(git(['log', '-1', '--format=%s']).trim()).toBe('seed');
+    expect(read('keep.txt')).toBe('unstaged edit\n');
+    expect(read('drop.txt')).toBe('staged edit\n');
+    // Nothing lost: both edits still differ from the commit.
+    expect(git(['diff', 'HEAD', '--name-only']).trim().split('\n').sort()).toEqual([
+      'drop.txt',
+      'keep.txt',
+    ]);
   });
 });

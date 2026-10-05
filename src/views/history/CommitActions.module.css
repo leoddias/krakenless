@@ -95,6 +95,13 @@
   font-family: inherit;
 }
 
+/* A commit message is read in a terminal as often as here: monospace shows
+   where a subject runs past the usual width. */
+.message {
+  min-height: 8rem;
+  font-family: var(--font-mono);
+}
+
 .input:focus-visible,
 .textarea:focus-visible {
   outline: 2px solid var(--accent);

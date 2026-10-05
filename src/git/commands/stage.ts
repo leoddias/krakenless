@@ -146,6 +146,40 @@ export function buildCommitCommand(options: CommitOptions): GitCommand {
 }
 
 /**
+ * Rewrites the message of HEAD and nothing else.
+ *
+ * `--only` with no paths is what keeps this a message edit: a plain `--amend`
+ * commits the index, so anything the user had staged would ride along into a
+ * commit they only meant to fix a typo in. With `--only`, the amended commit
+ * keeps HEAD's own tree and the staged changes stay staged.
+ *
+ * `--allow-empty` is there for a commit that was already empty — an
+ * `--allow-empty` commit, say — which git would otherwise refuse to amend as
+ * "nothing to commit". The tree is HEAD's either way, so it cannot make a
+ * commit empty that was not.
+ *
+ * The message is its own argument after `--message`, as in the plain commit.
+ */
+export function buildRewordHeadCommand(message: string): GitCommand {
+  if (message.trim().length === 0) {
+    throw new Error('A commit message is required');
+  }
+  return {
+    args: ['commit', '--amend', '--only', '--allow-empty', '--message', message],
+    // A new hash for HEAD: recoverable through the reflog, never unasked.
+    destructive: true,
+    // Hooks and gpg signing run inside this; a pinentry nobody answers must
+    // not leave the app busy forever.
+    timeoutMs: 120_000,
+  };
+}
+
+/** The tree a commit records; one oid on stdout. */
+export function buildTreeOfCommand(rev: string): GitCommand {
+  return { args: ['rev-parse', '--verify', '--quiet', `${assertRevision(rev)}^{tree}`] };
+}
+
+/**
  * Writes the current bytes of several files into the object store.
  *
  * One oid per path on stdout, in the order the paths were given. This is the

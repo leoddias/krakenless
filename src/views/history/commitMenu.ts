@@ -17,6 +17,8 @@ import { commitWebUrl } from '../../git/remoteWeb';
 import type { Commit, CommitRef, Remote, StashEntry } from '../../git/types';
 import type { Loadable } from '../../state/store';
 import { splitRemoteBranch } from '../refs/labels';
+import { isHeadRow } from './headRef';
+import type { OperationKind } from '../../git/operation';
 
 /** What a menu item does when it is chosen. */
 export type CommitAction =
@@ -25,6 +27,7 @@ export type CommitAction =
   | { kind: 'tag'; annotated: boolean }
   | { kind: 'cherry-pick' }
   | { kind: 'revert' }
+  | { kind: 'reword' }
   | { kind: 'merge'; branch: string; ref: string; label: string }
   | { kind: 'push-tag'; remote: string; tag: string }
   | {
@@ -85,6 +88,11 @@ export interface CommitMenuContext {
    */
   hasLocalChanges: boolean;
   remotes: Loadable<Remote[]>;
+  /**
+   * The merge, rebase, cherry-pick or revert in progress, if any. Only the
+   * reword item reads it: amending HEAD mid-operation rewrites a step of it.
+   */
+  operation?: OperationKind | null;
 }
 
 const BUSY = 'Another git operation is already running.';
@@ -439,6 +447,22 @@ export function buildCommitMenu(context: CommitMenuContext): CommitMenuSection[]
         disabled: shared,
         action: { kind: 'revert' },
       },
+      // The keyboard's way to what a double click on HEAD's message does.
+      // Only HEAD: any other commit would need a rebase to reword.
+      ...(isHeadRow(context.commit.refs)
+        ? [
+            {
+              id: 'reword',
+              label: 'Edit commit message…',
+              disabled:
+                shared ??
+                (context.operation === undefined || context.operation === null
+                  ? null
+                  : `A ${context.operation} is in progress. Finish or abort it first.`),
+              action: { kind: 'reword' as const },
+            },
+          ]
+        : []),
       ...mergeItems(context),
       {
         id: 'rebase',

@@ -20,6 +20,7 @@ import {
   type ReactNode,
   type UIEvent,
 } from 'react';
+import { readHeadMessage } from '../../git/log';
 import type { Commit, CommitRef, RefKind, StashEntry } from '../../git/types';
 import { selectCommit, switchTo, switchToRemote } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
@@ -33,8 +34,14 @@ import { Splitter } from '../shell/Splitter';
 import { edgeHandlers, useLayout, type LayoutHandle } from '../shell/useLayout';
 import { avatarIdentity } from './remoteAvatar';
 import { buildGraph, type GraphRow } from './graph';
-import { CommitActions, DialogHost, type CommitMenuTarget } from './CommitActions';
+import {
+  CommitActions,
+  DialogHost,
+  type CommitMenuTarget,
+  type MessageDialog,
+} from './CommitActions';
 import { mergeDialog } from './mergeDialog';
+import { rewordDialog, rewordRefusal } from './rewordDialog';
 import { stashDialog } from './stashDialog';
 import { applyStashes, stashRowLabel } from './stashRows';
 import {
@@ -310,9 +317,12 @@ function CommitList({
   const [dropMerge, setDropMerge] = useState<{ branch: string; ref: string } | null>(
     null,
   );
+  /** The HEAD message being edited, once it has been read. */
+  const [rewording, setRewording] = useState<MessageDialog | null>(null);
   const busy = useAppState(isBusy);
   const status = useAppState((state) => state.status);
   const operation = useAppState((state) => state.operation);
+  const branchList = useAppState((state) => state.branches);
 
   const worktreeList = useAppState((state) => state.worktrees);
   const { commits, stashes, worktreeRows } = useMemo(() => {
@@ -656,6 +666,57 @@ function CommitList({
   const trackedTally = tallyTracked(readyStatus);
   const stashRefusal = stashRefusalReason(operation, busy, trackedTally);
 
+  /**
+   * Opens HEAD's message for editing.
+   *
+   * The message is read from git rather than taken from the row: the row has
+   * the subject and a body parsed out of the log, and saving a reassembled
+   * message would rewrite whitespace the author never touched.
+   */
+  const startReword = (commit: Commit): void => {
+    // One dialog at a time: a second double click must not swap the text out
+    // from under an edit in progress.
+    if (rewording !== null) return;
+    const refusal = rewordRefusal(operation, busy, readyStatus?.hasConflicts ?? false);
+    if (refusal !== null) {
+      store.dispatch({ type: 'notice', notice: { tone: 'warning', message: refusal } });
+      return;
+    }
+    const repo = store.getState().repo;
+    if (repo.state !== 'ready') return;
+    readHeadMessage(repo.value.root).then(
+      (message) => {
+        if (message === null) return;
+        // The read is async: if the repository was switched, or HEAD is no
+        // longer this commit by the time it lands, the text belongs to some
+        // other commit than the one the dialog would name.
+        const now = store.getState();
+        if (now.repo.state !== 'ready' || now.repo.value.root !== repo.value.root) return;
+        if (now.commits.state === 'ready') {
+          const head = now.commits.value.find((one) => isHeadRow(one.refs));
+          if (head !== undefined && head.oid !== commit.oid) return;
+        }
+        setRewording(
+          rewordDialog(
+            store,
+            commit,
+            message,
+            branchList.state === 'ready' ? branchList.value : null,
+          ),
+        );
+      },
+      (error: unknown) => {
+        store.dispatch({
+          type: 'notice',
+          notice: {
+            tone: 'error',
+            message: error instanceof Error ? error.message : String(error),
+          },
+        });
+      },
+    );
+  };
+
   const rows: ReactNode[] = [];
   for (let index = first; index < last; index += 1) {
     const shared = {
@@ -707,6 +768,7 @@ function CommitList({
         search={searching ? query : ''}
         dropHere={dropRow === commit.oid}
         onContextMenu={(event) => openMenu(commit, event)}
+        onEditMessage={() => startReword(commit)}
         {...shared}
       />,
     );
@@ -803,7 +865,11 @@ function CommitList({
           </p>
         )}
         {menuTarget !== null && (
-          <CommitActions target={menuTarget} onDismiss={() => setMenuTarget(null)} />
+          <CommitActions
+            target={menuTarget}
+            onDismiss={() => setMenuTarget(null)}
+            onEditMessage={startReword}
+          />
         )}
         {treeMenu !== null && (
           <ContextMenu
@@ -835,6 +901,9 @@ function CommitList({
             busy={busy}
             onClose={() => setStashing(false)}
           />
+        )}
+        {rewording !== null && (
+          <DialogHost dialog={rewording} busy={busy} onClose={() => setRewording(null)} />
         )}
         {dropMerge !== null && (
           <DialogHost
@@ -930,9 +999,12 @@ function CommitRow({
   dimmed,
   onSelect,
   onContextMenu,
+  onEditMessage,
 }: RowProps &
   MenuRowProps & {
     commit: Commit;
+    /** Opens the message for editing; only the HEAD row answers it. */
+    onEditMessage: () => void;
     /** Set while a dragged row is over this one and may be dropped on it. */
     dropHere: boolean;
     graphRow: GraphRow | undefined;
@@ -963,6 +1035,7 @@ function CommitRow({
   // the user reads some other commit.
   const current = checkedOutBranch(commit.refs);
   const atHead = isHeadRow(commit.refs);
+  const rewordable = atHead && stash === undefined;
   return (
     <RowButton
       index={index}
@@ -1020,6 +1093,24 @@ function CommitRow({
             ? styles.columnSubject
             : `${styles.columnSubject} ${styles.stashSubject}`
         }
+        // HEAD's message is the one that can be fixed in place; a stash row's
+        // text is not a message anyone wrote, and older commits would need a
+        // rebase. The row's own click has already selected it.
+        {...(rewordable
+          ? {
+              title: 'Double-click to edit the message',
+              'data-rewordable': 'true',
+              // The second press of a double click would otherwise select a
+              // word under the pointer just before the dialog opens.
+              onMouseDown: (event: ReactMouseEvent<HTMLElement>) => {
+                if (event.detail > 1) event.preventDefault();
+              },
+              onDoubleClick: (event: ReactMouseEvent<HTMLElement>) => {
+                event.preventDefault();
+                onEditMessage();
+              },
+            }
+          : {})}
       >
         {search === ''
           ? subject

@@ -9,10 +9,14 @@ import {
   buildReadBlobCommand,
   buildRemoveUntrackedCommand,
   buildRestoreWorktreeCommand,
+  buildRewordHeadCommand,
+  buildTreeOfCommand,
   buildStageCommand,
   buildUnstageCommand,
   type CommitOptions,
 } from './commands/stage';
+import { buildCurrentBranchCommand, buildResetCommand } from './commands/history';
+import { buildHeadOidCommand } from './commands/repo';
 import { chunkPathspec } from './argsafety';
 import { getStatus } from './status';
 import type { Confirmation } from './confirm';
@@ -240,6 +244,69 @@ export function amendCommit(
     repo,
     buildCommitCommand({ ...options, amend: true }),
     approved(confirmation),
+  );
+}
+
+/**
+ * Rewrites the message of HEAD, provided HEAD is still `expectedOid` on
+ * `expectedBranch` (`null` for a detached HEAD).
+ *
+ * The user read a message on one particular row and typed a new one for it; a
+ * commit landing in between (from a terminal, another tool) would otherwise
+ * have its message replaced instead, and a switch to another branch on the
+ * same commit would move that branch rather than the one the question named.
+ * The checks and the amend are separate commands, so this narrows the window
+ * rather than closing it — the same trade the branch guard in `commits.ts`
+ * makes.
+ *
+ * After the amend the tree is compared with the old commit's. `--only` keeps
+ * the index out, but a pre-commit hook runs against the temporary index and
+ * whatever it `git add`s lands in the commit — a formatter ending in
+ * `git add -u` would sweep the user's unfinished work into what they meant as
+ * a message edit. When that happens the amend is undone with a soft reset to
+ * the old commit, which leaves the index and the working tree exactly as the
+ * hook left them, and the user is told why.
+ */
+export async function rewordHead(
+  repo: string,
+  expectedOid: string,
+  expectedBranch: string | null,
+  message: string,
+  confirmation: Confirmation,
+): Promise<void> {
+  const gate = approved(confirmation);
+  const command = buildRewordHeadCommand(message);
+  const head = await runGit(repo, buildHeadOidCommand(), { allowExitCodes: [1] });
+  const actual = head.stdout.trim();
+  if (actual !== expectedOid) {
+    throw new GitError(
+      'command-failed',
+      `HEAD moved to ${actual === '' ? 'nothing' : actual.slice(0, 7)} since the message was opened, so it was not rewritten. Nothing was changed.`,
+      { args: ['rev-parse', 'HEAD'] },
+    );
+  }
+  const branch = await runGit(repo, buildCurrentBranchCommand(), {
+    allowExitCodes: [1],
+  });
+  const actualBranch = branch.stdout.trim() === '' ? null : branch.stdout.trim();
+  if (actualBranch !== expectedBranch) {
+    throw new GitError(
+      'command-failed',
+      `HEAD is now ${actualBranch === null ? 'detached' : `on "${actualBranch}"`}, not ${expectedBranch === null ? 'detached' : `on "${expectedBranch}"`} as when the message was opened, so it was not rewritten. Nothing was changed.`,
+      { args: ['symbolic-ref', 'HEAD'] },
+    );
+  }
+
+  const treeBefore = (await runGit(repo, buildTreeOfCommand(expectedOid))).stdout.trim();
+  await runGit(repo, command, gate);
+  const treeAfter = (await runGit(repo, buildTreeOfCommand('HEAD'))).stdout.trim();
+  if (treeAfter === treeBefore) return;
+
+  await runGit(repo, buildResetCommand(expectedOid, 'soft'), gate);
+  throw new GitError(
+    'command-failed',
+    "A pre-commit hook changed files in the commit, so the message was not rewritten: the commit was put back as it was. The hook's changes are still in the working tree and the index.",
+    { args: command.args.slice(0, 3) },
   );
 }
 

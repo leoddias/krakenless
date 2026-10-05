@@ -9,6 +9,14 @@
 - **Phase:** v0.1 feature-complete. Every buildable item in `docs/ROADMAP.md`
   M0–M5 is checked off; the only open item is the dogfood gate, which is two
   weeks of use, not code.
+- **A double click on HEAD's message edits it** (2026-10-04, ADR-0064): the
+  subject of the HEAD row (and "Edit commit message…" on its menu) opens the
+  whole message, read from git, in a dialog; Save runs
+  `commit --amend --only --allow-empty -m`, so staged work stays out. Guarded
+  by HEAD oid + branch, refused mid-operation or with conflicts, warns when
+  the commit looks pushed, and undoes itself (`reset --soft`) if a pre-commit
+  hook changed the tree. Only HEAD — older commits would need a rebase. Not
+  used by hand in the running app.
 - **A row can be dragged onto another, and a double click switches branch**
   (2026-09-29, ADR-0061, ADR-0062): dropping a commit row (or a branch chip) on
   any other commit row opens that row's context menu at the drop point, so the
@@ -218,7 +226,11 @@
 
 ## Next up (in order)
 
-1. **Drag a row onto another and double-click a chip in the running app**
+1. **Fix a typo by double-clicking HEAD's message in the running app**
+   (ADR-0064): check the dialog opens with the full message and the caret at
+   the end of the subject, that Ctrl+Enter saves, that staged files stay
+   staged, and that the row and selection move to the new hash.
+2. **Drag a row onto another and double-click a chip in the running app**
    (ADR-0061 to ADR-0063): check that the menu opens where the pointer let go,
    that the outline follows the row under the drag in WebView2, that the button
    row actually starts a drag without a click getting in the way, and that a
@@ -226,11 +238,11 @@
    stale `main`, double-click the `origin/main` row and confirm `main` moves
    forward; on a diverged branch confirm the error notice and no merge commit.
    Chips are narrow — see whether the double click lands on them comfortably.
-2. **Press Ctrl+F in the running app** (ADR-0060): search a keyword, walk the
+3. **Press Ctrl+F in the running app** (ADR-0060): search a keyword, walk the
    matches with Enter / Shift+Enter, check that the bar doesn't cover a match
    and that typing isn't slowed by the diff each move triggers. Try it from the
    commit message box too.
-3. **Validate the update flow end to end.** v0.1.10-alpha is the first release
+4. **Validate the update flow end to end.** v0.1.10-alpha is the first release
    carrying the updater, and the *swap* cannot be proven by it alone — a v0.1.9
    binary has no updater in it to do the swapping.
 
@@ -258,32 +270,32 @@
    d. Look in the folder for `krakenless.displaced-*.exe`, close and reopen the
       app, and confirm it is gone.
    e. Repeat (c) with the NSIS installer to exercise the plugin's path.
-3. **Use the diverged-branch flow by hand** (ADR-0035): make a repo diverge,
+5. **Use the diverged-branch flow by hand** (ADR-0035): make a repo diverge,
    watch Push refuse with the reason, run "Pull (merge)" through its dialog —
    including a conflicted one. Also watch the background fetch tick (ADR-0034)
    report an arriving tag. Neither has been seen running, only asserted.
-4. **Use the 2026-08-27 batch by hand.** All of it is tested and none of it has
+6. **Use the 2026-08-27 batch by hand.** All of it is tested and none of it has
    been run: a push while switching tabs (ADR-0028 — the whole point is that the
    window stays alive), dragging a branch chip onto the checkout to merge
    (ADR-0026), a repository with a real `git worktree` so the WIP row and the
    toolbar picker have something to show (ADR-0027), and pushing a tag
    (ADR-0029). The worktree row and the picker are the two that have never been
    *seen*, only asserted.
-5. **Right-click a commit in the running app** — the context menu (ADR-less,
+7. **Right-click a commit in the running app** — the context menu (ADR-less,
    ROADMAP § v0.2) has tests behind it but has never been used by hand. Worth
    checking the menu and its submenu near the bottom edge of the list, where the
    clamping code runs.
-6. **Try the new editor on a real file** — it is the only code that writes to
+8. **Try the new editor on a real file** — it is the only code that writes to
    your disk, and it has not been used by hand yet. Consider a
    `safety-reviewer` pass over `src-tauri/src/worktree.rs` first.
-7. **Look at the panels not yet seen running**: the diff, the working tree and
+9. **Look at the panels not yet seen running**: the diff, the working tree and
    its commit box, settings, welcome — plus dragging each edge, and the toolbar
    at narrow widths.
-8. **The dogfood gate** (`docs/ROADMAP.md` § M5): use Krakenless as the only
+10. **The dogfood gate** (`docs/ROADMAP.md` § M5): use Krakenless as the only
    Git client for two weeks. Everything else in v0.1 is done, so this is the
    next real step and it produces the list that shapes v0.2.
-9. Fix whatever the gate surfaces, in the order it hurts.
-10. Then the validation checkpoint in `PLAN.md`: builds to 3–5 friends, and the
+11. Fix whatever the gate surfaces, in the order it hurts.
+12. Then the validation checkpoint in `PLAN.md`: builds to 3–5 friends, and the
    decision to invest in v0.2 or stop.
 
 ## Blockers / open questions
@@ -315,6 +327,20 @@
   until `buildPushCommand` emits a `<local>:<upstream>` refspec.
 
 ## Session log
+
+### 2026-10-04 — edit HEAD's message with a double click
+
+"Se eu der double click em cima de uma mensagem de um commit, faça com que seja
+possível editar a commit message (amend), geralmente uso para corrigir um
+typo." Built as a message-only amend of HEAD (ADR-0064): `buildRewordHeadCommand`
+/ `buildTreeOfCommand` in `git/commands/stage.ts`, `rewordHead` in
+`git/stage.ts`, `rewordHeadCommit` action, `views/history/rewordDialog.ts`, and
+a `message` kind in `DialogHost`. The safety review reproduced a pre-commit
+hook running `git add -u` sweeping unstaged work into the "message-only"
+commit; fixed with a tree comparison and a soft reset back, covered by an
+integration test with a real hook. Conventions review asked for unit tests of
+the HEAD guard (`git/reword.test.ts`), a branch guard, a disabled menu item
+mid-operation, and dropping a stale async read — all done. 2617 tests green.
 
 ### 2026-09-30 — the chip, not the row, answers the double click
 

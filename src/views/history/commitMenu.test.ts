@@ -609,3 +609,47 @@ describe('buildStashMenu', () => {
     expect(items[items.length - 1]?.disabled).toBeNull();
   });
 });
+
+describe('the reword item', () => {
+  const ids = (refs: Commit['refs']): string[] =>
+    flatten(buildCommitMenu(context({ commit: commit({ refs }) }))).map(
+      (entry) => entry.id,
+    );
+
+  it('is offered on the HEAD row, attached or detached', () => {
+    expect(
+      ids([
+        { kind: 'head', name: 'HEAD' },
+        { kind: 'branch', name: 'main' },
+      ]),
+    ).toContain('reword');
+    expect(ids([{ kind: 'head', name: 'HEAD' }])).toContain('reword');
+  });
+
+  it('is not offered on any other commit: those would need a rebase', () => {
+    expect(ids([])).not.toContain('reword');
+    expect(ids([{ kind: 'branch', name: 'main' }])).not.toContain('reword');
+  });
+
+  it('is blocked mid-operation, where HEAD is a step of it', () => {
+    const item = flatten(
+      buildCommitMenu(
+        context({
+          commit: commit({ refs: [{ kind: 'head', name: 'HEAD' }] }),
+          operation: 'rebase',
+        }),
+      ),
+    ).find((entry) => entry.id === 'reword');
+    expect(item?.disabled).toMatch(/rebase is in progress/);
+  });
+
+  it('is blocked while git is busy or the repository has conflicts', () => {
+    const refs: Commit['refs'] = [{ kind: 'head', name: 'HEAD' }];
+    for (const overrides of [{ busy: true }, { hasConflicts: true }]) {
+      const item = flatten(
+        buildCommitMenu(context({ commit: commit({ refs }), ...overrides })),
+      ).find((entry) => entry.id === 'reword');
+      expect(item?.disabled).not.toBeNull();
+    }
+  });
+});

@@ -10,8 +10,10 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defaultConfig } from '../../config/schema';
 import type { Branch, Commit, StatusEntry } from '../../git/types';
+import { readHeadMessage } from '../../git/log';
 import {
   mergeRefInto,
+  rewordHeadCommit,
   selectCommit,
   stashAll,
   switchTo,
@@ -35,13 +37,17 @@ vi.mock('../../state/actions', () => ({
   switchTo: vi.fn(),
   switchToRemote: vi.fn(),
   stashAll: vi.fn(),
+  rewordHeadCommit: vi.fn(),
 }));
+vi.mock('../../git/log', () => ({ readHeadMessage: vi.fn() }));
 
 const selectCommitMock = vi.mocked(selectCommit);
 const mergeRefIntoMock = vi.mocked(mergeRefInto);
 const switchToMock = vi.mocked(switchTo);
 const switchToRemoteMock = vi.mocked(switchToRemote);
 const stashAllMock = vi.mocked(stashAll);
+const rewordMock = vi.mocked(rewordHeadCommit);
+const readHeadMessageMock = vi.mocked(readHeadMessage);
 
 const NOW = new Date('2026-08-20T12:00:00Z');
 
@@ -90,6 +96,8 @@ beforeEach(() => {
   switchToMock.mockReset().mockResolvedValue(true);
   switchToRemoteMock.mockReset().mockResolvedValue(true);
   stashAllMock.mockReset().mockResolvedValue(true);
+  rewordMock.mockReset().mockResolvedValue(true);
+  readHeadMessageMock.mockReset().mockResolvedValue('Commit 1');
   // The real action dispatches the selection; keep that behaviour so the view
   // can be observed reacting to it.
   selectCommitMock.mockImplementation((store, oid) => {
@@ -1574,5 +1582,219 @@ describe('HistoryView find (Ctrl+F)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close find' }));
     input = openFind();
     expect(input).toHaveValue('');
+  });
+});
+
+describe('editing the HEAD message', () => {
+  const HEAD_REFS: Commit['refs'] = [
+    { kind: 'head', name: 'HEAD' },
+    { kind: 'branch', name: 'main' },
+  ];
+
+  function renderHead(): Store {
+    return renderHistory((store) => {
+      store.dispatch({
+        type: 'repo/opened',
+        repo: {
+          root: 'C:/repos/app',
+          gitDir: 'C:/repos/app/.git',
+          bare: false,
+          empty: false,
+        },
+      });
+      store.dispatch({
+        type: 'commits/loaded',
+        commits: [makeCommit(1, { refs: HEAD_REFS }), makeCommit(2)],
+      });
+    });
+  }
+
+  it('opens the message, read from git, on a double click of the HEAD subject', async () => {
+    readHeadMessageMock.mockResolvedValue('Commit 1\n\nwith a body');
+    renderHead();
+
+    fireEvent.doubleClick(screen.getByText('Commit 1'));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Edit commit message' });
+    const box = within(dialog).getByRole('textbox', { name: 'Message' });
+    expect(box).toHaveValue('Commit 1\n\nwith a body');
+    expect(readHeadMessageMock).toHaveBeenCalledWith('C:/repos/app');
+  });
+
+  it('saves the edited message against the oid that was double-clicked', async () => {
+    const store = renderHead();
+    fireEvent.doubleClick(screen.getByText('Commit 1'));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit commit message' });
+    const save = within(dialog).getByRole('button', { name: 'Save message' });
+    // Unchanged is not offered: it would only give the commit a new hash.
+    expect(save).toBeDisabled();
+
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Message' }), {
+      target: { value: 'Commit one' },
+    });
+    fireEvent.click(save);
+
+    await waitFor(() => expect(rewordMock).toHaveBeenCalledTimes(1));
+    expect(rewordMock).toHaveBeenCalledWith(
+      store,
+      makeCommit(1).oid,
+      'main',
+      'Commit one',
+      expect.stringMatching(/^Rewrite the message of aaaaaaa/),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Edit commit message' })).toBeNull(),
+    );
+  });
+
+  it('does nothing on a double click of any other commit', () => {
+    renderHead();
+    fireEvent.doubleClick(screen.getByText('Commit 2'));
+    expect(readHeadMessageMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses mid-rebase with a notice instead of a dialog', () => {
+    const store = renderHead();
+    act(() => {
+      store.dispatch({
+        type: 'operation/read',
+        operation: {
+          kind: 'rebase',
+          commit: null,
+          step: null,
+          steps: null,
+          branch: null,
+        },
+      });
+    });
+
+    fireEvent.doubleClick(screen.getByText('Commit 1'));
+
+    expect(readHeadMessageMock).not.toHaveBeenCalled();
+    expect(store.getState().notice?.message).toMatch(/rebase is in progress/);
+  });
+
+  it('is offered from the HEAD row context menu too', async () => {
+    renderHead();
+    fireEvent.contextMenu(screen.getByRole('button', { name: /Commit 1/ }));
+    fireEvent.click(
+      await screen.findByRole('menuitem', { name: 'Edit commit message…' }),
+    );
+    expect(
+      await screen.findByRole('dialog', { name: 'Edit commit message' }),
+    ).toBeInTheDocument();
+  });
+});
+
+describe('the HEAD message dialog', () => {
+  const HEAD_REFS: Commit['refs'] = [
+    { kind: 'head', name: 'HEAD' },
+    { kind: 'branch', name: 'main' },
+  ];
+
+  function renderHead(): Store {
+    return renderHistory((store) => {
+      store.dispatch({
+        type: 'repo/opened',
+        repo: {
+          root: 'C:/repos/app',
+          gitDir: 'C:/repos/app/.git',
+          bare: false,
+          empty: false,
+        },
+      });
+      store.dispatch({
+        type: 'commits/loaded',
+        commits: [makeCommit(1, { refs: HEAD_REFS }), makeCommit(2)],
+      });
+    });
+  }
+
+  async function open(): Promise<HTMLElement> {
+    fireEvent.doubleClick(screen.getByText('Commit 1'));
+    return screen.findByRole('dialog', { name: 'Edit commit message' });
+  }
+
+  it('saves with Ctrl+Enter, where a plain Enter is a newline', async () => {
+    renderHead();
+    const dialog = await open();
+    const box = within(dialog).getByRole('textbox', { name: 'Message' });
+    fireEvent.change(box, { target: { value: 'Commit one' } });
+
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(rewordMock).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true });
+    await waitFor(() => expect(rewordMock).toHaveBeenCalledTimes(1));
+  });
+
+  it('refuses an empty message and says why', async () => {
+    renderHead();
+    const dialog = await open();
+    const box = within(dialog).getByRole('textbox', { name: 'Message' });
+    fireEvent.change(box, { target: { value: '  \n ' } });
+
+    expect(within(dialog).getByRole('alert')).toHaveTextContent(
+      'A commit needs a message.',
+    );
+    expect(within(dialog).getByRole('button', { name: 'Save message' })).toBeDisabled();
+    fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true });
+    expect(rewordMock).not.toHaveBeenCalled();
+  });
+
+  it('warns in the dialog when the commit is already on a remote', async () => {
+    renderHistory((store) => {
+      store.dispatch({
+        type: 'repo/opened',
+        repo: {
+          root: 'C:/repos/app',
+          gitDir: 'C:/repos/app/.git',
+          bare: false,
+          empty: false,
+        },
+      });
+      store.dispatch({
+        type: 'commits/loaded',
+        commits: [
+          makeCommit(1, {
+            refs: [...HEAD_REFS, { kind: 'remote-branch', name: 'origin/main' }],
+          }),
+        ],
+      });
+    });
+    const dialog = await open();
+    expect(within(dialog).getByRole('status')).toHaveTextContent(/force push/);
+  });
+
+  it('reports a failed read as a notice and opens nothing', async () => {
+    readHeadMessageMock.mockRejectedValue(new Error('git exploded'));
+    const store = renderHead();
+    fireEvent.doubleClick(screen.getByText('Commit 1'));
+
+    await waitFor(() => expect(store.getState().notice?.message).toBe('git exploded'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('drops a read that lands after HEAD moved to another commit', async () => {
+    let resolve: (message: string) => void = () => {};
+    readHeadMessageMock.mockReturnValue(
+      new Promise<string>((done) => {
+        resolve = done;
+      }),
+    );
+    const store = renderHead();
+    fireEvent.doubleClick(screen.getByText('Commit 1'));
+    act(() => {
+      store.dispatch({
+        type: 'commits/loaded',
+        commits: [makeCommit(3, { refs: HEAD_REFS }), makeCommit(1), makeCommit(2)],
+      });
+    });
+
+    await act(async () => {
+      resolve('Commit 3');
+      await Promise.resolve();
+    });
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 });

@@ -22,6 +22,7 @@ import {
   discardHunks,
   discardPaths,
   type DiscardBackupRecord,
+  rewordHead,
   stagePaths,
   unstagePaths,
   type DiscardResult,
@@ -562,6 +563,40 @@ export async function commitStaged(store: Store, options: CommitOptions): Promis
   if (root === null) return;
   await mutate(store, () => commit(root, options));
   await refreshCommits(store);
+}
+
+/**
+ * Rewrites the message of the commit at HEAD, which must still be `oid` on
+ * `branch` (`null` for a detached HEAD).
+ *
+ * Only the message: what is staged stays staged (see `buildRewordHeadCommand`).
+ * The reason is the sentence the user read in the dialog.
+ */
+export async function rewordHeadCommit(
+  store: Store,
+  oid: string,
+  branch: string | null,
+  message: string,
+  confirmationReason: string,
+): Promise<boolean> {
+  const root = currentRoot(store);
+  if (root === null) return false;
+  const ok = await operate(store, () =>
+    rewordHead(root, oid, branch, message, userConfirmed(confirmationReason)),
+  );
+  // The reworded commit is a new commit. A selection left on the old oid would
+  // keep showing it (or nothing, once it drops out of the log), so it follows
+  // HEAD to the new one — the commit the user is still looking at.
+  const state = store.getState();
+  if (ok && state.selection.commitOid === oid && state.commits.state === 'ready') {
+    const head = state.commits.value.find((one) =>
+      one.refs.some((ref) => ref.kind === 'head'),
+    );
+    if (head !== undefined && head.oid !== oid) {
+      await selectCommit(store, head.oid, state.selection.ref);
+    }
+  }
+  return ok;
 }
 
 // --- refs ------------------------------------------------------------------

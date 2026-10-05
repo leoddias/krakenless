@@ -1992,3 +1992,32 @@ branches to move.
 on the row's empty space or its message does nothing, which is also what
 keeps a mis-aimed double click from moving the working tree. Chips are
 narrow: hitting one is the cost of being asked which branch was meant.
+
+## ADR-0064 — A double click on HEAD's message edits it; only HEAD
+**Date:** 2026-10-04 · **Status:** accepted
+**Decision:** Amends ADR-0063 for the HEAD row. A double click on the subject
+of the commit HEAD is on opens its whole message (read with `log -1 --format=%B`,
+not reassembled from the row) in a dialog; saving runs
+`git commit --amend --only --allow-empty --message <text>`. `--only` with no
+paths keeps the commit's own tree, so whatever is staged stays staged and out
+of the commit. The command is refused if HEAD is no longer the oid that was
+double-clicked or no longer on the same branch (or detachment), and the dialog is not offered during a merge, rebase,
+cherry-pick or revert, or with conflicts. "Edit commit message…" on the HEAD
+row's context menu opens the same dialog. After the amend the new tree is
+compared with the old one: a pre-commit hook that `git add`s (a formatter
+ending in `git add -u`) puts files into the commit despite `--only`, and when
+the trees differ the amend is undone with `reset --soft <old>` — index and
+working tree stay as the hook left them — and the user is told. Hooks still
+run, so a commit-msg hook (Gerrit's Change-Id) keeps working; `--no-verify`
+was rejected for that reason. When the commit already looks
+pushed (a remote-tracking branch on it, or the branch not ahead of its
+upstream) the dialog says a force push will follow; it does not refuse.
+**Why:** "Se eu der double click em cima de uma mensagem de um commit, faça com
+que seja possível editar a commit message (amend), geralmente uso para
+corrigir um typo." The typo is almost always in the commit just made. The
+commit box's Amend checkbox commits the index too, which is the wrong tool for
+a typo when other work is staged.
+**Consequences:** Every other row's message still answers a double click with
+nothing. Rewording an older commit needs a rebase that replays everything after
+it — a separate feature, not this one. The dialog's sentence is the
+confirmation reason, as everywhere else.

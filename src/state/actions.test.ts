@@ -9,6 +9,7 @@ import {
   removeRemoteTag,
   removeStash,
   removeTag,
+  rewordHeadCommit,
   switchTo,
   switchToRemote,
   commitStaged,
@@ -38,6 +39,7 @@ const stagePaths = vi.hoisted(() => vi.fn());
 const unstagePaths = vi.hoisted(() => vi.fn());
 const applyHunks = vi.hoisted(() => vi.fn());
 const commit = vi.hoisted(() => vi.fn());
+const rewordHead = vi.hoisted(() => vi.fn());
 const discardPaths = vi.hoisted(() => vi.fn());
 const discardHunks = vi.hoisted(() => vi.fn());
 const openWorktreeFile = vi.hoisted(() => vi.fn());
@@ -92,6 +94,7 @@ vi.mock('../git/stage', () => ({
   unstagePaths,
   applyHunks,
   commit,
+  rewordHead,
   discardPaths,
   discardHunks,
   discardHunkRefusal: () => null,
@@ -562,6 +565,75 @@ describe('actions', () => {
     await expect(switchTo(store, 'topic')).resolves.toBe(false);
     expect(getStatus).toHaveBeenCalled();
     expect(store.getState().notice).toMatchObject({ tone: 'error' });
+  });
+
+  describe('rewordHeadCommit', () => {
+    const OLD = 'a'.repeat(40);
+    const NEW = 'b'.repeat(40);
+    const logEntry = (oid: string, head: boolean) => ({
+      oid,
+      shortOid: oid.slice(0, 7),
+      parents: [],
+      authorName: 'A',
+      authorEmail: 'a@example.com',
+      authorDate: '2026-01-01T00:00:00Z',
+      subject: 'x',
+      body: '',
+      refs: head
+        ? [
+            { kind: 'head', name: 'HEAD' },
+            { kind: 'branch', name: 'main' },
+          ]
+        : [],
+    });
+
+    it('rewords with a token carrying the sentence the user read', async () => {
+      rewordHead.mockResolvedValue(undefined);
+      const store = createStore();
+      await openRepo(store, 'C:/repos/app');
+
+      await expect(
+        rewordHeadCommit(store, OLD, 'main', 'fix: typo', 'Rewrite the message'),
+      ).resolves.toBe(true);
+
+      expect(rewordHead).toHaveBeenCalledWith(
+        'C:/repos/app',
+        OLD,
+        'main',
+        'fix: typo',
+        expect.objectContaining({ reason: 'Rewrite the message' }),
+      );
+    });
+
+    it('moves a selection on the old commit to the new HEAD', async () => {
+      rewordHead.mockResolvedValue(undefined);
+      readLog.mockResolvedValue([logEntry(OLD, true)]);
+      const store = createStore();
+      await openRepo(store, 'C:/repos/app');
+      await selectCommit(store, OLD, 'refs/heads/main');
+      readLog.mockResolvedValue([logEntry(NEW, true)]);
+
+      await rewordHeadCommit(store, OLD, 'main', 'fix: typo', 'Rewrite the message');
+
+      expect(store.getState().selection).toMatchObject({
+        commitOid: NEW,
+        ref: 'refs/heads/main',
+      });
+    });
+
+    it('reports a refusal and leaves the selection alone', async () => {
+      rewordHead.mockRejectedValue(new GitError('command-failed', 'HEAD moved'));
+      readLog.mockResolvedValue([logEntry(OLD, true)]);
+      const store = createStore();
+      await openRepo(store, 'C:/repos/app');
+      await selectCommit(store, OLD);
+
+      await expect(rewordHeadCommit(store, OLD, 'main', 'x', 'Rewrite')).resolves.toBe(
+        false,
+      );
+      expect(store.getState().notice).toMatchObject({ tone: 'error' });
+      expect(store.getState().selection.commitOid).toBe(OLD);
+    });
   });
 
   describe('switchToRemote', () => {

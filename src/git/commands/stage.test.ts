@@ -6,6 +6,7 @@ import {
   buildDiscardHunkCheckCommand,
   buildDiscardHunkCommand,
   buildCommitCommand,
+  buildRewordHeadCommand,
   buildStageCommand,
   buildStashApplyCommand,
   buildStashDropCommand,
@@ -225,5 +226,32 @@ describe('buildBackupBlobCommand', () => {
 
   it('refuses a path that points outside the repository', () => {
     expect(() => buildBackupBlobCommand('../outside.ts')).toThrow(GitError);
+  });
+});
+
+describe('buildRewordHeadCommand', () => {
+  it('amends only the message, never the index', () => {
+    expect(buildRewordHeadCommand('fix: typo').args).toEqual([
+      'commit',
+      '--amend',
+      '--only',
+      '--allow-empty',
+      '--message',
+      'fix: typo',
+    ]);
+  });
+
+  it('keeps a message that looks like a flag as the message', () => {
+    const args = buildRewordHeadCommand('--no-verify').args;
+    expect(args.slice(-2)).toEqual(['--message', '--no-verify']);
+    expect(args.filter((arg) => arg === '--no-verify')).toHaveLength(1);
+  });
+
+  it('refuses an empty message', () => {
+    expect(() => buildRewordHeadCommand(' \n ')).toThrow(/message is required/);
+  });
+
+  it('is destructive: HEAD gets a new hash', () => {
+    expect(buildRewordHeadCommand('x').destructive).toBe(true);
   });
 });
