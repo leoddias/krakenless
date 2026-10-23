@@ -215,6 +215,12 @@
 
 ## Released
 
+- **v0.16.0-alpha** (2026-10-23): published as Latest via the new `/release`
+  skill. Carries worktree removal from its row, the "also delete the local
+  branch?" follow-up (ADR-0065/0066), double-click message fix on HEAD, and the
+  chip double-click fixes. Supersedes the never-published v0.15.0-alpha draft
+  (left as a draft). Both update manifests name 0.16.0 and their URLs answer
+  200; the landing page advertises 0.16.0-alpha. Not tried by hand.
 - **v0.1.9-alpha** (2026-09-01): all four installers; carries the diff
   performance work plus ADR-0034/0035.
 - **v0.1.8-alpha** (2026-08-31): published with all four installers. Carries

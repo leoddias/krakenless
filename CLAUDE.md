@@ -53,6 +53,8 @@ This file is the entry point for every session — human or agent.
 - `/commit` — commit in project style: single-line subject, no body, no trailers
 - `/handoff` — write the end-of-session state into PROGRESS.md
 - `/adr` — record or supersede a decision in DECISIONS.md
+- `/release` — ship end to end: push, CI cuts and builds, notes, publish as
+  Latest, verify the site and update manifests
 - `/next-task` — pick up the next unblocked task from ROADMAP/PROGRESS
 - `/task-loop` — drive one task to done: build → test → review → fix, capped at
   3 passes, gate = green suite + no critical/major findings
