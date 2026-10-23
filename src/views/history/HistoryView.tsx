@@ -29,7 +29,7 @@ import { formatAbsoluteDate, formatRelativeDate } from './relativeTime';
 import { GraphCell } from './GraphCell';
 import { useAuthorPictures } from './avatarCache';
 import { HISTORY_COLUMN_BOUNDS, type HistoryColumns } from '../../config/schema';
-import { ContextMenu } from '../shell/ContextMenu';
+import { ContextMenu, type MenuSection } from '../shell/ContextMenu';
 import { Splitter } from '../shell/Splitter';
 import { edgeHandlers, useLayout, type LayoutHandle } from '../shell/useLayout';
 import { avatarIdentity } from './remoteAvatar';
@@ -38,8 +38,12 @@ import {
   CommitActions,
   DialogHost,
   type CommitMenuTarget,
+  type ConfirmDialog,
   type MessageDialog,
 } from './CommitActions';
+import { branchAfterWorktreeRemove } from './branchDialog';
+import { removeWorktreeDialog, removeWorktreeRefusal } from './worktreeDialog';
+import { copyText } from '../shell/clipboard';
 import { mergeDialog } from './mergeDialog';
 import { rewordDialog, rewordRefusal } from './rewordDialog';
 import { stashDialog } from './stashDialog';
@@ -61,7 +65,7 @@ import {
 import { refPath } from '../shell/refName';
 import { remoteSwitchFor } from './remoteSwitch';
 import type { WorktreeSummary } from '../../git/worktrees';
-import { requestOpenRepository } from '../../state/openRequests';
+import { isOpenInTab, requestOpenRepository } from '../../state/openRequests';
 import {
   checkedOutBranch,
   isCurrentChip,
@@ -296,6 +300,14 @@ function CommitList({
   const [menuTarget, setMenuTarget] = useState<CommitMenuTarget | null>(null);
   /** Where the working-tree row's own menu was opened, when it is open. */
   const [treeMenu, setTreeMenu] = useState<{ x: number; y: number } | null>(null);
+  /** A worktree row's menu, and the worktree it is about. */
+  const [worktreeMenu, setWorktreeMenu] = useState<{
+    worktree: WorktreeSummary;
+    x: number;
+    y: number;
+  } | null>(null);
+  /** The remove question a worktree row's menu opened, and what follows it. */
+  const [worktreeQuestion, setWorktreeQuestion] = useState<ConfirmDialog | null>(null);
   const [stashing, setStashing] = useState(false);
   /**
    * The branch being dragged, or `null`.
@@ -667,6 +679,68 @@ function CommitList({
   const stashRefusal = stashRefusalReason(operation, busy, trackedTally);
 
   /**
+   * What a worktree row's right-click offers: go there, copy where it is, or
+   * take it off disk (ADR-0065). The branch to offer deleting afterwards is
+   * decided here, from the lists as they are while the user is reading the
+   * question, and carried by the dialog.
+   */
+  const worktreeMenuSections = (worktree: WorktreeSummary): MenuSection[] => {
+    const refusal = removeWorktreeRefusal(worktree, {
+      busy,
+      openInTab: isOpenInTab(worktree.path),
+    });
+    return [
+      [
+        {
+          id: 'open',
+          label: 'Open Worktree',
+          onSelect: () => {
+            requestOpenRepository(worktree.path);
+          },
+        },
+        {
+          id: 'copy-path',
+          label: 'Copy path',
+          onSelect: () => {
+            void copyText(worktree.path).then((copied) => {
+              store.dispatch({
+                type: 'notice',
+                notice: copied
+                  ? { tone: 'info', message: 'The path was copied to the clipboard.' }
+                  : {
+                      tone: 'warning',
+                      message:
+                        'The path could not be copied — this window has no clipboard access.',
+                    },
+              });
+            });
+          },
+        },
+      ],
+      [
+        {
+          id: 'remove',
+          label: 'Remove worktree…',
+          disabled: refusal,
+          ...(refusal === null
+            ? {
+                onSelect: () => {
+                  setWorktreeQuestion(
+                    removeWorktreeDialog(
+                      store,
+                      worktree,
+                      branchAfterWorktreeRemove(worktree, branchList, worktreeList),
+                    ),
+                  );
+                },
+              }
+            : {}),
+        },
+      ],
+    ];
+  };
+
+  /**
    * Opens HEAD's message for editing.
    *
    * The message is read from git rather than taken from the row: the row has
@@ -751,6 +825,12 @@ function CommitList({
           worktree={worktree}
           graphRow={graph.rows[index - 1]}
           laneCount={graph.laneCount}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            // No selection: a worktree row is never selected (ADR-0027), so the
+            // menu names its worktree in its own label instead.
+            setWorktreeMenu({ worktree, x: event.clientX, y: event.clientY });
+          }}
           {...shared}
         />,
       );
@@ -893,6 +973,23 @@ function CommitList({
             y={treeMenu.y}
             label="Working tree"
             onClose={() => setTreeMenu(null)}
+          />
+        )}
+        {worktreeMenu !== null && (
+          <ContextMenu
+            sections={worktreeMenuSections(worktreeMenu.worktree)}
+            x={worktreeMenu.x}
+            y={worktreeMenu.y}
+            label={`Worktree ${worktreeName(worktreeMenu.worktree)}`}
+            onClose={() => setWorktreeMenu(null)}
+          />
+        )}
+        {worktreeQuestion !== null && (
+          <DialogHost
+            dialog={worktreeQuestion}
+            busy={busy}
+            onClose={() => setWorktreeQuestion(null)}
+            onReplace={setWorktreeQuestion}
           />
         )}
         {stashing && (
@@ -1248,11 +1345,13 @@ function WorktreeRow({
   tabbable,
   dimmed,
   onSelect,
+  onContextMenu,
 }: {
   worktree: WorktreeSummary;
   graphRow: GraphRow | undefined;
   laneCount: number;
-} & RowProps): ReactNode {
+} & RowProps &
+  MenuRowProps): ReactNode {
   const changes = worktreeChangeSummary(worktree);
   const name = worktreeName(worktree);
   const where = worktree.branch ?? 'a detached HEAD';
@@ -1264,6 +1363,7 @@ function WorktreeRow({
       tabbable={tabbable}
       dimmed={dimmed}
       onSelect={onSelect}
+      onContextMenu={onContextMenu}
       label={`Worktree ${name}, on ${where}${changes === null ? '' : `, ${changes}`}`}
     >
       <span className={styles.columnRefs}>

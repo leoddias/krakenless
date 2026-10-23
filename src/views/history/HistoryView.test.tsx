@@ -13,6 +13,7 @@ import type { Branch, Commit, StatusEntry } from '../../git/types';
 import { readHeadMessage } from '../../git/log';
 import {
   mergeRefInto,
+  removeWorktreeAt,
   rewordHeadCommit,
   selectCommit,
   stashAll,
@@ -21,7 +22,11 @@ import {
 } from '../../state/actions';
 import { StoreProvider } from '../../state/hooks';
 import { createStore, type Store } from '../../state/store';
-import { subscribeOpenRequests } from '../../state/openRequests';
+import {
+  publishOpenRoots,
+  resetOpenRequests,
+  subscribeOpenRequests,
+} from '../../state/openRequests';
 import { registerStore, resetStoreRegistry } from '../../state/stores';
 import { HistoryView, ROW_HEIGHT } from './HistoryView';
 import { resetAvatarCache } from './avatarCache';
@@ -38,6 +43,8 @@ vi.mock('../../state/actions', () => ({
   switchToRemote: vi.fn(),
   stashAll: vi.fn(),
   rewordHeadCommit: vi.fn(),
+  removeWorktreeAt: vi.fn(),
+  removeBranch: vi.fn(),
 }));
 vi.mock('../../git/log', () => ({ readHeadMessage: vi.fn() }));
 
@@ -48,6 +55,7 @@ const switchToRemoteMock = vi.mocked(switchToRemote);
 const stashAllMock = vi.mocked(stashAll);
 const rewordMock = vi.mocked(rewordHeadCommit);
 const readHeadMessageMock = vi.mocked(readHeadMessage);
+const removeWorktreeAtMock = vi.mocked(removeWorktreeAt);
 
 const NOW = new Date('2026-08-20T12:00:00Z');
 
@@ -884,6 +892,79 @@ describe('another checkout on the timeline', () => {
     // Asking git about `worktree:C:/repos/app-wiki` is asking about a sha that
     // does not exist, so the click moves nothing.
     expect(selectCommitMock).not.toHaveBeenCalled();
+  });
+
+  describe('its right-click menu (ADR-0065)', () => {
+    afterEach(() => {
+      resetOpenRequests();
+    });
+
+    function openWorktreeMenu(): void {
+      const wip = rowButtons().find(
+        (row) =>
+          row.hasAttribute('data-index') &&
+          (row.getAttribute('aria-label') ?? '').startsWith('Worktree app-wiki'),
+      );
+      if (wip === undefined) throw new Error('no worktree row');
+      fireEvent.contextMenu(wip, { clientX: 10, clientY: 10 });
+    }
+
+    const removeItem = (): HTMLElement =>
+      screen.getByRole('menuitem', { name: /Remove worktree/ });
+
+    it('removes it after a confirmation, then offers to delete its branch', async () => {
+      removeWorktreeAtMock.mockResolvedValue({ removed: true });
+      const store = renderWithWorktree({ changed: 0, untracked: 0 });
+      act(() => {
+        store.dispatch({
+          type: 'branches/loaded',
+          branches: [
+            {
+              name: 'wiki',
+              current: false,
+              oid: makeCommit(2).oid,
+              ahead: 0,
+              behind: 0,
+              remote: false,
+            },
+          ],
+        });
+      });
+
+      openWorktreeMenu();
+      fireEvent.click(removeItem());
+      const dialog = screen.getByRole('dialog', { name: 'Remove worktree "app-wiki"?' });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Remove Worktree' }));
+
+      await waitFor(() => {
+        expect(
+          screen.getByRole('dialog', { name: 'Also delete the local branch "wiki"?' }),
+        ).toBeInTheDocument();
+      });
+      expect(removeWorktreeAtMock).toHaveBeenCalledWith(
+        store,
+        WIKI,
+        expect.stringContaining(WIKI),
+        { force: false },
+      );
+    });
+
+    it('will not remove a locked worktree', () => {
+      renderWithWorktree({ locked: 'on a USB drive' });
+      openWorktreeMenu();
+
+      expect(removeItem()).toHaveAttribute('aria-disabled', 'true');
+      fireEvent.click(removeItem());
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    it('will not remove one that is open in a tab', () => {
+      publishOpenRoots(['C:/repos/app', WIKI]);
+      renderWithWorktree();
+      openWorktreeMenu();
+
+      expect(removeItem()).toHaveAttribute('aria-disabled', 'true');
+    });
   });
 });
 

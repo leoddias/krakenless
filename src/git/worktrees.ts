@@ -8,12 +8,16 @@
  * run *in* that worktree — which is all it takes, because `git` resolves the
  * shared `.git` from wherever it is invoked.
  *
- * Nothing here writes. Adding and removing worktrees is deliberately not built
- * (ADR-0027): `git worktree add` creates a directory outside the repository and
- * `remove` deletes one off disk, and neither belongs in a first pass.
+ * One thing here writes: {@link removeWorktree} (ADR-0065), which takes a
+ * finished checkout off disk. Adding one is still not built (ADR-0027).
  */
 
-import { buildWorktreeListCommand } from './commands/worktree';
+import {
+  buildWorktreeListCommand,
+  buildWorktreeRemoveCommand,
+} from './commands/worktree';
+import { approve, type Confirmation } from './confirm';
+import { GitError } from './errors';
 import { parseWorktrees } from './parsers/worktree';
 import { runGit } from './runner';
 import { getStatus } from './status';
@@ -104,4 +108,58 @@ export function samePath(left: string, right: string): boolean {
   const normalise = (path: string): string =>
     path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
   return normalise(left) === normalise(right);
+}
+
+export interface RemoveWorktreeOutcome {
+  removed: boolean;
+  /** Set when the safe remove refused because something there is uncommitted. */
+  uncommittedWarning?: string;
+}
+
+/**
+ * Removes a linked worktree, trying the safe form first.
+ *
+ * The same shape as a branch delete: without `force`, git refuses a worktree
+ * holding modified or untracked files (ignored ones are not asked about and
+ * go with the folder), and that refusal comes back as a
+ * warning rather than being retried with `--force` — losing that work is a
+ * second decision, made with the warning in view.
+ *
+ * Refused here, before git is asked, for the worktree the command would run
+ * in: removing the checkout this process is standing in pulls the floor out
+ * from under every panel reading it.
+ */
+export async function removeWorktree(
+  repo: string,
+  path: string,
+  confirmation: Confirmation,
+  options: { force: boolean } = { force: false },
+): Promise<RemoveWorktreeOutcome> {
+  const gate = approve(confirmation);
+  const command = buildWorktreeRemoveCommand(path, options);
+  if (samePath(path, repo)) {
+    throw new GitError('bad-argument', 'This is the worktree the app has open', {
+      args: command.args,
+    });
+  }
+  if (options.force) {
+    await runGit(repo, command, gate);
+    return { removed: true };
+  }
+
+  try {
+    await runGit(repo, command, gate);
+    return { removed: true };
+  } catch (error) {
+    if (
+      error instanceof GitError &&
+      /contains modified or untracked files/i.test(error.stderr)
+    ) {
+      return {
+        removed: false,
+        uncommittedWarning: `The worktree at ${path} has changes that are not committed. Removing it anyway deletes them, and git keeps no copy.`,
+      };
+    }
+    throw error;
+  }
 }

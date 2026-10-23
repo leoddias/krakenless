@@ -678,6 +678,49 @@ describe('deleting a branch from the row it is on', () => {
     );
   });
 
+  it('then asks about the local branch that tracked it (ADR-0066)', async () => {
+    const store = renderHistory({ refs: REMOTE_ROW });
+    act(() => {
+      store.dispatch({
+        type: 'branches/loaded',
+        branches: [
+          {
+            name: 'old',
+            current: false,
+            oid: OID,
+            upstream: 'origin/old',
+            ahead: 0,
+            behind: 0,
+            remote: false,
+          },
+          {
+            name: 'origin/old',
+            current: false,
+            oid: OID,
+            ahead: 0,
+            behind: 0,
+            remote: true,
+          },
+        ],
+      });
+    });
+    choose(/Delete old on origin/);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Delete on origin' }));
+    });
+
+    // A question, not a delete: nothing has touched the local branch yet.
+    expect(
+      screen.getByRole('dialog', { name: 'Also delete the local branch "old"?' }),
+    ).toBeTruthy();
+    expect(ran('branch', '-d', 'old')).toBe(false);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Delete Branch' }));
+    });
+    expect(ran('branch', '-d', 'old')).toBe(true);
+  });
+
   it('will not offer to delete the branch that is checked out', () => {
     renderHistory({ refs: [{ kind: 'branch', name: 'main' }] });
     openMenu();

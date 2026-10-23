@@ -1179,6 +1179,60 @@ describe('deleting a branch on the remote', () => {
     ).toBeInTheDocument();
   });
 
+  it('then offers the local branch that stood for it, as its own delete (ADR-0066)', async () => {
+    removeBranchMock.mockResolvedValue({ deleted: true });
+    const store = renderLoaded([
+      branch({ name: 'main', current: true }),
+      branch({ name: 'feat/mysql-pitr', upstream: 'origin/feat/mysql-pitr' }),
+      branch({ name: 'origin/feat/mysql-pitr', remote: true, oid: REMOTE_OID }),
+    ]);
+
+    await click(remoteDeleteButton());
+    await click(screen.getByRole('button', { name: 'Delete on origin' }));
+
+    // A second question, never a second delete on its own.
+    expect(removeBranchMock).not.toHaveBeenCalled();
+    expect(dialog()).toHaveTextContent(/is gone from origin/);
+    expect(dialog()).toHaveTextContent('Delete branch "feat/mysql-pitr"?');
+
+    await click(screen.getByRole('button', { name: 'Delete branch' }));
+
+    expect(removeBranchMock).toHaveBeenCalledWith(
+      store,
+      'feat/mysql-pitr',
+      'Delete branch "feat/mysql-pitr"?',
+      { force: false },
+    );
+  });
+
+  it('offers nothing when the local branch is the one checked out', async () => {
+    renderLoaded([
+      branch({ name: 'feat/mysql-pitr', current: true }),
+      branch({ name: 'origin/feat/mysql-pitr', remote: true, oid: REMOTE_OID }),
+    ]);
+
+    await click(remoteDeleteButton());
+    await click(screen.getByRole('button', { name: 'Delete on origin' }));
+
+    expect(removeRemoteBranchMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+
+  it('offers nothing when the remote delete failed', async () => {
+    removeRemoteBranchMock.mockResolvedValue(false);
+    renderLoaded([
+      branch({ name: 'main', current: true }),
+      branch({ name: 'feat/mysql-pitr', upstream: 'origin/feat/mysql-pitr' }),
+      branch({ name: 'origin/feat/mysql-pitr', remote: true, oid: REMOTE_OID }),
+    ]);
+
+    await click(remoteDeleteButton());
+    await click(screen.getByRole('button', { name: 'Delete on origin' }));
+
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(removeBranchMock).not.toHaveBeenCalled();
+  });
+
   it('sends nothing when the question is cancelled', async () => {
     withRemote();
 

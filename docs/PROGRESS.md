@@ -9,6 +9,17 @@
 - **Phase:** v0.1 feature-complete. Every buildable item in `docs/ROADMAP.md`
   M0–M5 is checked off; the only open item is the dogfood gate, which is two
   weeks of use, not code.
+- **A worktree can be removed from its WIP row, and every finished-branch
+  delete offers the next one** (2026-10-23, ADR-0065, ADR-0066): right-click a
+  worktree's WIP row for Open Worktree / Copy path / Remove worktree…. Remove is
+  `git worktree remove -- <path>`, safe first; git's refusal over uncommitted
+  work becomes an armed `--force` question. Disabled for locked, main, busy, and
+  a folder (or anything inside it) open in a tab. The dialog warns that ignored
+  files (`.env`, `node_modules`) go without a check. After a remote branch
+  delete (refs panel or commit menu) or a worktree removal, a separate question
+  offers to delete the local branch (`localStandIn`, shared with ADR-0062),
+  through the shared `views/history/branchDialog.ts` chain. Not used by hand in
+  the running app.
 - **A double click on HEAD's message edits it** (2026-10-04, ADR-0064): the
   subject of the HEAD row (and "Edit commit message…" on its menu) opens the
   whole message, read from git, in a dialog; Save runs
@@ -226,11 +237,17 @@
 
 ## Next up (in order)
 
-1. **Fix a typo by double-clicking HEAD's message in the running app**
+1. **Remove a finished worktree and delete a remote branch in the running app**
+   (ADR-0065, ADR-0066): on Windows, check a clean worktree's folder goes, a
+   dirty one asks the armed second question, the "Also delete the local
+   branch" question follows both flows, and an IDE holding the folder gives a
+   readable error (git leaves it half-removed — consider detecting
+   `failed to delete` and saying so).
+2. **Fix a typo by double-clicking HEAD's message in the running app**
    (ADR-0064): check the dialog opens with the full message and the caret at
    the end of the subject, that Ctrl+Enter saves, that staged files stay
    staged, and that the row and selection move to the new hash.
-2. **Drag a row onto another and double-click a chip in the running app**
+3. **Drag a row onto another and double-click a chip in the running app**
    (ADR-0061 to ADR-0063): check that the menu opens where the pointer let go,
    that the outline follows the row under the drag in WebView2, that the button
    row actually starts a drag without a click getting in the way, and that a
@@ -238,11 +255,11 @@
    stale `main`, double-click the `origin/main` row and confirm `main` moves
    forward; on a diverged branch confirm the error notice and no merge commit.
    Chips are narrow — see whether the double click lands on them comfortably.
-3. **Press Ctrl+F in the running app** (ADR-0060): search a keyword, walk the
+4. **Press Ctrl+F in the running app** (ADR-0060): search a keyword, walk the
    matches with Enter / Shift+Enter, check that the bar doesn't cover a match
    and that typing isn't slowed by the diff each move triggers. Try it from the
    commit message box too.
-4. **Validate the update flow end to end.** v0.1.10-alpha is the first release
+5. **Validate the update flow end to end.** v0.1.10-alpha is the first release
    carrying the updater, and the *swap* cannot be proven by it alone — a v0.1.9
    binary has no updater in it to do the swapping.
 
@@ -270,28 +287,28 @@
    d. Look in the folder for `krakenless.displaced-*.exe`, close and reopen the
       app, and confirm it is gone.
    e. Repeat (c) with the NSIS installer to exercise the plugin's path.
-5. **Use the diverged-branch flow by hand** (ADR-0035): make a repo diverge,
+6. **Use the diverged-branch flow by hand** (ADR-0035): make a repo diverge,
    watch Push refuse with the reason, run "Pull (merge)" through its dialog —
    including a conflicted one. Also watch the background fetch tick (ADR-0034)
    report an arriving tag. Neither has been seen running, only asserted.
-6. **Use the 2026-08-27 batch by hand.** All of it is tested and none of it has
+7. **Use the 2026-08-27 batch by hand.** All of it is tested and none of it has
    been run: a push while switching tabs (ADR-0028 — the whole point is that the
    window stays alive), dragging a branch chip onto the checkout to merge
    (ADR-0026), a repository with a real `git worktree` so the WIP row and the
    toolbar picker have something to show (ADR-0027), and pushing a tag
    (ADR-0029). The worktree row and the picker are the two that have never been
    *seen*, only asserted.
-7. **Right-click a commit in the running app** — the context menu (ADR-less,
+8. **Right-click a commit in the running app** — the context menu (ADR-less,
    ROADMAP § v0.2) has tests behind it but has never been used by hand. Worth
    checking the menu and its submenu near the bottom edge of the list, where the
    clamping code runs.
-8. **Try the new editor on a real file** — it is the only code that writes to
+9. **Try the new editor on a real file** — it is the only code that writes to
    your disk, and it has not been used by hand yet. Consider a
    `safety-reviewer` pass over `src-tauri/src/worktree.rs` first.
-9. **Look at the panels not yet seen running**: the diff, the working tree and
+10. **Look at the panels not yet seen running**: the diff, the working tree and
    its commit box, settings, welcome — plus dragging each edge, and the toolbar
    at narrow widths.
-10. **The dogfood gate** (`docs/ROADMAP.md` § M5): use Krakenless as the only
+11. **The dogfood gate** (`docs/ROADMAP.md` § M5): use Krakenless as the only
    Git client for two weeks. Everything else in v0.1 is done, so this is the
    next real step and it produces the list that shapes v0.2.
 11. Fix whatever the gate surfaces, in the order it hurts.
@@ -327,6 +344,27 @@
   until `buildPushCommand` emits a `<local>:<upstream>` refspec.
 
 ## Session log
+
+### 2026-10-23 — remove a worktree, and offer the local delete after the remote one
+
+"Não consigo apagar worktrees abertas … meu gráfico fica poluído com trabalhos
+já finalizados. Deletar uma branch origin deveria aparecer um pop up perguntando
+se quer que já apaga local também." ADR-0065 supersedes the "never removed"
+half of ADR-0027: `buildWorktreeRemoveCommand` + `assertAbsolutePath`,
+`removeWorktree` (safe, then forced on git's uncommitted refusal),
+`removeWorktreeAt` action refusing a folder open in a tab (`publishOpenRoots` /
+`isOpenInTab` in `state/openRequests.ts`), `views/history/worktreeDialog.ts`,
+and a context menu on the WIP row. ADR-0066: `localStandIn` extracted from
+`remoteSwitchFor`; `deleteBranchDialog` moved to `views/history/branchDialog.ts`
+and chained after remote deletes (CommitActions escalate, RefsView `lead`) and
+worktree removals. Safety review: no critical; fixed its two majors (dialog
+claimed git protects everything — ignored files go silently, now said and
+pinned by an integration test; a tab open *inside* the worktree now counts).
+Conventions review: pass; applied the minors (one follow-up title, quoted
+branch, extra tests). Left: half-removal when an outside program holds the
+folder on Windows (reported as git's error), prunable rows are never drawn so
+need no refusal. Suite green apart from `DiffView` "enormous file" timing out
+under full-suite load (untouched, passes alone).
 
 ### 2026-10-04 — edit HEAD's message with a double click
 

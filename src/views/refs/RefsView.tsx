@@ -85,6 +85,7 @@ import {
 import { buildTagMenu, tagSummary } from './tagMenu';
 import { buildTagTree, tagGroupKeys, type TagNode } from './tagTree';
 import { preferredRemote } from '../remote/remotes';
+import { localBranchAfterRemoteDelete } from '../history/branchDialog';
 
 /**
  * The delete question currently on screen.
@@ -102,7 +103,18 @@ type Deletion = {
    * repositories would delete a same-named branch somewhere else.
    */
   root: string;
-} & ({ stage: 'safe' } | { stage: 'force'; warning: string });
+} & (
+  | {
+      stage: 'safe';
+      /**
+       * Set when this question follows a remote delete: what just happened,
+       * said above the question so "Delete branch x?" is not read as a second
+       * delete of the same remote branch (ADR-0066).
+       */
+      lead?: string;
+    }
+  | { stage: 'force'; warning: string }
+);
 
 /**
  * The remote-delete question on screen, if any.
@@ -119,6 +131,12 @@ interface RemoteDeletion {
   name: string;
   oid: string;
   root: string;
+  /**
+   * The local branch to offer deleting once this one is gone, or `null`.
+   * Decided when the question opens: the push removes the remote-tracking ref
+   * the rule reads.
+   */
+  local: string | null;
 }
 
 /**
@@ -194,6 +212,9 @@ export function RefsView(): ReactNode {
   const root = useAppState((state) =>
     state.repo.state === 'ready' ? state.repo.value.root : null,
   );
+
+  const branchList = useAppState((state) => state.branches);
+  const worktreeList = useAppState((state) => state.worktrees);
 
   const [deletion, setDeletion] = useState<Deletion | null>(null);
   const [remoteDeletion, setRemoteDeletion] = useState<RemoteDeletion | null>(null);
@@ -417,6 +438,17 @@ export function RefsView(): ReactNode {
     );
     if (ok) {
       setOutcome({ text: `Deleted "${name}" on ${ref.remote}.`, root: pending.root });
+      // The local branch is still here, and is usually the next thing the user
+      // wants gone. Offered, never done: it is a separate delete with its own
+      // safe and forced steps (ADR-0066).
+      if (pending.local !== null && stillCurrent(pending.root)) {
+        setDeletion({
+          stage: 'safe',
+          name: pending.local,
+          root: pending.root,
+          lead: `"${name}" is gone from ${ref.remote}. The local branch "${pending.local}" is still here.`,
+        });
+      }
       return;
     }
     setFailure({
@@ -707,7 +739,13 @@ export function RefsView(): ReactNode {
             clearMessages();
             setStashQuestion(null);
             setDeletion(null);
-            setRemoteDeletion({ ref, name: branch.name, oid: branch.oid, root });
+            setRemoteDeletion({
+              ref,
+              name: branch.name,
+              oid: branch.oid,
+              root,
+              local: localBranchAfterRemoteDelete(branch.name, branchList, worktreeList),
+            });
           }}
         />
 
@@ -1721,6 +1759,9 @@ function DeleteConfirmation({
         trapTab(event);
       }}
     >
+      {deletion.stage === 'safe' && deletion.lead !== undefined && (
+        <p className={styles.noticeText}>{deletion.lead}</p>
+      )}
       <strong className={styles.noticeTitle}>{question}</strong>
       {forcing ? (
         <p className={styles.warning}>{deletion.warning}</p>

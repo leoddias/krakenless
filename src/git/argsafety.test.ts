@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  assertAbsolutePath,
   assertOid,
   assertPath,
   assertRefName,
@@ -45,6 +46,28 @@ describe('assertPath', () => {
     ['bad\0path', 'NUL'],
   ])('rejects %j (%s)', (path) => {
     expect(() => assertPath(path)).toThrow(GitError);
+  });
+});
+
+describe('assertAbsolutePath', () => {
+  it.each([
+    'C:/Repos/app-wiki',
+    'C:\\Repos\\app wiki',
+    '/home/ada/app-wiki',
+    'D:/a..b/c',
+  ])('accepts %s', (path) => {
+    expect(assertAbsolutePath(path)).toBe(path);
+  });
+
+  it.each([
+    ['', 'empty'],
+    ['app-wiki', 'relative'],
+    ['--force', 'an option'],
+    ['C:/Repos/../Windows', 'climbs'],
+    ['/home/ada/..', 'climbs at the end'],
+    ['C:/bad\u0000path', 'NUL'],
+  ])('rejects %j (%s)', (path) => {
+    expect(() => assertAbsolutePath(path)).toThrow(GitError);
   });
 });
 

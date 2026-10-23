@@ -116,6 +116,23 @@ export function assertPath(path: string): string {
 }
 
 /**
+ * An absolute directory path, for the commands that take one rather than a
+ * pathspec — `git worktree remove` is the one. The opposite rule to
+ * {@link assertPath}: a relative path there resolves against wherever git was
+ * started, which is this checkout, and "remove `app-wiki`" would then name a
+ * folder inside it rather than the worktree the user picked.
+ */
+export function assertAbsolutePath(path: string): string {
+  if (path.length === 0) reject('empty path', path);
+  if (path.includes('\0')) reject('path contains NUL', path);
+  if (!/^[A-Za-z]:[\\/]/.test(path) && !path.startsWith('/')) {
+    reject('path must be absolute', path);
+  }
+  if (/(^|[\\/])\.\.([\\/]|$)/.test(path)) reject('path climbs with ..', path);
+  return path;
+}
+
+/**
  * A ref name safe to pass as a positional argument. This is a syntactic
  * pre-filter, not a replacement for `git check-ref-format` — it rejects the
  * shapes that would change the *meaning* of a command.

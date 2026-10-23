@@ -14,7 +14,7 @@ import { loadConfig } from './config/store';
 import { closeRepo, openRepo, refreshAllPanels } from './state/actions';
 import { useAppState, useStore } from './state/hooks';
 import { createStore, isBusy, type AppState, type Store } from './state/store';
-import { subscribeOpenRequests } from './state/openRequests';
+import { publishOpenRoots, subscribeOpenRequests } from './state/openRequests';
 import { publishConfig, registerStore } from './state/stores';
 import { StoreProvider } from './state/StoreProvider';
 import { startAutoFetch } from './state/autoFetch';
@@ -654,6 +654,12 @@ export default function App(): ReactNode {
   // from, so a path already open lands on its existing tab instead of a second
   // one pointed at the same directory.
   useEffect(() => subscribeOpenRequests((path) => void openRepo(home, path)), [home]);
+
+  // Which folders are open, for the one question asked the other way round:
+  // a worktree is not removed while a tab is watching it (ADR-0065).
+  useEffect(() => {
+    publishOpenRoots(workspace.tabs.map((tab) => tab.root));
+  }, [workspace.tabs]);
 
   const closeTab = useCallback((id: string) => {
     setWorkspace((current) => {

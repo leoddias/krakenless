@@ -1,9 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { buildWorktreeRemoveCommand } from './commands/worktree';
+import { userConfirmed } from './confirm';
+import { GitError } from './errors';
 import type { RepoStatus, StatusEntry } from './types';
 import {
   countChanges,
   listWorktreeSummaries,
   listWorktrees,
+  removeWorktree,
   samePath,
 } from './worktrees';
 
@@ -167,5 +171,94 @@ describe('samePath', () => {
     expect(samePath('C:/repos/app', 'c:\\repos\\App')).toBe(true);
     expect(samePath('C:/repos/app/', 'C:/repos/app')).toBe(true);
     expect(samePath('C:/repos/app', 'C:/repos/app-wiki')).toBe(false);
+  });
+});
+
+describe('buildWorktreeRemoveCommand', () => {
+  it('names the folder after the separator, and is destructive', () => {
+    expect(buildWorktreeRemoveCommand(WIKI, { force: false })).toEqual({
+      args: ['worktree', 'remove', '--', WIKI],
+      destructive: true,
+    });
+  });
+
+  it('forces with one --force, which a lock still stops', () => {
+    // Twice would override a lock; nothing in the app ever asks for that.
+    expect(buildWorktreeRemoveCommand(WIKI, { force: true }).args).toEqual([
+      'worktree',
+      'remove',
+      '--force',
+      '--',
+      WIKI,
+    ]);
+  });
+
+  it('refuses a relative path, which would resolve inside this checkout', () => {
+    expect(() => buildWorktreeRemoveCommand('app-wiki', { force: false })).toThrow(
+      GitError,
+    );
+    expect(() => buildWorktreeRemoveCommand('--force', { force: false })).toThrow(
+      GitError,
+    );
+  });
+});
+
+describe('removeWorktree', () => {
+  const DIRTY = `fatal: '${WIKI}' contains modified or untracked files, use --force to delete it`;
+
+  it('removes with the safe form first', async () => {
+    invoke.mockResolvedValue(raw());
+    await expect(
+      removeWorktree(MAIN, WIKI, userConfirmed('remove the wiki')),
+    ).resolves.toEqual({ removed: true });
+    expect(invoke.mock.calls[0]?.[1].args).toEqual(['worktree', 'remove', '--', WIKI]);
+    expect(repoOf(0)).toBe(MAIN);
+  });
+
+  it('reports uncommitted work instead of silently forcing', async () => {
+    invoke.mockResolvedValue(raw({ code: 128, stderr: DIRTY }));
+
+    const outcome = await removeWorktree(MAIN, WIKI, userConfirmed('remove the wiki'));
+
+    expect(outcome.removed).toBe(false);
+    expect(outcome.uncommittedWarning).toContain('not committed');
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('forces only when explicitly asked', async () => {
+    invoke.mockResolvedValue(raw());
+    await removeWorktree(MAIN, WIKI, userConfirmed('remove it anyway'), { force: true });
+    expect(invoke.mock.calls[0]?.[1].args).toEqual([
+      'worktree',
+      'remove',
+      '--force',
+      '--',
+      WIKI,
+    ]);
+  });
+
+  it('propagates a lock refusal rather than escalating it', async () => {
+    invoke.mockResolvedValue(
+      raw({ code: 128, stderr: 'fatal: cannot remove a locked working tree' }),
+    );
+    await expect(
+      removeWorktree(MAIN, WIKI, userConfirmed('remove the wiki')),
+    ).rejects.toThrow(GitError);
+  });
+
+  it('never removes the worktree it runs in', async () => {
+    await expect(
+      removeWorktree(WIKI, 'c:\\repos\\APP-wiki', userConfirmed('remove the wiki'), {
+        force: true,
+      }),
+    ).rejects.toThrow(GitError);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('runs nothing without a confirmation minted by the UI', async () => {
+    await expect(
+      removeWorktree(MAIN, WIKI, { reason: 'forged' } as never),
+    ).rejects.toThrow(GitError);
+    expect(invoke).not.toHaveBeenCalled();
   });
 });

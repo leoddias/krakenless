@@ -17,7 +17,6 @@
  */
 
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import type { DeleteBranchOutcome } from '../../git/refs';
 import { hasTrackedChanges } from '../../git/status';
 import type { Commit, StashEntry, Tag } from '../../git/types';
 import {
@@ -28,7 +27,6 @@ import {
   pushCurrent,
   pushTagTo,
   rebaseBranchOnto,
-  removeBranch,
   removeRemoteBranch,
   removeRemoteTag,
   removeStash,
@@ -53,7 +51,6 @@ import {
 } from '../remote/remotes';
 import {
   applyStashQuestion,
-  deleteBranchQuestion,
   deleteRemoteBranchQuestion,
   dropRecoveryCommand,
   dropStashQuestion,
@@ -61,7 +58,6 @@ import {
   deleteRemoteTagQuestion,
   deleteTagDetail,
   deleteTagQuestion,
-  forceDeleteBranchQuestion,
   popStashQuestion,
   remoteDeleteRecovery,
   remoteTagDeleteRecovery,
@@ -76,6 +72,7 @@ import {
   type CommitAction,
   type CommitMenuItem,
 } from './commitMenu';
+import { deleteBranchDialog, localBranchAfterRemoteDelete } from './branchDialog';
 import { mergeDialog } from './mergeDialog';
 import styles from './CommitActions.module.css';
 
@@ -202,6 +199,7 @@ export function CommitActions({
   const branches = useAppState((state) => state.branches);
   const tags = useAppState((state) => state.tags);
   const operation = useAppState((state) => state.operation);
+  const worktrees = useAppState((state) => state.worktrees);
   const [menuOpen, setMenuOpen] = useState(true);
   const [dialog, setDialog] = useState<Dialog | null>(null);
 
@@ -368,7 +366,7 @@ export function CommitActions({
         });
         return;
       case 'delete-branch':
-        setDialog(deleteBranchDialog(action.name));
+        setDialog(deleteBranchDialog(store, action.name));
         return;
       case 'delete-tag': {
         // The object is read from the tag list rather than from the row: a chip
@@ -415,6 +413,11 @@ export function CommitActions({
       }
       case 'delete-remote-branch': {
         const ref = { remote: action.remote, branch: action.branch };
+        const local = localBranchAfterRemoteDelete(
+          `${action.remote}/${action.branch}`,
+          branches,
+          worktrees,
+        );
         setDialog({
           kind: 'confirm',
           title: `Delete "${action.branch}" on ${action.remote}?`,
@@ -427,6 +430,16 @@ export function CommitActions({
           // delete: the refresh that follows prunes the ref it came from.
           run: (reason) =>
             removeRemoteBranch(store, ref, reason, remoteDeleteRecovery(ref, action.oid)),
+          // The local branch is decided now, for the same reason: the push
+          // takes the remote-tracking ref the rule reads (ADR-0066).
+          escalate: (deleted) =>
+            deleted === true && local !== null
+              ? deleteBranchDialog(
+                  store,
+                  local,
+                  `Also delete the local branch "${local}"?`,
+                )
+              : null,
         });
         return;
       }
@@ -435,44 +448,6 @@ export function CommitActions({
         return;
     }
   };
-
-  /**
-   * The safe branch delete, and the forced one it may turn into.
-   *
-   * Two steps and never one, and the second is a different question with a
-   * different reason: git's refusal names commits that exist nowhere else, and
-   * the token the `-D` records must be the yes the user gave *after* reading
-   * that. The question strings are the refs panel's own, so the two places that
-   * can delete a branch cannot describe it differently.
-   */
-  function deleteBranchDialog(name: string): ConfirmDialog {
-    return {
-      kind: 'confirm',
-      title: `Delete branch "${name}"?`,
-      question: deleteBranchQuestion(name),
-      detail:
-        'Commits that are merged elsewhere stay in the repository; git refuses this if any of them would be lost.',
-      confirmLabel: 'Delete Branch',
-      danger: true,
-      run: (reason) => removeBranch(store, name, reason, { force: false }),
-      escalate: (result) => {
-        const outcome = result as DeleteBranchOutcome | null;
-        if (outcome === null || outcome.deleted) return null;
-        const warning = outcome.unmergedWarning;
-        if (warning === undefined) return null;
-        return {
-          kind: 'confirm',
-          title: `Delete "${name}" anyway?`,
-          question: forceDeleteBranchQuestion(name),
-          detail: warning,
-          confirmLabel: 'Delete Branch',
-          danger: true,
-          arm: 'I understand those commits will be lost',
-          run: (reason) => removeBranch(store, name, reason, { force: true }),
-        };
-      },
-    };
-  }
 
   /**
    * The question a stash action asks, and what it runs.

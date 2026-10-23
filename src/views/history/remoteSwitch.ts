@@ -37,26 +37,7 @@ export function remoteSwitchFor(
   if (chip === undefined || branches === null) return null;
   const remoteRef = chip.name;
 
-  const locals = branches.filter((branch) => !branch.remote);
-  const tracking = locals.find((branch) => branch.upstream === remoteRef);
-  const remoteRow = branches.find((branch) => branch.remote && branch.name === remoteRef);
-  // `origin/HEAD` is a pointer, not a branch: `splitRemoteBranch` says so, and
-  // no local branch is ever named after it.
-  const derived =
-    remoteRow === undefined || splitRemoteBranch(remoteRef) === null
-      ? null
-      : localNameFor(remoteRow);
-  // The namesake counts only when it does not track somewhere else: a `main`
-  // that follows `upstream/main` is not what `origin/main` stands for, and
-  // moving it toward a fork is a write to a branch the user's config named
-  // differently.
-  const namesake =
-    derived === null ? undefined : locals.find((branch) => branch.name === derived);
-  const namesakeStandsIn =
-    namesake !== undefined &&
-    (namesake.upstream === undefined || namesake.upstream === remoteRef);
-  const local = tracking ?? (namesakeStandsIn ? namesake : undefined);
-
+  const local = localStandIn(remoteRef, branches);
   if (local !== undefined) {
     // Already there: the checkout is this branch and it sits on this commit.
     if (local.current && local.oid === oid) return null;
@@ -64,6 +45,50 @@ export function remoteSwitchFor(
   }
   // A namesake that follows another remote also takes the name a new branch
   // would need, so there is nothing to create either.
-  if (derived === null || namesake !== undefined) return null;
+  const derived = derivedName(remoteRef, branches);
+  if (
+    derived === null ||
+    branches.some((branch) => !branch.remote && branch.name === derived)
+  ) {
+    return null;
+  }
   return { kind: 'create', name: derived, remoteRef };
+}
+
+/**
+ * The local name `remoteRef` maps to, by the rule the refs panel's "Check out"
+ * uses, or `null` for a ref that is not a branch or is not in the list.
+ */
+function derivedName(remoteRef: string, branches: Branch[]): string | null {
+  const remoteRow = branches.find((branch) => branch.remote && branch.name === remoteRef);
+  // `origin/HEAD` is a pointer, not a branch: `splitRemoteBranch` says so, and
+  // no local branch is ever named after it.
+  return remoteRow === undefined || splitRemoteBranch(remoteRef) === null
+    ? null
+    : localNameFor(remoteRow);
+}
+
+/**
+ * The local branch that stands for `remoteRef`: the one tracking it, else the
+ * one sharing its name — or nothing.
+ *
+ * Exported because a double click is not the only thing that has to know what
+ * "the local `x`" is: deleting `origin/x` offers to delete it too, and the two
+ * must never pick different branches.
+ */
+export function localStandIn(remoteRef: string, branches: Branch[]): Branch | undefined {
+  const locals = branches.filter((branch) => !branch.remote);
+  const tracking = locals.find((branch) => branch.upstream === remoteRef);
+  if (tracking !== undefined) return tracking;
+  const derived = derivedName(remoteRef, branches);
+  // The namesake counts only when it does not track somewhere else: a `main`
+  // that follows `upstream/main` is not what `origin/main` stands for, and
+  // moving it toward a fork is a write to a branch the user's config named
+  // differently.
+  const namesake =
+    derived === null ? undefined : locals.find((branch) => branch.name === derived);
+  return namesake !== undefined &&
+    (namesake.upstream === undefined || namesake.upstream === remoteRef)
+    ? namesake
+    : undefined;
 }

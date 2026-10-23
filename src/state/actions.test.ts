@@ -9,6 +9,7 @@ import {
   removeRemoteTag,
   removeStash,
   removeTag,
+  removeWorktreeAt,
   rewordHeadCommit,
   switchTo,
   switchToRemote,
@@ -27,6 +28,7 @@ import {
 import { createStore, isBusy } from './store';
 import { defaultConfig } from '../config/schema';
 import { GitError } from '../git/errors';
+import { publishOpenRoots, resetOpenRequests } from './openRequests';
 
 const openRepository = vi.hoisted(() => vi.fn());
 const getStatus = vi.hoisted(() => vi.fn());
@@ -61,12 +63,17 @@ const deleteBranch = vi.hoisted(() => vi.fn());
 const deleteRemoteBranchFn = vi.hoisted(() => vi.fn());
 const applyStash = vi.hoisted(() => vi.fn());
 const dropStash = vi.hoisted(() => vi.fn());
+const removeWorktree = vi.hoisted(() => vi.fn());
 
 vi.mock('../git/repository', () => ({ openRepository }));
 vi.mock('../git/status', () => ({ getStatus }));
 vi.mock('../git/log', () => ({ readLog }));
 vi.mock('../git/diff', () => ({ getWorktreeDiff, getStagedDiff, getCommitDiff }));
 vi.mock('../config/store', () => ({ saveConfig }));
+vi.mock('../git/worktrees', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../git/worktrees')>()),
+  removeWorktree,
+}));
 vi.mock('../git/commits', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../git/commits')>()),
   fastForwardTo,
@@ -1112,6 +1119,90 @@ describe('removeRemoteBranch — the name goes, the way back is kept', () => {
 
     expect(store.getState().notice).toMatchObject({ tone: 'error' });
     expect(store.getState().notice?.message).toMatch(/refusing to delete/);
+  });
+});
+
+describe('removeWorktreeAt — the folder goes, never under an open tab', () => {
+  const WIKI = 'C:/repos/app-wiki';
+
+  beforeEach(() => {
+    resetOpenRequests();
+    removeWorktree.mockReset();
+  });
+
+  it('removes under the confirmation the user saw, and says so', async () => {
+    removeWorktree.mockResolvedValue({ removed: true });
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    const outcome = await removeWorktreeAt(store, WIKI, 'Remove the worktree?');
+
+    expect(outcome).toEqual({ removed: true });
+    expect(removeWorktree).toHaveBeenCalledWith(
+      REPO.root,
+      WIKI,
+      expect.objectContaining({ reason: 'Remove the worktree?' }),
+      { force: false },
+    );
+    expect(store.getState().notice).toMatchObject({ tone: 'info' });
+  });
+
+  it('surfaces the uncommitted warning instead of removing', async () => {
+    removeWorktree.mockResolvedValue({
+      removed: false,
+      uncommittedWarning: 'The worktree has changes that are not committed.',
+    });
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    const outcome = await removeWorktreeAt(store, WIKI, 'Remove the worktree?');
+
+    expect(outcome?.removed).toBe(false);
+    expect(store.getState().notice).toMatchObject({
+      tone: 'warning',
+      message: expect.stringContaining('not committed'),
+    });
+  });
+
+  it('touches nothing while a tab has a folder inside it open', async () => {
+    // A repository cloned into the worktree goes with it, and its tab's
+    // watcher holds the folder just the same.
+    publishOpenRoots(['C:/repos/app-wiki/vendor/lib']);
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await expect(
+      removeWorktreeAt(store, WIKI, 'Remove the worktree?'),
+    ).resolves.toBeNull();
+    expect(removeWorktree).not.toHaveBeenCalled();
+  });
+
+  it('is not fooled by a sibling folder sharing the prefix', async () => {
+    removeWorktree.mockResolvedValue({ removed: true });
+    publishOpenRoots(['C:/repos/app-wiki-old']);
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await removeWorktreeAt(store, WIKI, 'Remove the worktree?');
+    expect(removeWorktree).toHaveBeenCalledTimes(1);
+  });
+
+  it('touches nothing while a tab has the folder open', async () => {
+    // Its watcher holds the directory on Windows: git would delete the files
+    // and then fail on the folder.
+    publishOpenRoots(['C:/repos/app', 'c:\\repos\\APP-WIKI']);
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await expect(
+      removeWorktreeAt(store, WIKI, 'Remove the worktree?'),
+    ).resolves.toBeNull();
+
+    expect(removeWorktree).not.toHaveBeenCalled();
+    expect(store.getState().notice).toMatchObject({
+      tone: 'error',
+      message: expect.stringContaining('open in a tab'),
+    });
   });
 });
 

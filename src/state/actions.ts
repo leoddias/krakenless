@@ -81,7 +81,12 @@ import {
   type OperationKind,
 } from '../git/operation';
 import { hasConflictMarkers } from '../git/conflict';
-import { listWorktreeSummaries } from '../git/worktrees';
+import {
+  listWorktreeSummaries,
+  removeWorktree,
+  type RemoveWorktreeOutcome,
+} from '../git/worktrees';
+import { isOpenInTab } from './openRequests';
 import {
   FileError,
   openWorktreeFile,
@@ -1055,6 +1060,60 @@ export async function removeBranch(
         notice: { tone: 'warning', message: result.unmergedWarning },
       });
     }
+  }
+  return outcome;
+}
+
+/**
+ * Removes a linked worktree. Without `force` this reports uncommitted work
+ * instead of removing, so the UI can ask again with the consequence spelled
+ * out — the same two steps a branch delete takes.
+ *
+ * Refused while the folder is open in a tab, checked here at the last moment
+ * rather than only when the menu was built: the tab could have been opened
+ * while the question was on screen, and its watcher is what turns a remove
+ * into half a remove on Windows (see `openRequests.ts`).
+ */
+export async function removeWorktreeAt(
+  store: Store,
+  path: string,
+  confirmationReason: string,
+  options: { force: boolean } = { force: false },
+): Promise<RemoveWorktreeOutcome | null> {
+  const root = currentRoot(store);
+  if (root === null) return null;
+  if (isOpenInTab(path)) {
+    store.dispatch({
+      type: 'notice',
+      notice: {
+        tone: 'error',
+        message: `Nothing was removed: ${path} is open in a tab. Close that tab first.`,
+      },
+    });
+    return null;
+  }
+
+  let outcome: RemoveWorktreeOutcome | null = null;
+  await operate(store, async () => {
+    outcome = await removeWorktree(
+      root,
+      path,
+      userConfirmed(confirmationReason),
+      options,
+    );
+  });
+
+  if (outcome !== null) {
+    const result: RemoveWorktreeOutcome = outcome;
+    store.dispatch({
+      type: 'notice',
+      notice: result.removed
+        ? { tone: 'info', message: `Removed the worktree at ${path}.` }
+        : {
+            tone: 'warning',
+            message: result.uncommittedWarning ?? `${path} was not removed.`,
+          },
+    });
   }
   return outcome;
 }

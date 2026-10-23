@@ -453,6 +453,8 @@ one the user edited, and refusing more than git does would refuse work git would
 have accepted. The refusal git does produce is surfaced in its own words.
 ## ADR-0027 — Worktrees are shown and opened, never created or removed
 
+**Status:** superseded in part by ADR-0065 — removing a worktree is built; adding one still is not
+
 **Decision:** The app reads `git worktree list --porcelain`, runs one
 `git status` inside each linked worktree to count what is uncommitted there,
 and surfaces the result in two places: a WIP row on the timeline hanging off the
@@ -2021,3 +2023,59 @@ a typo when other work is staged.
 nothing. Rewording an older commit needs a rebase that replays everything after
 it — a separate feature, not this one. The dialog's sentence is the
 confirmation reason, as everywhere else.
+## ADR-0065 — A worktree can be removed from its row on the timeline
+**Date:** 2026-10-23 · **Status:** accepted
+**Decision:** Supersedes the "never removed" half of ADR-0027. A right-click on
+a worktree's WIP row opens a menu — Open Worktree, Copy path, Remove worktree…
+Remove runs `git worktree remove -- <absolute path>` behind a confirmation
+whose sentence names the folder. Git's own refusal of a worktree with
+modified or untracked files becomes a second, armed question that runs
+`--force` once; a single `--force` does not get past a lock, and the app never
+sends it twice. The item is disabled, with the reason, for a locked worktree,
+the main worktree, while a command runs, and while the folder is open in a tab
+(re-checked in the action at the moment it runs). The git layer refuses the
+worktree it is running in and any path that is not absolute or climbs with
+`..`. Ignored files are not something git checks, so the safe form deletes
+them too (a `.env`, `node_modules`); the dialog says so before the click.
+A tab open on a folder *inside* the worktree counts as open. Adding a worktree
+is still not built.
+**Why:** "Não consigo apagar worktrees abertas … meu gráfico fica poluído com
+trabalhos já finalizados." Every finished worktree keeps a WIP row on the graph
+until it is removed, and the only way out was a terminal. The safe-then-forced
+pair is the shape the branch delete already has, so a dirty worktree costs a
+second, deliberate answer rather than being either impossible or silent.
+Refusing an open tab rather than closing it: on Windows the tab's watcher holds
+the directory, so git deletes the files and then fails on the folder — half a
+checkout. Rejected: `remove -f -f` for locked worktrees (a lock is somebody's
+explicit "not this one"), and moving the folder to the trash first (git keeps
+the worktree's admin files in `.git/worktrees/`, and a trash copy would not be
+a working checkout again without them).
+**Consequences:** `git worktree remove` is the second command in the app that
+deletes files off disk outside the open checkout's index (after ADR-0022's
+editor delete). `--force` destroys uncommitted work with no copy anywhere; the
+armed checkbox and git's own refusal are the only gates. Open tabs are
+published from `App` through `state/openRequests.ts` so the history can ask
+"is this folder open?" without knowing about tabs.
+## ADR-0066 — Deleting a branch's remote or its worktree offers to delete the local branch next
+**Date:** 2026-10-23 · **Status:** accepted
+**Decision:** After a remote branch delete succeeds — from the refs panel or a
+commit row's menu — the app asks, as a separate question, whether to delete the
+local branch that stood for it: the one tracking it, else a namesake tracking
+nothing else (the rule ADR-0062's double click uses, now `localStandIn`). After
+a worktree is removed, the same question is asked about the branch it had
+checked out. Either way the question is the ordinary local delete — `branch -d`
+first, `-D` only through its own armed second question — and it is not asked
+for the branch checked out here or one another worktree holds, both of which
+git refuses. The candidate is decided when the first question opens, because
+the push removes the remote-tracking ref the rule reads.
+**Why:** "Deletar uma branch origin deveria aparecer um pop up perguntando se
+quer que já apaga local também." Cleaning up a finished branch is three
+deletes (remote, worktree, local) and the second and third were each a
+separate hunt. Rejected: a checkbox on the remote question ("also delete
+locally"). It would tie the local `-d`/`-D` escalation to an answer given
+before git said whether the branch is merged, and a remote delete that failed
+would leave the meaning of the ticked box unclear.
+**Consequences:** One more dialog after every remote delete that has a local
+counterpart; Cancel (focused) declines it. `deleteBranchDialog` moves to
+`views/history/branchDialog.ts` so the three places that end in a branch
+delete share one chain.
