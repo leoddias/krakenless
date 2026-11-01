@@ -21,17 +21,22 @@ import {
   useMemo,
   useState,
   type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from 'react';
+import { revealPath } from '../../config/launch';
 import { LAYOUT_BOUNDS, type FileListMode } from '../../config/schema';
 import { openWorktreeFile } from '../../fs/file';
 import type { DiffLine, FileDiff, Hunk } from '../../git/types';
-import { discardHunk, stageHunks } from '../../state/actions';
+import { discardHunk, openInEditor, stageHunks } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
-import { isBusy } from '../../state/store';
+import { isBusy, type Store } from '../../state/store';
+import { copyText } from '../shell/clipboard';
+import { ContextMenu, type MenuSection } from '../shell/ContextMenu';
 import { Splitter } from '../shell/Splitter';
 import { buildPathTree, type PathNode } from '../shell/pathTree';
 import { edgeHandlers, rememberConfig, useLayout } from '../shell/useLayout';
+import { buildDiffFileMenu, type DiffFileAction } from './diffFileMenu';
 import { FileEditor } from './FileEditor';
 import {
   discardHunkQuestion,
@@ -286,6 +291,14 @@ const FileList = memo(function FileList({
     });
   };
 
+  // Without this the right-click falls through to the webview's own menu
+  // (Back, Reload, Print…), none of which means anything in a desktop app.
+  const [menu, setMenu] = useState<{ file: FileDiff; x: number; y: number } | null>(null);
+  const onMenu = useCallback((file: FileDiff, event: ReactMouseEvent): void => {
+    event.preventDefault();
+    setMenu({ file, x: event.clientX, y: event.clientY });
+  }, []);
+
   return (
     <nav className={styles.files} aria-label="Changed files">
       <div className={styles.fileHead}>
@@ -328,6 +341,7 @@ const FileList = memo(function FileList({
               folded={folded}
               onToggle={toggleFolded}
               onSelect={onSelect}
+              onMenu={onMenu}
             />
           ))}
         </ul>
@@ -340,14 +354,104 @@ const FileList = memo(function FileList({
                 label={displayPath(plan.file)}
                 activePath={activePath}
                 onSelect={onSelect}
+                onMenu={onMenu}
               />
             </li>
           ))}
         </ul>
       )}
+      {menu !== null && (
+        <DiffFileMenu
+          file={menu.file}
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </nav>
   );
 });
+
+/**
+ * Runs one menu choice. Every item is a read or a hand-off, so each runs at
+ * once and reports its own failure as a notice — a copy that silently did not
+ * happen is only discovered at the next paste.
+ */
+function runDiffFileAction(store: Store, action: DiffFileAction): void {
+  const warn = (message: string): void => {
+    store.dispatch({ type: 'notice', notice: { tone: 'warning', message } });
+  };
+  switch (action.kind) {
+    case 'reveal':
+      void revealPath(action.path).catch((error: unknown) => {
+        warn(
+          `Could not open the file manager. ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+      return;
+    case 'edit':
+      void openInEditor(store, action.path);
+      return;
+    case 'copy':
+      void copyText(action.text).then(
+        (copied) => {
+          store.dispatch({
+            type: 'notice',
+            notice: copied
+              ? {
+                  tone: 'info',
+                  message: `The ${action.what} was copied to the clipboard.`,
+                }
+              : {
+                  tone: 'warning',
+                  message: `The ${action.what} could not be copied — this window has no clipboard access.`,
+                },
+          });
+        },
+        () => warn(`The ${action.what} could not be copied.`),
+      );
+      return;
+  }
+}
+
+function DiffFileMenu({
+  file,
+  x,
+  y,
+  onClose,
+}: {
+  file: FileDiff;
+  x: number;
+  y: number;
+  onClose: () => void;
+}): ReactNode {
+  const store = useStore();
+  const root = useAppState((state) =>
+    state.repo.state === 'ready' && !state.repo.value.bare ? state.repo.value.root : null,
+  );
+  const sections: MenuSection[] = buildDiffFileMenu({ file, root }).map((section) =>
+    section.map((item) => {
+      const action = item.action;
+      return {
+        id: item.id,
+        label: item.label,
+        disabled: item.disabled,
+        ...(action === undefined
+          ? {}
+          : { onSelect: () => runDiffFileAction(store, action) }),
+      };
+    }),
+  );
+  return (
+    <ContextMenu
+      sections={sections}
+      x={x}
+      y={y}
+      label={`Actions for ${file.newPath}`}
+      onClose={onClose}
+    />
+  );
+}
 
 /**
  * One file in the list, in either shape.
@@ -361,12 +465,14 @@ function FileRow({
   label,
   activePath,
   onSelect,
+  onMenu,
 }: {
   plan: FilePlan;
   /** What the row shows: the full path in the list, the file name in the tree. */
   label: string;
   activePath: string | null;
   onSelect: (path: string | null) => void;
+  onMenu: (file: FileDiff, event: ReactMouseEvent) => void;
 }): ReactNode {
   const { file, added, deleted } = plan;
   return (
@@ -376,6 +482,7 @@ function FileRow({
       aria-current={activePath === file.newPath ? 'true' : undefined}
       title={displayPath(file)}
       onClick={() => onSelect(file.newPath)}
+      onContextMenu={(event) => onMenu(file, event)}
     >
       <span className={styles.filePath}>{label}</span>
       <span className={styles.fileKind}>{CHANGE_KIND_LABELS[file.kind]}</span>
@@ -399,12 +506,14 @@ function TreeRow({
   folded,
   onToggle,
   onSelect,
+  onMenu,
 }: {
   node: PathNode<FilePlan>;
   activePath: string | null;
   folded: ReadonlySet<string>;
   onToggle: (path: string) => void;
   onSelect: (path: string | null) => void;
+  onMenu: (file: FileDiff, event: ReactMouseEvent) => void;
 }): ReactNode {
   if (node.kind === 'file') {
     return (
@@ -414,6 +523,7 @@ function TreeRow({
           label={node.name}
           activePath={activePath}
           onSelect={onSelect}
+          onMenu={onMenu}
         />
       </li>
     );
@@ -443,6 +553,7 @@ function TreeRow({
               folded={folded}
               onToggle={onToggle}
               onSelect={onSelect}
+              onMenu={onMenu}
             />
           ))}
         </ul>

@@ -6,7 +6,10 @@ import { discardHunk, stageHunks } from '../../state/actions';
 import { StoreProvider } from '../../state/hooks';
 import { createStore, type Store } from '../../state/store';
 import { registerStore, resetStoreRegistry } from '../../state/stores';
+import { copyText } from '../shell/clipboard';
 import { DiffView } from './DiffView';
+
+vi.mock('../shell/clipboard', () => ({ copyText: vi.fn().mockResolvedValue(true) }));
 
 // Only the two hunk actions are replaced: the editor tests below drive the
 // real `openFileForEdit`, and a blanket mock would take them out with it.
@@ -853,5 +856,69 @@ describe('the file list: its width, and its shape', () => {
 
     fireEvent.click(folder);
     expect(screen.getByRole('button', { name: /^a\.ts/ })).toBeInTheDocument();
+  });
+});
+
+describe('the file list context menu', () => {
+  const files = [
+    fileDiff({
+      newPath: 'out/thumbs/m2.png',
+      oldPath: 'out/thumbs/m2.png',
+      kind: 'added',
+      side: 'commit',
+      binary: true,
+    }),
+    fileDiff({
+      newPath: 'gone.txt',
+      oldPath: 'gone.txt',
+      kind: 'deleted',
+      side: 'commit',
+    }),
+  ];
+
+  function open(store: Store): void {
+    store.dispatch({
+      type: 'repo/opened',
+      repo: { root: 'C:/repo', gitDir: 'C:/repo/.git', bare: false, empty: false },
+    });
+    store.dispatch({ type: 'diff/loaded', files });
+  }
+
+  it("replaces the webview's own menu on a right-click", () => {
+    renderView(open);
+    const row = screen.getByRole('button', { name: /out\/thumbs\/m2\.png/ });
+    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    fireEvent(row, event);
+    expect(event.defaultPrevented).toBe(true);
+    const menu = screen.getByRole('menu', { name: 'Actions for out/thumbs/m2.png' });
+    for (const label of [
+      'Reveal in file manager',
+      'Open in editor',
+      'Copy path',
+      'Copy full path',
+      'Copy file name',
+    ]) {
+      expect(
+        within(menu).getByRole('menuitem', { name: new RegExp(label) }),
+      ).toBeInTheDocument();
+    }
+  });
+
+  it('copies the full path and says so', async () => {
+    const store = renderView(open);
+    fireEvent.contextMenu(screen.getByRole('button', { name: /out\/thumbs\/m2\.png/ }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: /Copy full path/ }));
+    });
+    expect(vi.mocked(copyText)).toHaveBeenCalledWith('C:/repo/out/thumbs/m2.png');
+    expect(store.getState().notice?.message).toMatch(/full path was copied/);
+  });
+
+  it('greys reveal for a file the commit deletes', () => {
+    renderView(open);
+    fireEvent.contextMenu(screen.getByRole('button', { name: /gone\.txt/ }));
+    expect(
+      screen.getByRole('menuitem', { name: /Reveal in file manager/ }),
+    ).toHaveAttribute('aria-disabled', 'true');
   });
 });
