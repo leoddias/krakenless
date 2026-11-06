@@ -98,7 +98,7 @@ describe('an untracked file in the diff panel', () => {
     // A binary refused by the same door the editor uses, with the same reason.
     invoke.mockResolvedValue(contents('\ufffd\ufffd', true));
 
-    renderUntracked('logo.png');
+    renderUntracked('data.bin');
 
     await waitFor(() => {
       expect(screen.getByText('Nothing to diff yet')).toBeInTheDocument();
@@ -151,5 +151,153 @@ describe('an untracked file in the diff panel', () => {
     const article = await screen.findByRole('article', { name: 'b.txt' });
     expect(article).toHaveTextContent('second');
     expect(article).not.toHaveTextContent('first');
+  });
+});
+
+describe('image preview', () => {
+  const OID = 'c'.repeat(40);
+
+  /** Answers each preview call with bytes that name the version asked for. */
+  function answerPreviews(fail: (args: Record<string, string>) => boolean = () => false) {
+    invoke.mockImplementation((command: string, args: Record<string, string>) => {
+      if (command !== 'preview_blob' && command !== 'preview_worktree') {
+        return Promise.reject(new Error(`unexpected ${command}`));
+      }
+      if (fail(args)) {
+        return Promise.reject({
+          kind: 'NotFound',
+          message: `${args['spec'] ?? ''} is gone`,
+        });
+      }
+      return Promise.resolve({
+        base64: btoa(args['spec'] ?? args['path'] ?? ''),
+        bytes: 2048,
+      });
+    });
+  }
+
+  function renderCommit(file: Partial<FileDiff>): void {
+    const store = createStore();
+    store.dispatch({
+      type: 'repo/opened',
+      repo: { root: 'C:/repo', gitDir: 'C:/repo/.git', bare: false, empty: false },
+    });
+    store.dispatch({ type: 'selection/commit', oid: OID });
+    store.dispatch({
+      type: 'diff/loaded',
+      files: [
+        {
+          oldPath: 'img/a.png',
+          newPath: 'img/a.png',
+          kind: 'modified',
+          binary: true,
+          conflicted: false,
+          side: 'commit',
+          headerLines: [],
+          hunks: [],
+          ...file,
+        },
+      ],
+    });
+    render(
+      <StoreProvider store={store}>
+        <DiffView />
+      </StoreProvider>,
+    );
+  }
+
+  it("draws a commit's image beside its first parent's", async () => {
+    answerPreviews();
+    renderCommit({});
+
+    const before = await screen.findByRole('img', { name: 'Before: img/a.png' });
+    const after = await screen.findByRole('img', { name: 'After: img/a.png' });
+    expect(invoke).toHaveBeenCalledWith('preview_blob', {
+      repo: 'C:/repo',
+      spec: `${OID}^:img/a.png`,
+    });
+    expect(invoke).toHaveBeenCalledWith('preview_blob', {
+      repo: 'C:/repo',
+      spec: `${OID}:img/a.png`,
+    });
+    expect(before).toHaveAttribute(
+      'src',
+      `data:image/png;base64,${btoa(`${OID}^:img/a.png`)}`,
+    );
+    expect(after).toHaveAttribute(
+      'src',
+      `data:image/png;base64,${btoa(`${OID}:img/a.png`)}`,
+    );
+    expect(screen.queryByText(/Binary file/)).toBeNull();
+  });
+
+  it('draws only the new version of an added image, and says it was added', async () => {
+    answerPreviews();
+    renderCommit({ kind: 'added' });
+
+    await screen.findByRole('img', { name: 'Added: img/a.png' });
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the after when the before cannot be read', async () => {
+    answerPreviews((args) => (args['spec'] ?? '').includes('^'));
+    renderCommit({});
+
+    await screen.findByRole('img', { name: 'After: img/a.png' });
+    expect(
+      await screen.findByText(/This version cannot be shown: .* is gone/),
+    ).toBeInTheDocument();
+  });
+
+  it('reads the image again when a refresh brings new content at the same path', async () => {
+    answerPreviews();
+    const store = createStore();
+    store.dispatch({
+      type: 'repo/opened',
+      repo: { root: 'C:/repo', gitDir: 'C:/repo/.git', bare: false, empty: false },
+    });
+    const edit = (index: string): FileDiff => ({
+      oldPath: 'img/a.png',
+      newPath: 'img/a.png',
+      kind: 'modified',
+      binary: true,
+      conflicted: false,
+      side: 'unstaged',
+      headerLines: ['diff --git a/img/a.png b/img/a.png', index],
+      hunks: [],
+    });
+    store.dispatch({
+      type: 'diff/loaded',
+      files: [edit('index 1111111..2222222 100644')],
+    });
+    render(
+      <StoreProvider store={store}>
+        <DiffView />
+      </StoreProvider>,
+    );
+    await screen.findByRole('img', { name: 'After: img/a.png' });
+    const reads = () =>
+      invoke.mock.calls.filter(([command]) => command === 'preview_worktree').length;
+    expect(reads()).toBe(1);
+
+    await act(async () => {
+      store.dispatch({
+        type: 'diff/loaded',
+        files: [edit('index 1111111..3333333 100644')],
+      });
+    });
+    await waitFor(() => expect(reads()).toBe(2));
+  });
+
+  it('draws an untracked image from disk instead of refusing it as text', async () => {
+    answerPreviews();
+    renderUntracked('logo.png');
+
+    await screen.findByRole('img', { name: 'Added: logo.png' });
+    expect(invoke).toHaveBeenCalledWith('preview_worktree', {
+      repo: 'C:/repo',
+      path: 'logo.png',
+    });
+    expect(invoke).not.toHaveBeenCalledWith('worktree_read', expect.anything());
   });
 });

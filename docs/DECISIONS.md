@@ -2079,3 +2079,35 @@ would leave the meaning of the ticked box unclear.
 counterpart; Cancel (focused) declines it. `deleteBranchDialog` moves to
 `views/history/branchDialog.ts` so the three places that end in a branch
 delete share one chain.
+
+## ADR-0067 — Images in a diff are drawn, and a large file opens after a dwell
+**Date:** 2026-11-05 · **Status:** accepted
+**Decision:** A binary file whose extension is a raster image (png, jpg, gif,
+webp, bmp, ico, avif — not SVG) is drawn in the diff panel instead of the
+"Binary file" sentence: before and after side by side on a checkerboard, each
+with its size and dimensions, sprites under 96 px enlarged by a whole factor
+with nearest-neighbour scaling. The pairing follows what the diff compared — a
+commit against its first parent (`<oid>^:`, matching `show -m --first-parent`),
+staged against `HEAD`, unstaged against the index with the disk as the after —
+and an untracked image is drawn from disk. Bytes come from two read-only
+commands: `preview_blob` (the spec resolved once with `rev-parse --verify`,
+then `cat-file -s` and `cat-file blob` on that id, the spec held to
+`<rev>:<path>` — rev being the index, `HEAD`, or a full oid with at most one
+`^` — checked in TypeScript and again in Rust) and `preview_worktree` (the
+editor's path guard). 16 MB cap per version. Separately, a file collapsed for
+size renders its first 1,000 lines by itself after 1.5 s on screen.
+**Why:** "Gostaria que fosse possível o preview de arquivos .png" and "se
+clicar e ficar parado por alguns segundos deveria ter um auto show". Repos of
+game assets change images in every other commit, and "Binary file" says nothing
+about what changed. The dwell keeps the reason the collapse exists — walking
+the history with the arrow keys must never render a file only passed through —
+while removing the click for the file the user stopped on. Only the first chunk
+opens: a dwell means "show me this file", not "all of it". SVG is excluded
+because git already shows it as text and it is a document that can run script.
+**Consequences:** `git_runner` gains `run_git_raw` / `run_capture_raw`, the one
+path whose stdout is not decoded as UTF-8; everything else still goes through
+the decoding wrapper and its lossy flag. Previewing a large commit's image costs
+two `cat-file` processes per side. The pure pairing lives in
+`views/diff/imageSides.ts`, the spec in `git/commands/blob.ts`. A loaded image
+is keyed on the diff's `index <old>..<new>` line, so a refresh with new content
+at the same path reads it again rather than keep drawing the first load.

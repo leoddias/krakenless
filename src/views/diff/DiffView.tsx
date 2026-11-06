@@ -38,6 +38,8 @@ import { buildPathTree, type PathNode } from '../shell/pathTree';
 import { edgeHandlers, rememberConfig, useLayout } from '../shell/useLayout';
 import { buildDiffFileMenu, type DiffFileAction } from './diffFileMenu';
 import { FileEditor } from './FileEditor';
+import { ImagePreview } from './ImagePreview';
+import { imageMime, imageSides } from './imageSides';
 import {
   discardHunkQuestion,
   hunkActionBlocker,
@@ -63,6 +65,14 @@ import {
 } from './renderPlan';
 
 const NO_FILES: readonly FileDiff[] = [];
+
+/**
+ * How long a large, collapsed file has to stay on screen before it opens on
+ * its own. Long enough that walking the history with the arrow keys never
+ * renders a file the user only passed through — the reason it is collapsed —
+ * and short enough that stopping on one to read it does not need a click.
+ */
+export const AUTO_REVEAL_MS = 1_500;
 const NO_REVEALS: ReadonlyMap<string, number> = new Map();
 
 /**
@@ -662,6 +672,17 @@ const FileDiffBlock = memo(function FileDiffBlock({
   // hunks themselves: the slice keeps the original hunk object for actions.
   const slices = useMemo(() => sliceHunks(file, visible), [file, visible]);
   const hidden = total - visible;
+  const commitOid = useAppState((state) => state.selection.commitOid);
+  const sides = useMemo(() => imageSides(file, commitOid), [file, commitOid]);
+
+  // Only the first chunk opens by itself, and only while nothing of the file
+  // is drawn yet: a dwell means "show me this file", not "show me all of it".
+  const waiting = note === null && !editing && visible === 0 && total > 0;
+  useEffect(() => {
+    if (!waiting) return;
+    const timer = window.setTimeout(() => onReveal(key, REVEAL_CHUNK), AUTO_REVEAL_MS);
+    return () => window.clearTimeout(timer);
+  }, [waiting, key, onReveal]);
 
   return (
     <article className={styles.file} aria-label={displayPath(file)}>
@@ -698,7 +719,7 @@ const FileDiffBlock = memo(function FileDiffBlock({
               */}
               {visible > 0
                 ? `${hidden.toLocaleString('en-US')} more lines are not rendered yet.`
-                : `This diff is large (${total.toLocaleString('en-US')} lines), so it is not rendered yet.`}{' '}
+                : `This diff is large (${total.toLocaleString('en-US')} lines), so it is not rendered yet — it opens if you stay on it.`}{' '}
               <button
                 type="button"
                 className={styles.hunkAction}
@@ -709,6 +730,8 @@ const FileDiffBlock = memo(function FileDiffBlock({
             </div>
           )}
         </>
+      ) : sides !== null ? (
+        <ImagePreview file={file} sides={sides} />
       ) : (
         <p className={styles.fileNote}>{note}</p>
       )}
@@ -917,6 +940,12 @@ function UntrackedPreview({
     setVisible(null);
     if (root === null) {
       setPreview({ state: 'refused', reason: 'The repository path is not known yet.' });
+      return;
+    }
+    // An image has no text for the editor's reader to return; it is drawn
+    // instead, from disk, as the added binary it is to git.
+    if (imageMime(path) !== null) {
+      setPreview({ state: 'ready', file: { ...asAdded(path, ''), binary: true } });
       return;
     }
     void openWorktreeFile(root, path).then(

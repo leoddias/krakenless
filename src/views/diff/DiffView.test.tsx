@@ -7,7 +7,7 @@ import { StoreProvider } from '../../state/hooks';
 import { createStore, type Store } from '../../state/store';
 import { registerStore, resetStoreRegistry } from '../../state/stores';
 import { copyText } from '../shell/clipboard';
-import { DiffView } from './DiffView';
+import { AUTO_REVEAL_MS, DiffView } from './DiffView';
 
 vi.mock('../shell/clipboard', () => ({ copyText: vi.fn().mockResolvedValue(true) }));
 
@@ -246,7 +246,7 @@ describe('DiffView special file entries', () => {
     renderView((store) =>
       store.dispatch({
         type: 'diff/loaded',
-        files: [fileDiff({ newPath: 'logo.png', oldPath: 'logo.png', binary: true })],
+        files: [fileDiff({ newPath: 'data.bin', oldPath: 'data.bin', binary: true })],
       }),
     );
     expect(screen.getByText(/Binary file/)).toBeInTheDocument();
@@ -570,23 +570,23 @@ describe('per-hunk actions', () => {
   });
 });
 
-describe('DiffView — large diffs stay responsive', () => {
-  function bigHunk(count: number): Hunk {
-    return {
-      header: `@@ -1,${count} +1,${count} @@`,
-      oldStart: 1,
-      oldLines: count,
-      newStart: 1,
-      newLines: count,
-      lines: Array.from({ length: count }, (_, i) => ({
-        kind: 'context' as const,
-        text: `line ${i}`,
-        oldLine: i + 1,
-        newLine: i + 1,
-      })),
-    };
-  }
+function bigHunk(count: number): Hunk {
+  return {
+    header: `@@ -1,${count} +1,${count} @@`,
+    oldStart: 1,
+    oldLines: count,
+    newStart: 1,
+    newLines: count,
+    lines: Array.from({ length: count }, (_, i) => ({
+      kind: 'context' as const,
+      text: `line ${i}`,
+      oldLine: i + 1,
+      newLine: i + 1,
+    })),
+  };
+}
 
+describe('DiffView — large diffs stay responsive', () => {
   it('collapses a large file behind an explicit control instead of freezing', () => {
     renderView((store) =>
       store.dispatch({
@@ -920,5 +920,71 @@ describe('the file list context menu', () => {
     expect(
       screen.getByRole('menuitem', { name: /Reveal in file manager/ }),
     ).toHaveAttribute('aria-disabled', 'true');
+  });
+});
+
+describe('a large file opens by itself when the user stays on it', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('renders the first chunk after the dwell, and not before', () => {
+    vi.useFakeTimers();
+    renderView((store) =>
+      store.dispatch({
+        type: 'diff/loaded',
+        files: [
+          fileDiff({ newPath: 'pt.json', side: 'commit', hunks: [bigHunk(1_045)] }),
+        ],
+      }),
+    );
+    expect(lineRows().length).toBe(0);
+    expect(screen.getByText(/opens if you stay on it/)).toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(AUTO_REVEAL_MS - 1);
+    });
+    expect(lineRows().length).toBe(0);
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(lineRows().length).toBe(1_000);
+
+    // Only the first chunk: the rest still waits for a click.
+    act(() => {
+      vi.advanceTimersByTime(AUTO_REVEAL_MS * 3);
+    });
+    expect(lineRows().length).toBe(1_000);
+  });
+
+  it('never renders a file the user only passed through', () => {
+    vi.useFakeTimers();
+    const files = [
+      fileDiff({
+        newPath: 'a.json',
+        oldPath: 'a.json',
+        side: 'commit',
+        hunks: [bigHunk(800)],
+      }),
+      fileDiff({
+        newPath: 'b.json',
+        oldPath: 'b.json',
+        side: 'commit',
+        hunks: [sampleHunk],
+      }),
+    ];
+    renderView((store) => store.dispatch({ type: 'diff/loaded', files }));
+
+    act(() => {
+      vi.advanceTimersByTime(AUTO_REVEAL_MS - 100);
+    });
+    fireEvent.click(screen.getByRole('button', { name: /b\.json/ }));
+    fireEvent.click(screen.getByRole('button', { name: /a\.json/ }));
+    act(() => {
+      vi.advanceTimersByTime(AUTO_REVEAL_MS - 100);
+    });
+    // Back on the big file, but the clock started over when it came back.
+    expect(lineRows().length).toBe(0);
   });
 });

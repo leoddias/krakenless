@@ -186,6 +186,30 @@ pub fn run_git(
     timeout_ms: Option<u64>,
     stdin_text: Option<String>,
 ) -> Result<GitOutput, GitRunError> {
+    let (command, timeout) = git_command(repo, args, timeout_ms)?;
+    run_capture(command, timeout, stdin_text)
+}
+
+/// Runs git and hands stdout back as bytes, undecoded.
+///
+/// For the one caller whose output is not text at all: a blob read for an
+/// image preview. Everything else goes through [`run_git`], whose UTF-8 check
+/// is what keeps a path that did not decode out of the next command.
+pub fn run_git_raw(
+    repo: &str,
+    args: &[String],
+    timeout_ms: Option<u64>,
+) -> Result<RawOutput, GitRunError> {
+    let (command, timeout) = git_command(repo, args, timeout_ms)?;
+    run_capture_raw(command, timeout, None)
+}
+
+/// The validated, environment-scrubbed `git` every run starts from.
+fn git_command(
+    repo: &str,
+    args: &[String],
+    timeout_ms: Option<u64>,
+) -> Result<(Command, Duration), GitRunError> {
     let cwd = validate_repo(repo)?;
     validate_args(args)?;
     let timeout = Duration::from_millis(
@@ -204,7 +228,17 @@ pub fn run_git(
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("LC_ALL", "C");
 
-    run_capture(command, timeout, stdin_text)
+    Ok((command, timeout))
+}
+
+/// A capture whose stdout has not been decoded.
+#[derive(Debug)]
+pub struct RawOutput {
+    pub stdout: Vec<u8>,
+    pub stderr: String,
+    /// `None` when the process was killed (signal or our timeout).
+    pub code: Option<i32>,
+    pub timed_out: bool,
 }
 
 /// Spawns a fully configured command and captures it, with a deadline.
@@ -220,10 +254,27 @@ pub fn run_git(
 /// environment are already set on `command`. Only stdio is decided here,
 /// because it depends on whether there is stdin to write.
 pub fn run_capture(
-    mut command: Command,
+    command: Command,
     timeout: Duration,
     stdin_text: Option<String>,
 ) -> Result<GitOutput, GitRunError> {
+    let raw = run_capture_raw(command, timeout, stdin_text)?;
+    let (stdout_text, stdout_lossy) = decode(raw.stdout);
+    Ok(GitOutput {
+        stdout: stdout_text,
+        stderr: raw.stderr,
+        code: raw.code,
+        timed_out: raw.timed_out,
+        stdout_lossy,
+    })
+}
+
+/// [`run_capture`] without the decode: the lifecycle itself, stdout as bytes.
+pub fn run_capture_raw(
+    mut command: Command,
+    timeout: Duration,
+    stdin_text: Option<String>,
+) -> Result<RawOutput, GitRunError> {
     command
         .stdin(if stdin_text.is_some() {
             Stdio::piped()
@@ -308,15 +359,13 @@ pub fn run_capture(
     let stdout = collect(&stdout_rx, grace, timed_out)?;
     let stderr = collect(&stderr_rx, grace, timed_out)?;
 
-    let (stdout_text, stdout_lossy) = decode(stdout);
     let (stderr_text, _) = decode(stderr);
 
-    Ok(GitOutput {
-        stdout: stdout_text,
+    Ok(RawOutput {
+        stdout,
         stderr: stderr_text,
         code: status.and_then(|s| s.code()),
         timed_out,
-        stdout_lossy,
     })
 }
 

@@ -3,6 +3,7 @@ mod avatars;
 mod config;
 mod external;
 mod git_runner;
+mod preview;
 mod rebase_state;
 mod updater;
 mod watcher;
@@ -47,6 +48,8 @@ pub fn run() {
             worktree::worktree_write,
             worktree::worktree_delete,
             worktree::worktree_restore_blob,
+            preview::preview_blob,
+            preview::preview_worktree,
             rebase_state::rebase_state,
             updater::update_install_kind,
             updater::update_portable_apply,

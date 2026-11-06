@@ -87,7 +87,7 @@ fn stamp_of(bytes: &[u8]) -> String {
 
 /// Resolves `path` inside `repo`, refusing anything that could escape the
 /// repository or that must not be edited by hand.
-fn resolve(repo: &str, path: &str) -> Result<PathBuf, WorktreeError> {
+pub(crate) fn resolve(repo: &str, path: &str) -> Result<PathBuf, WorktreeError> {
     if path.is_empty() {
         return Err(WorktreeError::BadRequest("empty path".into()));
     }
