@@ -215,6 +215,12 @@
 
 ## Released
 
+- **v0.17.0-alpha** (2026-11-07): published as Latest. Carries image
+  before/after previews in the diff and the dwell-to-open of a large collapsed
+  diff (ADR-0067), plus the diff file list's context menu (reveal, open in
+  editor, copy path/name). Release build green in 15 min; both update manifests
+  name 0.17.0 and their URLs answer 200; the landing page advertises
+  0.17.0-alpha. Not tried by hand.
 - **v0.16.0-alpha** (2026-10-23): published as Latest via the new `/release`
   skill. Carries worktree removal from its row, the "also delete the local
   branch?" follow-up (ADR-0065/0066), double-click message fix on HEAD, and the
