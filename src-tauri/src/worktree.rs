@@ -27,6 +27,15 @@ use std::path::{Component, Path, PathBuf};
 /// window, and the stamp below reads the whole file on every save.
 const MAX_BYTES: u64 = 2 * 1024 * 1024;
 
+/// Largest file whose stamp is taken, in bytes.
+///
+/// Separate from [`MAX_BYTES`] because taking a stamp is not opening a file in
+/// a text box: the conflict resolver writes its result over a file that git
+/// filled with *both* sides plus markers, which can be well past what the
+/// editor opens even when the result is not. A stamp is one pass of FNV over
+/// the bytes, so tens of megabytes are still quick.
+const MAX_STAMP_BYTES: u64 = 64 * 1024 * 1024;
+
 #[derive(Debug, serde::Serialize)]
 #[serde(tag = "kind", content = "message")]
 pub enum WorktreeError {
@@ -146,13 +155,13 @@ pub(crate) fn resolve(repo: &str, path: &str) -> Result<PathBuf, WorktreeError> 
     Ok(resolved)
 }
 
-fn read_bounded(resolved: &Path, path: &str) -> Result<Vec<u8>, WorktreeError> {
+fn read_bounded(resolved: &Path, path: &str, limit: u64) -> Result<Vec<u8>, WorktreeError> {
     let size = std::fs::metadata(resolved)
         .map_err(|e| WorktreeError::ReadFailed(format!("{path}: {e}")))?
         .len();
-    if size > MAX_BYTES {
+    if size > limit {
         return Err(WorktreeError::TooLarge(format!(
-            "{path} is {size} bytes; the editor opens files up to {MAX_BYTES}"
+            "{path} is {size} bytes; files up to {limit} bytes can be handled here"
         )));
     }
     std::fs::read(resolved).map_err(|e| WorktreeError::ReadFailed(format!("{path}: {e}")))
@@ -162,7 +171,7 @@ fn read_bounded(resolved: &Path, path: &str) -> Result<Vec<u8>, WorktreeError> {
 #[tauri::command]
 pub fn worktree_read(repo: String, path: String) -> Result<FileContents, WorktreeError> {
     let resolved = resolve(&repo, &path)?;
-    let bytes = read_bounded(&resolved, &path)?;
+    let bytes = read_bounded(&resolved, &path, MAX_BYTES)?;
     let stamp = stamp_of(&bytes);
     match String::from_utf8(bytes) {
         Ok(text) => Ok(FileContents {
@@ -176,6 +185,17 @@ pub fn worktree_read(repo: String, path: String) -> Result<FileContents, Worktre
             lossy: true,
         }),
     }
+}
+
+/// Fingerprints a working-tree file without handing its contents over.
+///
+/// For a writer that never shows the file it replaces — the conflict resolver
+/// builds its text from the index stages — but must still refuse to overwrite
+/// an edit that arrived while it was open.
+#[tauri::command]
+pub fn worktree_stamp(repo: String, path: String) -> Result<String, WorktreeError> {
+    let resolved = resolve(&repo, &path)?;
+    Ok(stamp_of(&read_bounded(&resolved, &path, MAX_STAMP_BYTES)?))
 }
 
 /// Replaces a working-tree file, but only if it still holds `expect_stamp`.
@@ -192,7 +212,9 @@ pub fn worktree_write(
     expect_stamp: String,
 ) -> Result<String, WorktreeError> {
     let resolved = resolve(&repo, &path)?;
-    let current = stamp_of(&read_bounded(&resolved, &path)?);
+    // The larger bound: what is being *replaced* may be bigger than anything
+    // the editor would open — a conflicted file carries both sides.
+    let current = stamp_of(&read_bounded(&resolved, &path, MAX_STAMP_BYTES)?);
     if current != expect_stamp {
         return Err(WorktreeError::ChangedOnDisk(format!(
             "{path} changed on disk since it was opened"
@@ -499,6 +521,46 @@ mod tests {
         let err = worktree_read(repo_arg(&dir), "big.bin".into()).unwrap_err();
         assert!(matches!(err, WorktreeError::TooLarge(_)), "{err:?}");
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn replaces_a_file_larger_than_the_editor_opens_when_the_stamp_matches() {
+        // A conflicted file carries both sides plus markers, so it can be past
+        // the editor's limit while the resolution written over it is not.
+        let dir = temp_repo("large-write");
+        let big = vec![b'x'; (MAX_BYTES + 1) as usize];
+        std::fs::write(dir.join("big.txt"), &big).unwrap();
+
+        let stamp = worktree_stamp(repo_arg(&dir), "big.txt".into()).unwrap();
+        assert_eq!(stamp, stamp_of(&big));
+        worktree_write(repo_arg(&dir), "big.txt".into(), "resolved\n".into(), stamp).unwrap();
+
+        assert_eq!(std::fs::read_to_string(dir.join("big.txt")).unwrap(), "resolved\n");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_stamp_taken_before_another_edit_refuses_the_write() {
+        let dir = temp_repo("stamp-stale");
+        let file = dir.join("a.txt");
+        write(&file, "<<<<<<< ours\n");
+        let stamp = worktree_stamp(repo_arg(&dir), "a.txt".into()).unwrap();
+        write(&file, "fixed in an editor\n");
+
+        let err = worktree_write(repo_arg(&dir), "a.txt".into(), "mine\n".into(), stamp)
+            .unwrap_err();
+        assert!(matches!(err, WorktreeError::ChangedOnDisk(_)), "{err:?}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "fixed in an editor\n");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn stamp_refuses_the_git_directory() {
+        let dir = temp_repo("stamp-gitdir");
+        write(&dir.join(".git").join("HEAD"), "ref: refs/heads/main\n");
+        let err = worktree_stamp(repo_arg(&dir), ".git/HEAD".into()).unwrap_err();
+        assert!(matches!(err, WorktreeError::BadRequest(_)), "{err:?}");
         std::fs::remove_dir_all(&dir).ok();
     }
 

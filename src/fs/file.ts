@@ -127,18 +127,42 @@ export async function saveWorktreeFile(
   file: OpenFile,
   contents: string,
 ): Promise<OpenFile> {
-  let stamp: string;
+  const stamp = await writeWorktreeFile(repo, file.path, contents, file.stamp);
+  return { ...file, text: toEditor(contents), stamp };
+}
+
+/**
+ * Fingerprints a working-tree file without reading it into a text box.
+ *
+ * For a writer that builds its text elsewhere — the conflict resolver, from the
+ * index stages — and so never opens the file, but must still refuse to replace
+ * it if it changed in the meantime. None of the editor's refusals apply: the
+ * bytes being replaced are never shown, so their size, encoding and line
+ * endings are not this caller's concern.
+ */
+export async function stampWorktreeFile(repo: string, path: string): Promise<string> {
   try {
-    stamp = await invoke<string>('worktree_write', {
-      repo,
-      path: file.path,
-      contents,
-      expectStamp: file.stamp,
-    });
+    return await invoke<string>('worktree_stamp', { repo, path });
+  } catch (error) {
+    throw toFileError(error, 'read-failed');
+  }
+}
+
+/**
+ * Replaces a working-tree file with exactly `contents`, if it still holds the
+ * bytes `expectStamp` names. Returns the stamp of what was written.
+ */
+export async function writeWorktreeFile(
+  repo: string,
+  path: string,
+  contents: string,
+  expectStamp: string,
+): Promise<string> {
+  try {
+    return await invoke<string>('worktree_write', { repo, path, contents, expectStamp });
   } catch (error) {
     throw toFileError(error, 'write-failed');
   }
-  return { ...file, text: toEditor(contents), stamp };
 }
 
 /**

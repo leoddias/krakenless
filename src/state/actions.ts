@@ -91,6 +91,8 @@ import {
   FileError,
   openWorktreeFile,
   saveWorktreeFile,
+  stampWorktreeFile,
+  writeWorktreeFile,
   type OpenFile,
   restoreFromBackup,
 } from '../fs/file';
@@ -752,6 +754,12 @@ export async function resolveConflict(
   store: Store,
   path: string,
   contents: string,
+  /**
+   * The stamp of the file as it was when the resolver opened, so an edit made
+   * in an editor while it was open is refused rather than overwritten. `null`
+   * when it could not be taken then; the file is stamped at save instead.
+   */
+  stamp: string | null = null,
 ): Promise<boolean> {
   const root = currentRoot(store);
   if (root === null) return false;
@@ -768,11 +776,12 @@ export async function resolveConflict(
   }
 
   return operate(store, async () => {
-    // Re-read for the stamp: the write refuses if the file changed on disk
-    // since, which is what stops the resolver from overwriting an edit that
-    // arrived from an editor while it was open.
-    const file = await openWorktreeFile(root, path);
-    await saveWorktreeFile(root, file, contents);
+    // Stamped, not opened: the file on disk is the conflict, both sides plus
+    // markers, and the editor's refusals (its size limit, mixed line endings)
+    // are about text it would *show*. Applying them here refused every
+    // conflict in a file past 2 MB, though nothing of it is ever displayed.
+    const expect = stamp ?? (await stampWorktreeFile(root, path));
+    await writeWorktreeFile(root, path, contents, expect);
     await stagePaths(root, [path]);
   });
 }

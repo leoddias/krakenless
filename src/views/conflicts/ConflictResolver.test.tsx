@@ -9,6 +9,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readConflictSides } from '../../git/conflict';
 import type { Operation } from '../../git/operation';
+import { stampWorktreeFile } from '../../fs/file';
 import { resolveConflict } from '../../state/actions';
 import { StoreProvider } from '../../state/hooks';
 import { createStore, type Store } from '../../state/store';
@@ -19,9 +20,11 @@ vi.mock('../../git/conflict', async (importOriginal) => {
   return { ...actual, readConflictSides: vi.fn() };
 });
 vi.mock('../../state/actions', () => ({ resolveConflict: vi.fn() }));
+vi.mock('../../fs/file', () => ({ stampWorktreeFile: vi.fn() }));
 
 const readSides = vi.mocked(readConflictSides);
 const resolveMock = vi.mocked(resolveConflict);
+const stampMock = vi.mocked(stampWorktreeFile);
 
 const BASE = 'one\nbase\nthree\n';
 const OURS = 'one\nmine\nthree\n';
@@ -99,6 +102,7 @@ function block(side: string, n: number): HTMLElement {
 beforeEach(() => {
   readSides.mockReset().mockResolvedValue(sides());
   resolveMock.mockReset().mockResolvedValue(true);
+  stampMock.mockReset().mockResolvedValue('17-open');
 });
 
 afterEach(cleanup);
@@ -419,6 +423,7 @@ describe('editing the result', () => {
       store,
       'src/app.ts',
       'one\nneither side\nbut this\nthree\n',
+      '17-open',
     );
   });
 
@@ -555,7 +560,7 @@ describe('saving', () => {
     await waitFor(() => expect(resolveMock).toHaveBeenCalledTimes(1));
     // The preview is not an approximation of the result; it is produced by the
     // same function that writes.
-    expect(resolveMock).toHaveBeenCalledWith(store, 'src/app.ts', THEIRS);
+    expect(resolveMock).toHaveBeenCalledWith(store, 'src/app.ts', THEIRS, '17-open');
     await waitFor(() => expect(store.getState().resolving).toBeNull());
   });
 
@@ -569,6 +574,58 @@ describe('saving', () => {
 
     await waitFor(() => expect(resolveMock).toHaveBeenCalled());
     expect(store.getState().resolving).toBe('src/app.ts');
+  });
+
+  it('says why inside the dialog, since the notice bar is underneath it', async () => {
+    const store = renderResolver();
+    resolveMock.mockImplementation(() => {
+      store.dispatch({
+        type: 'notice',
+        notice: {
+          tone: 'error',
+          message: 'src/app.ts changed on disk since it was opened',
+        },
+      });
+      return Promise.resolve(false);
+    });
+    await screen.findByRole('dialog');
+    fireEvent.click(screen.getByRole('button', { name: /Take all from Ours/ }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save and mark resolved' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Not saved: src/app.ts changed on disk since it was opened',
+    );
+  });
+
+  it('does not present an older notice as the reason', async () => {
+    const store = renderResolver();
+    store.dispatch({
+      type: 'notice',
+      notice: { tone: 'error', message: 'push rejected' },
+    });
+    resolveMock.mockResolvedValue(false);
+    await screen.findByRole('dialog');
+    fireEvent.click(screen.getByRole('button', { name: /Take all from Ours/ }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save and mark resolved' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).not.toHaveTextContent('push rejected');
+    expect(alert).toHaveTextContent('Not saved');
+  });
+
+  it('still opens and saves when the file could not be stamped at open', async () => {
+    stampMock.mockRejectedValue(new Error('gone'));
+    const store = renderResolver();
+    await screen.findByRole('dialog');
+    fireEvent.click(screen.getByRole('button', { name: /Take all from Theirs/ }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save and mark resolved' }));
+
+    await waitFor(() =>
+      expect(resolveMock).toHaveBeenCalledWith(store, 'src/app.ts', THEIRS, null),
+    );
   });
 });
 

@@ -10,6 +10,7 @@ import {
   removeStash,
   removeTag,
   removeWorktreeAt,
+  resolveConflict,
   rewordHeadCommit,
   switchTo,
   switchToRemote,
@@ -46,6 +47,8 @@ const discardPaths = vi.hoisted(() => vi.fn());
 const discardHunks = vi.hoisted(() => vi.fn());
 const openWorktreeFile = vi.hoisted(() => vi.fn());
 const saveWorktreeFile = vi.hoisted(() => vi.fn());
+const stampWorktreeFile = vi.hoisted(() => vi.fn());
+const writeWorktreeFile = vi.hoisted(() => vi.fn());
 const restoreFromBackup = vi.hoisted(() => vi.fn());
 const listBranches = vi.hoisted(() => vi.fn());
 const listStashes = vi.hoisted(() => vi.fn());
@@ -109,6 +112,8 @@ vi.mock('../git/stage', () => ({
 vi.mock('../fs/file', () => ({
   openWorktreeFile,
   saveWorktreeFile,
+  stampWorktreeFile,
+  writeWorktreeFile,
   restoreFromBackup,
   FileError: class extends Error {},
 }));
@@ -1302,5 +1307,77 @@ describe('removeRemoteTag — it goes for everyone who fetches', () => {
     expect(store.getState().notice?.message).toMatch(/had no tag called v1\.0/);
     // No way back is offered for something that never went away.
     expect(store.getState().notice?.undoHint).toBeUndefined();
+  });
+});
+
+describe('resolveConflict — write, then stage, and only then', () => {
+  beforeEach(() => {
+    stagePaths.mockReset().mockResolvedValue(undefined);
+    openWorktreeFile.mockReset();
+    stampWorktreeFile.mockReset();
+    writeWorktreeFile.mockReset();
+  });
+
+  it('writes over the stamp taken when the resolver opened, then stages', async () => {
+    writeWorktreeFile.mockResolvedValue('9-new');
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await expect(
+      resolveConflict(store, 'big.surql', 'resolved\n', '3000000-old'),
+    ).resolves.toBe(true);
+
+    // Never opened as an editor file: a conflicted file past the editor's size
+    // limit, or with mixed endings, must still be resolvable.
+    expect(openWorktreeFile).not.toHaveBeenCalled();
+    expect(stampWorktreeFile).not.toHaveBeenCalled();
+    expect(writeWorktreeFile).toHaveBeenCalledWith(
+      REPO.root,
+      'big.surql',
+      'resolved\n',
+      '3000000-old',
+    );
+    expect(stagePaths).toHaveBeenCalledWith(REPO.root, ['big.surql']);
+  });
+
+  it('stamps at save when no stamp was taken at open', async () => {
+    stampWorktreeFile.mockResolvedValue('5-now');
+    writeWorktreeFile.mockResolvedValue('9-new');
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await resolveConflict(store, 'a.txt', 'x\n');
+
+    expect(writeWorktreeFile).toHaveBeenCalledWith(REPO.root, 'a.txt', 'x\n', '5-now');
+  });
+
+  it('does not stage when the write was refused', async () => {
+    writeWorktreeFile.mockRejectedValue(
+      new Error('a.txt changed on disk since it was opened'),
+    );
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await expect(resolveConflict(store, 'a.txt', 'x\n', '1-a')).resolves.toBe(false);
+
+    expect(stagePaths).not.toHaveBeenCalled();
+    expect(store.getState().notice).toMatchObject({ tone: 'error' });
+  });
+
+  it('refuses text that still carries markers, without touching the file', async () => {
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await expect(
+      resolveConflict(
+        store,
+        'a.txt',
+        '<<<<<<< ours\na\n=======\nb\n>>>>>>> theirs\n',
+        '1-a',
+      ),
+    ).resolves.toBe(false);
+
+    expect(writeWorktreeFile).not.toHaveBeenCalled();
+    expect(stagePaths).not.toHaveBeenCalled();
   });
 });

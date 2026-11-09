@@ -40,6 +40,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { readConflictSides, type ConflictSides } from '../../git/conflict';
+import { stampWorktreeFile } from '../../fs/file';
 import { resolveConflict } from '../../state/actions';
 import { useAppState, useStore } from '../../state/hooks';
 import { isBusy } from '../../state/store';
@@ -112,7 +113,18 @@ type Loaded =
   | { state: 'loading' }
   | { state: 'error'; message: string }
   | { state: 'too-large' }
-  | { state: 'ready'; sides: ConflictSides; blocks: Block[]; trailingNewline: boolean };
+  | {
+      state: 'ready';
+      sides: ConflictSides;
+      blocks: Block[];
+      trailingNewline: boolean;
+      /**
+       * The file on disk as the screen opened, so a save refuses to replace an
+       * edit that arrived from an editor meanwhile. `null` if it could not be
+       * taken; the save stamps the file itself then.
+       */
+      stamp: string | null;
+    };
 
 export function ConflictResolver(): ReactNode {
   const store = useStore();
@@ -130,7 +142,12 @@ export function ConflictResolver(): ReactNode {
       const root = store.getState().repo;
       if (root.state !== 'ready') return;
       try {
-        const sides = await readConflictSides(root.value.root, path);
+        const [sides, stamp] = await Promise.all([
+          readConflictSides(root.value.root, path),
+          // Never fatal to opening: the sides come from the index, and the
+          // save can still stamp the file when it gets there.
+          stampWorktreeFile(root.value.root, path).catch(() => null),
+        ]);
         if (cancelled) return;
         if (tooLargeToCompare(sides.ours.text, sides.theirs.text, sides.base.text)) {
           setLoaded({ state: 'too-large' });
@@ -140,6 +157,7 @@ export function ConflictResolver(): ReactNode {
           state: 'ready',
           sides,
           blocks: blocksFor(sides),
+          stamp,
           // Taken from whichever side has the file: adding a trailing newline
           // that was never there is a diff on a line nobody touched.
           trailingNewline:
@@ -258,7 +276,7 @@ function ResolverBody({
   onDone: () => void;
 }): ReactNode {
   const store = useStore();
-  const { blocks, trailingNewline } = loaded;
+  const { blocks, trailingNewline, stamp } = loaded;
   const left = undecided(blocks).length;
   const total = conflictCount(blocks);
 
@@ -274,6 +292,12 @@ function ResolverBody({
   /** The run being edited, as `blockIndex:part`, and the text in the box. */
   const [editingAt, setEditingAt] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
+  /**
+   * Why the last save did not go through. Shown here, in the dialog: the app's
+   * notice bar is underneath this screen, so a refusal reported only there
+   * reads as a button that does nothing.
+   */
+  const [saveError, setSaveError] = useState<string | null>(null);
   /**
    * Share of the screen the Output takes, as a percentage.
    *
@@ -390,9 +414,24 @@ function ResolverBody({
   };
 
   const save = (): void => {
-    void resolveConflict(store, path, assemble(blocks, trailingNewline)).then((ok) => {
-      if (ok) onDone();
-    });
+    setSaveError(null);
+    // Compared by identity, so a stale notice from an earlier operation is
+    // never presented as this save's cause.
+    const before = store.getState().notice;
+    void resolveConflict(store, path, assemble(blocks, trailingNewline), stamp).then(
+      (ok) => {
+        if (ok) {
+          onDone();
+          return;
+        }
+        const after = store.getState().notice;
+        setSaveError(
+          after !== null && after !== before && after.tone === 'error'
+            ? after.message
+            : 'the file could not be written.',
+        );
+      },
+    );
   };
 
   return (
@@ -608,6 +647,11 @@ function ResolverBody({
       </div>
 
       <footer className={styles.footer}>
+        {saveError !== null && (
+          <p className={styles.saveError} role="alert">
+            Not saved: {saveError}
+          </p>
+        )}
         <button type="button" className={styles.action} onClick={onDone}>
           Cancel
         </button>

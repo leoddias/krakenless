@@ -5,6 +5,8 @@ import {
   FileError,
   openWorktreeFile,
   saveWorktreeFile,
+  stampWorktreeFile,
+  writeWorktreeFile,
   type OpenFile,
 } from './file';
 
@@ -126,6 +128,54 @@ describe('saveWorktreeFile', () => {
     await expect(saveWorktreeFile(REPO, open, 'x')).rejects.toMatchObject({
       kind: 'write-failed',
       message: 'disk full',
+    });
+  });
+});
+
+describe('stampWorktreeFile', () => {
+  it('asks Rust for the stamp of exactly that path', async () => {
+    invokeMock.mockResolvedValue('3000000-abc');
+    await expect(stampWorktreeFile(REPO, 'big.surql')).resolves.toBe('3000000-abc');
+    expect(invokeMock).toHaveBeenCalledWith('worktree_stamp', {
+      repo: REPO,
+      path: 'big.surql',
+    });
+  });
+
+  it('applies none of the editor refusals', async () => {
+    // Only `invoke` is consulted: nothing about the bytes is judged here, so
+    // a file the editor would refuse can still be replaced.
+    invokeMock.mockResolvedValue('9-abc');
+    await expect(stampWorktreeFile(REPO, 'mixed.txt')).resolves.toBe('9-abc');
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a refusal with its kind', async () => {
+    invokeMock.mockRejectedValue({ kind: 'NotFound', message: 'gone.txt' });
+    await expect(stampWorktreeFile(REPO, 'gone.txt')).rejects.toMatchObject({
+      kind: 'not-found',
+    });
+  });
+});
+
+describe('writeWorktreeFile', () => {
+  it('writes exactly the contents, with the stamp it was handed', async () => {
+    invokeMock.mockResolvedValue('4-new');
+    await expect(writeWorktreeFile(REPO, 'a.txt', 'x\r\ny\n', '9-old')).resolves.toBe(
+      '4-new',
+    );
+    expect(invokeMock).toHaveBeenCalledWith('worktree_write', {
+      repo: REPO,
+      path: 'a.txt',
+      contents: 'x\r\ny\n',
+      expectStamp: '9-old',
+    });
+  });
+
+  it('reports an unrecognized rejection as a failed write', async () => {
+    invokeMock.mockRejectedValue('boom');
+    await expect(writeWorktreeFile(REPO, 'a.txt', 'x', '1-a')).rejects.toMatchObject({
+      kind: 'write-failed',
     });
   });
 });

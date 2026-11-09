@@ -46,6 +46,7 @@ pub fn run() {
             external::reveal_path,
             worktree::worktree_read,
             worktree::worktree_write,
+            worktree::worktree_stamp,
             worktree::worktree_delete,
             worktree::worktree_restore_blob,
             preview::preview_blob,
