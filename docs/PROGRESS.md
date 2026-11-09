@@ -215,6 +215,15 @@
 
 ## Released
 
+- **v0.17.1-alpha** (2026-11-09): published as Latest. Fixes the conflict
+  resolver's "Save and mark resolved" doing nothing on a conflicted file past
+  2 MB, or one with mixed line endings: the save opened the file through the
+  editor path, which refused it. It now uses a new `worktree_stamp` command
+  (64 MB bound, taken when the resolver opens) and writes with no editor
+  refusals. Save errors now show inside the dialog, because the notice bar sits
+  under the modal. Release build green; both update manifests name 0.17.1 and
+  their URLs answer 200; the landing page advertises 0.17.1-alpha. The fix was
+  not tried by hand against the reporting repo.
 - **v0.17.0-alpha** (2026-11-07): published as Latest. Carries image
   before/after previews in the diff and the dwell-to-open of a large collapsed
   diff (ADR-0067), plus the diff file list's context menu (reveal, open in
