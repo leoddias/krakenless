@@ -215,6 +215,18 @@
 
 ## Released
 
+- **v0.18.0-alpha** (2026-11-10): published as Latest. Checking out a branch
+  another worktree holds now takes it from there (ADR-0068): the holder is
+  detached at its commit (`switch --detach`, no files move) and the switch runs
+  here, from the chip double click, refs panel, toolbar picker and remote-chip
+  double click. Refused for a locked/prunable holder or one mid
+  rebase/merge/cherry-pick/revert/bisect; the holder's HEAD is re-read before
+  the detach and it is re-attached if the switch here fails. Safety review: no
+  critical findings; its major (silent detach when the remote-chip
+  fast-forward failed) and three hardening items were fixed before release.
+  Release build green; both update manifests name 0.18.0 and their URLs answer
+  200; the landing page advertises 0.18.0-alpha. Not tried by hand against the
+  reporting repo.
 - **v0.17.1-alpha** (2026-11-09): published as Latest. Fixes the conflict
   resolver's "Save and mark resolved" doing nothing on a conflicted file past
   2 MB, or one with mixed line endings: the save opened the file through the
