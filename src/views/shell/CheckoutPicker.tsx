@@ -11,10 +11,10 @@
  * open over there, so the one thing a user must never do — expect a checkout
  * and get a tab, or the reverse — is answered before the click.
  *
- * A branch already checked out *somewhere* cannot be checked out here: git
- * refuses, because two worktrees may never share a branch. That refusal is
- * shown as the reason on a disabled item rather than delivered as an error
- * after the fact, and the worktree that holds it is named.
+ * A branch already checked out in another worktree is taken from it: that
+ * worktree is detached at the commit it had, and the switch runs here
+ * (ADR-0068). The item names the worktree it takes from, and is disabled —
+ * with the reason — only when that worktree is locked or gone.
  */
 
 import { useState, type ReactNode } from 'react';

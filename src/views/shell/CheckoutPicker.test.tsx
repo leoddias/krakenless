@@ -120,15 +120,55 @@ describe('buildCheckoutMenu', () => {
     expect(built.branches).toHaveLength(1);
   });
 
-  it('refuses a branch another worktree holds, and names that worktree', () => {
-    // Git refuses this outright: two worktrees may never share a branch. The
-    // reason belongs on the item, not in an error after the click.
+  it('offers a branch another worktree holds, saying it is taken from there', () => {
+    // Choosing it detaches that worktree (ADR-0068), so the item names it.
     const built = menu({
       branches: [branch('main', { current: true }), branch('wiki')],
       worktrees: [worktree({ branch: 'wiki', path: 'C:/repos/app-wiki' })],
     });
     const held = built.branches.find((choice) => choice.id === 'branch:wiki');
-    expect(held?.disabled).toContain('C:/repos/app-wiki');
+    expect(held?.disabled).toBeNull();
+    expect(held?.label).toBe('wiki — take from C:/repos/app-wiki');
+    expect(held?.choose).toBeDefined();
+  });
+
+  it('offers a branch the main worktree holds when a linked one is open here', () => {
+    const built = menu({
+      branches: [branch('fix', { current: true }), branch('main')],
+      worktrees: [
+        worktree({ branch: 'main', main: true, path: 'C:/repos/app' }),
+        worktree({ branch: 'fix', path: 'C:/repos/app-fix' }),
+      ],
+    });
+    const held = built.branches.find((choice) => choice.id === 'branch:main');
+    expect(held?.label).toBe('main — take from C:/repos/app');
+    expect(held?.choose).toBeDefined();
+  });
+
+  it('refuses a branch held by a locked worktree, and names the lock', () => {
+    const built = menu({
+      branches: [branch('main', { current: true }), branch('wiki')],
+      worktrees: [
+        worktree({ branch: 'wiki', path: 'C:/repos/app-wiki', locked: 'agent' }),
+      ],
+    });
+    const held = built.branches.find((choice) => choice.id === 'branch:wiki');
+    expect(held?.disabled).toContain('locked (agent)');
+    expect(held?.choose).toBeUndefined();
+  });
+
+  it('refuses a branch held by a worktree whose directory is gone', () => {
+    const built = menu({
+      branches: [branch('main', { current: true }), branch('wiki')],
+      worktrees: [
+        worktree({
+          branch: 'wiki',
+          prunable: 'gitdir file points to non-existent location',
+        }),
+      ],
+    });
+    const held = built.branches.find((choice) => choice.id === 'branch:wiki');
+    expect(held?.disabled).toContain('non-existent location');
     expect(held?.choose).toBeUndefined();
   });
 

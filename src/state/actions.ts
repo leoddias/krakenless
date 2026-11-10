@@ -63,7 +63,6 @@ import {
   push,
   pushTag,
   stashWorkingTree,
-  switchBranch,
   switchNewBranch,
   type DeleteBranchOutcome,
   type PullMergeOutcome,
@@ -84,6 +83,7 @@ import { hasConflictMarkers } from '../git/conflict';
 import {
   listWorktreeSummaries,
   removeWorktree,
+  switchTakingBranch,
   type RemoveWorktreeOutcome,
 } from '../git/worktrees';
 import { isOpenInTab } from './openRequests';
@@ -991,10 +991,48 @@ export async function forcePushCurrent(
   return pushed;
 }
 
+/**
+ * Checks out a local branch here — taking it from another worktree that has it
+ * checked out, if one does (ADR-0068).
+ *
+ * That worktree is detached at the commit it already had, and the notice says
+ * so by path: it is a change to a checkout the user is not looking at, and the
+ * one thing it alters there is that commits made in it stop moving the branch.
+ */
 export async function switchTo(store: Store, name: string): Promise<boolean> {
   const root = currentRoot(store);
   if (root === null) return false;
-  return operate(store, () => switchBranch(root, name));
+  const outcome: { freedFrom: string | null } = { freedFrom: null };
+  const ok = await operate(store, async () => {
+    outcome.freedFrom = (await switchTakingBranch(root, name)).freedFrom;
+  });
+  announceTaken(store, name, outcome.freedFrom);
+  return ok;
+}
+
+/**
+ * Says which worktree a switch took its branch from, when it took one.
+ *
+ * `ok` false is a later step failing after the take — the fast-forward of a
+ * remote-chip double click. The notice then keeps that step's error in front
+ * and adds the detached worktree to it, so neither fact replaces the other.
+ */
+function announceTaken(
+  store: Store,
+  name: string,
+  freedFrom: string | null,
+  ok = true,
+): void {
+  if (freedFrom === null) return;
+  const taken = `Switched to ${name}. It was checked out in ${freedFrom}, which is now detached at the same commit — nothing there changed on disk. Switch that worktree to a branch before committing in it.`;
+  const failure = store.getState().notice;
+  store.dispatch({
+    type: 'notice',
+    notice:
+      !ok && failure !== null && failure.tone === 'error'
+        ? { tone: 'error', message: `${failure.message}\n\n${taken}` }
+        : { tone: 'info', message: taken },
+  });
 }
 
 /**
@@ -1024,13 +1062,20 @@ export async function switchToRemote(
   if (target.kind === 'create') {
     return operate(store, () => switchNewBranch(root, target.name, rev));
   }
-  return operate(store, async () => {
+  const outcome: { freedFrom: string | null } = { freedFrom: null };
+  const ok = await operate(store, async () => {
     // `git switch` refuses over uncommitted work that the switch would touch,
     // and the fast-forward never runs when it does: the sequence stops at the
     // first refusal, and the working tree is where the user left it.
-    if (!target.current) await switchBranch(root, target.name);
+    if (!target.current) {
+      outcome.freedFrom = (await switchTakingBranch(root, target.name)).freedFrom;
+    }
     await fastForwardTo(root, target.name, rev);
   });
+  // Whatever happened next: once the other worktree was detached, that is a
+  // change the user must hear about even if the fast-forward then failed.
+  announceTaken(store, target.name, outcome.freedFrom, ok);
+  return ok;
 }
 
 export async function createAndSwitch(

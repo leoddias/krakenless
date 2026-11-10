@@ -2,7 +2,7 @@
  * What the toolbar's branch picker offers, as data.
  *
  * Pure and on its own, because the rules here are the whole feature: which
- * branch cannot be checked out and why, which worktree is the one you are
+ * branch is taken from another worktree, which cannot be and why, which worktree is the one you are
  * standing in, and what each entry claims will happen when it is chosen. The
  * component next door only draws them.
  */
@@ -35,13 +35,14 @@ export function buildCheckoutMenu(options: {
 }): { branches: CheckoutChoice[]; worktrees: CheckoutChoice[] } {
   const { branches, worktrees, busy, onCheckout, onOpen } = options;
 
-  // Which branch is open in which *other* worktree. `git worktree list` is the
-  // authority: a branch is blocked because a checkout holds it, and naming that
-  // checkout is what makes the refusal actionable.
+  // Which branch is open in which worktree. `git worktree list` is the
+  // authority. The one this window stands in holds the current branch, which
+  // `branch.current` already answers, so every other entry is a worktree a
+  // checkout here would take the branch from (ADR-0068).
   const heldBy = new Map<string, WorktreeSummary>();
   if (worktrees.state === 'ready') {
     for (const worktree of worktrees.value) {
-      if (worktree.main || worktree.branch === null) continue;
+      if (worktree.branch === null) continue;
       heldBy.set(worktree.branch, worktree);
     }
   }
@@ -51,17 +52,22 @@ export function buildCheckoutMenu(options: {
       ? branches.value
           .filter((branch) => !branch.remote)
           .map((branch) => {
-            const holder = heldBy.get(branch.name);
+            const holder = branch.current ? undefined : heldBy.get(branch.name);
             const blocked = busy
               ? 'A git command is already running.'
               : branch.current
                 ? null
-                : holder === undefined
-                  ? null
-                  : `"${branch.name}" is checked out in ${holder.path}. A branch can only be checked out in one worktree.`;
+                : holderRefusal(branch.name, holder);
+            // Said on the item, because choosing it changes that worktree:
+            // it is left detached at the commit it had.
+            const label = branch.current
+              ? `${branch.name} (current)`
+              : holder === undefined
+                ? branch.name
+                : `${branch.name} — take from ${holder.path}`;
             return {
               id: `branch:${branch.name}`,
-              label: branch.current ? `${branch.name} (current)` : branch.name,
+              label,
               disabled: branch.current ? null : blocked,
               ...(blocked !== null || branch.current
                 ? {}
@@ -90,6 +96,23 @@ export function buildCheckoutMenu(options: {
       : [];
 
   return { branches: branchChoices, worktrees: worktreeChoices };
+}
+
+/**
+ * Why a branch another worktree holds cannot be taken from it, or `null` when
+ * it can. The same three refusals `switchTakingBranch` makes, said before the
+ * click: a lock, a directory that is gone. (An operation in progress there is
+ * only known by asking git, so that one arrives as the switch's error.)
+ */
+function holderRefusal(name: string, holder: WorktreeSummary | undefined): string | null {
+  if (holder === undefined) return null;
+  if (holder.locked !== null) {
+    return `"${name}" is checked out in ${holder.path}, which is locked${holder.locked === '' ? '' : ` (${holder.locked})`}.`;
+  }
+  if (holder.prunable !== null) {
+    return `"${name}" is checked out in ${holder.path}, which git cannot reach: ${holder.prunable}`;
+  }
+  return null;
 }
 
 /**

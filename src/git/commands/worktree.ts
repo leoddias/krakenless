@@ -1,7 +1,8 @@
 /**
  * Builders for the repository's worktrees.
  *
- * Listing, and removing one (ADR-0065). `git worktree add` is still not built:
+ * Listing, removing one (ADR-0065), and detaching one so another checkout can
+ * take its branch (ADR-0068). `git worktree add` is still not built:
  * it writes a directory outside the repository, which is the boundary ADR-0022
  * guards, and nobody has asked for it yet.
  */
@@ -51,4 +52,42 @@ export function buildWorktreeRemoveCommand(
     ],
     destructive: true,
   };
+}
+
+/**
+ * Detaches HEAD where it stands — run *inside* the worktree that holds a
+ * branch, to let go of it.
+ *
+ * No start point, on purpose: `git switch --detach` with nothing after it
+ * detaches at the commit already checked out, so not one file, the index or
+ * an uncommitted change moves, and it works over a dirty tree. The branch
+ * keeps pointing where it did; the worktree is simply no longer *on* it, which
+ * is what lets another checkout take it (ADR-0068).
+ */
+export function buildDetachHeadCommand(): GitCommand {
+  return { args: ['switch', '--detach'] };
+}
+
+/**
+ * Reads the full ref HEAD is on, run in a worktree just before it is detached.
+ *
+ * The full `refs/heads/<name>` rather than `--short`: the short form of a
+ * branch is ambiguous with a tag of the same name, and this answer decides
+ * whether somebody's checkout is changed. `--quiet` makes a detached HEAD an
+ * empty answer with exit code 1 rather than an error.
+ */
+export function buildHeadRefCommand(): GitCommand {
+  return { args: ['symbolic-ref', '--quiet', 'HEAD'] };
+}
+
+/**
+ * Asks whether a bisect is under way in the worktree it runs in.
+ *
+ * Read-only: `bisect log` prints the session's log and exits 0 while one is
+ * going, and exits 1 ("We are not bisecting.") otherwise. Asked because a
+ * `bisect start --no-checkout` keeps the branch checked out, and detaching it
+ * would make the eventual `bisect reset` there fail.
+ */
+export function buildBisectLogCommand(): GitCommand {
+  return { args: ['bisect', 'log'] };
 }

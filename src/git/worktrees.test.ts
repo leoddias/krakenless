@@ -9,6 +9,7 @@ import {
   listWorktrees,
   removeWorktree,
   samePath,
+  switchTakingBranch,
 } from './worktrees';
 
 const invoke = vi.hoisted(() => vi.fn());
@@ -259,6 +260,211 @@ describe('removeWorktree', () => {
     await expect(
       removeWorktree(MAIN, WIKI, { reason: 'forged' } as never),
     ).rejects.toThrow(GitError);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+});
+
+describe('switchTakingBranch', () => {
+  /** Every git call as `cwd: args`, in order — the sequence is the claim. */
+  function calls(): string[] {
+    return invoke.mock.calls
+      .filter((call) => call[0] === 'git_run')
+      .map(
+        (call) => `${call[1].repo as string}: ${(call[1].args as string[]).join(' ')}`,
+      );
+  }
+
+  /**
+   * Answers each command the way git would, from a worktree list and the
+   * holder's state. `failSwitchHere` makes the switch in MAIN refuse.
+   */
+  function answer(options: {
+    list: string;
+    rebase?: boolean;
+    mergeHead?: boolean;
+    failSwitchHere?: boolean;
+    failReattach?: boolean;
+    bisect?: boolean;
+    /** The branch HEAD is on in each worktree; `null` for detached. */
+    heads?: Record<string, string | null>;
+  }): void {
+    const heads: Record<string, string | null> = {
+      [MAIN]: 'main',
+      [WIKI]: 'wiki',
+      ...options.heads,
+    };
+    invoke.mockImplementation((command: string, payload: Record<string, unknown>) => {
+      if (command === 'rebase_state') {
+        return Promise.resolve({
+          in_progress: options.rebase === true,
+          current: null,
+          total: null,
+          head_name: null,
+        });
+      }
+      const args = payload.args as string[];
+      const repo = payload.repo as string;
+      const joined = args.join(' ');
+      if (joined === 'symbolic-ref --quiet HEAD') {
+        const head = heads[repo] ?? null;
+        return Promise.resolve(
+          head === null ? raw({ code: 1 }) : raw({ stdout: `refs/heads/${head}\n` }),
+        );
+      }
+      if (joined === 'bisect log') {
+        return Promise.resolve(
+          options.bisect === true
+            ? raw({ stdout: 'git bisect start\n' })
+            : raw({ code: 1, stderr: 'We are not bisecting.' }),
+        );
+      }
+      if (joined.startsWith('worktree list'))
+        return Promise.resolve(raw({ stdout: options.list }));
+      if (joined.startsWith('rev-parse --absolute-git-dir')) {
+        return Promise.resolve(raw({ stdout: `${MAIN}/.git/worktrees/wiki\nfalse\n` }));
+      }
+      if (args.includes('MERGE_HEAD^{commit}')) {
+        return Promise.resolve(
+          options.mergeHead === true ? raw({ stdout: `${OID}\n` }) : raw({ code: 1 }),
+        );
+      }
+      if (args.some((arg) => arg.endsWith('_HEAD^{commit}')))
+        return Promise.resolve(raw({ code: 1 }));
+      if (joined === 'switch wiki' && repo === MAIN && options.failSwitchHere === true) {
+        return Promise.resolve(
+          raw({
+            code: 1,
+            stderr: 'error: Your local changes would be overwritten by checkout',
+          }),
+        );
+      }
+      if (joined === 'switch wiki' && repo === WIKI && options.failReattach === true) {
+        return Promise.resolve(raw({ code: 128, stderr: 'fatal: boom' }));
+      }
+      return Promise.resolve(raw());
+    });
+  }
+
+  it('just switches when no other worktree has the branch', async () => {
+    answer({ list: LIST });
+
+    await expect(switchTakingBranch(MAIN, 'topic')).resolves.toEqual({ freedFrom: null });
+
+    expect(calls()).toEqual([
+      `${MAIN}: symbolic-ref --quiet HEAD`,
+      `${MAIN}: worktree list --porcelain`,
+      `${MAIN}: switch topic`,
+    ]);
+  });
+
+  it('does nothing when the branch is already the one checked out here', async () => {
+    // Even when the list names a path that only *looks* different from the
+    // one the app opened — a junction, a subst drive.
+    answer({ list: LIST.replace(MAIN, 'D:/junction/app') });
+
+    await expect(switchTakingBranch(MAIN, 'main')).resolves.toEqual({ freedFrom: null });
+    expect(calls()).toEqual([`${MAIN}: symbolic-ref --quiet HEAD`]);
+  });
+
+  it('leaves the holder alone when it moved off the branch since the list was read', async () => {
+    answer({ list: LIST, heads: { [WIKI]: 'other' } });
+
+    await expect(switchTakingBranch(MAIN, 'wiki')).resolves.toEqual({ freedFrom: null });
+    // Git decides from here on: the holder is not touched.
+    expect(calls().some((call) => call.startsWith(`${WIKI}: switch`))).toBe(false);
+    expect(calls()).toContain(`${MAIN}: switch wiki`);
+  });
+
+  it('never strands a bisect in the holder', async () => {
+    answer({ list: LIST, bisect: true });
+
+    await expect(switchTakingBranch(MAIN, 'wiki')).rejects.toThrow(/middle of a bisect/);
+    expect(calls().some((call) => call.includes('switch'))).toBe(false);
+  });
+
+  it('detaches the holder where it stands, then switches here', async () => {
+    answer({ list: LIST });
+
+    await expect(switchTakingBranch(MAIN, 'wiki')).resolves.toEqual({ freedFrom: WIKI });
+
+    const sequence = calls();
+    // `switch --detach` with no start point, run in the holder: nothing there
+    // moves on disk, and it is the only thing that runs there.
+    const detach = sequence.indexOf(`${WIKI}: switch --detach`);
+    const here = sequence.indexOf(`${MAIN}: switch wiki`);
+    expect(detach).toBeGreaterThan(-1);
+    expect(here).toBeGreaterThan(detach);
+    expect(sequence.filter((call) => call.startsWith(`${WIKI}: switch`))).toEqual([
+      `${WIKI}: switch --detach`,
+    ]);
+  });
+
+  it('takes it from the main worktree too, when the app has a linked one open', async () => {
+    answer({ list: LIST });
+
+    await expect(switchTakingBranch(WIKI, 'main')).resolves.toEqual({ freedFrom: MAIN });
+    expect(calls()).toContain(`${MAIN}: switch --detach`);
+  });
+
+  it('puts the holder back on the branch when the switch here is refused', async () => {
+    answer({ list: LIST, failSwitchHere: true });
+
+    await expect(switchTakingBranch(MAIN, 'wiki')).rejects.toThrow(/local changes/);
+
+    const sequence = calls();
+    expect(sequence.slice(-2)).toEqual([`${MAIN}: switch wiki`, `${WIKI}: switch wiki`]);
+  });
+
+  it('says the holder was left detached when putting it back failed too', async () => {
+    answer({ list: LIST, failSwitchHere: true, failReattach: true });
+
+    await expect(switchTakingBranch(MAIN, 'wiki')).rejects.toThrow(
+      `${WIKI} was left detached at the same commit`,
+    );
+  });
+
+  it('leaves a locked holder alone', async () => {
+    answer({
+      list: LIST.replace(
+        'branch refs/heads/wiki\n',
+        'branch refs/heads/wiki\nlocked agent at work\n',
+      ),
+    });
+
+    await expect(switchTakingBranch(MAIN, 'wiki')).rejects.toThrow(
+      /locked \(agent at work\)/,
+    );
+    expect(calls().some((call) => call.includes('switch'))).toBe(false);
+  });
+
+  it('leaves a holder whose directory is gone alone', async () => {
+    answer({
+      list: LIST.replace(
+        'branch refs/heads/wiki\n',
+        'branch refs/heads/wiki\nprunable gitdir file points to non-existent location\n',
+      ),
+    });
+
+    await expect(switchTakingBranch(MAIN, 'wiki')).rejects.toThrow(/git worktree prune/);
+    expect(calls().some((call) => call.includes('switch'))).toBe(false);
+  });
+
+  it('never strands a rebase in the holder', async () => {
+    answer({ list: LIST, rebase: true });
+
+    await expect(switchTakingBranch(MAIN, 'wiki')).rejects.toThrow(/middle of a rebase/);
+    expect(calls().some((call) => call.includes('switch'))).toBe(false);
+  });
+
+  it('never strands a merge in the holder', async () => {
+    answer({ list: LIST, mergeHead: true });
+
+    await expect(switchTakingBranch(MAIN, 'wiki')).rejects.toThrow(/middle of a merge/);
+    expect(calls().some((call) => call.includes('switch'))).toBe(false);
+  });
+
+  it('refuses a branch name that is not one before running anything', async () => {
+    await expect(switchTakingBranch(MAIN, '--orphan')).rejects.toThrow(GitError);
     expect(invoke).not.toHaveBeenCalled();
   });
 });

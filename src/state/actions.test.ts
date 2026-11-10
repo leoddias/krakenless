@@ -60,6 +60,7 @@ const readRefSnapshot = vi.hoisted(() => vi.fn());
 const pullFn = vi.hoisted(() => vi.fn());
 const pushFn = vi.hoisted(() => vi.fn());
 const switchBranch = vi.hoisted(() => vi.fn());
+const switchTakingBranch = vi.hoisted(() => vi.fn());
 const switchNewBranch = vi.hoisted(() => vi.fn());
 const fastForwardTo = vi.hoisted(() => vi.fn());
 const deleteBranch = vi.hoisted(() => vi.fn());
@@ -76,6 +77,7 @@ vi.mock('../config/store', () => ({ saveConfig }));
 vi.mock('../git/worktrees', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../git/worktrees')>()),
   removeWorktree,
+  switchTakingBranch,
 }));
 vi.mock('../git/commits', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../git/commits')>()),
@@ -173,6 +175,7 @@ describe('actions', () => {
     pullFn.mockResolvedValue(undefined);
     pushFn.mockResolvedValue(undefined);
     switchBranch.mockResolvedValue(undefined);
+    switchTakingBranch.mockResolvedValue({ freedFrom: null });
     switchNewBranch.mockResolvedValue(undefined);
     deleteBranch.mockResolvedValue({ deleted: true });
     applyStash.mockResolvedValue(undefined);
@@ -455,6 +458,7 @@ describe('actions', () => {
     pullFn.mockResolvedValue(undefined);
     pushFn.mockResolvedValue(undefined);
     switchBranch.mockResolvedValue(undefined);
+    switchTakingBranch.mockResolvedValue({ freedFrom: null });
     switchNewBranch.mockResolvedValue(undefined);
     deleteBranch.mockResolvedValue({ deleted: true });
     applyStash.mockResolvedValue(undefined);
@@ -566,10 +570,34 @@ describe('actions', () => {
     expect(store.getState().notice).toMatchObject({ tone: 'error' });
   });
 
+  it('says which worktree a switch took the branch from', async () => {
+    switchTakingBranch.mockResolvedValue({
+      freedFrom: 'C:/repos/app/.claude/worktrees/main-fix',
+    });
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await expect(switchTo(store, 'main')).resolves.toBe(true);
+
+    expect(switchTakingBranch).toHaveBeenCalledWith('C:/repos/app', 'main');
+    expect(store.getState().notice).toMatchObject({ tone: 'info' });
+    expect(store.getState().notice?.message).toContain(
+      'C:/repos/app/.claude/worktrees/main-fix, which is now detached at the same commit',
+    );
+  });
+
+  it('says nothing extra when no worktree held the branch', async () => {
+    const store = createStore();
+    await openRepo(store, 'C:/repos/app');
+
+    await expect(switchTo(store, 'topic')).resolves.toBe(true);
+    expect(store.getState().notice).toBeNull();
+  });
+
   it('keeps the panels consistent when a branch switch fails', async () => {
     // A failed switch leaves the old branch checked out; the panels must be
     // re-read rather than left showing the branch the user tried to reach.
-    switchBranch.mockRejectedValue(new GitError('command-failed', 'local changes'));
+    switchTakingBranch.mockRejectedValue(new GitError('command-failed', 'local changes'));
     const store = createStore();
     await openRepo(store, 'C:/repos/app');
     getStatus.mockClear();
@@ -676,13 +704,13 @@ describe('actions', () => {
         current: false,
       });
 
-      expect(switchBranch).toHaveBeenCalledWith('C:/repos/app', 'main');
+      expect(switchTakingBranch).toHaveBeenCalledWith('C:/repos/app', 'main');
       expect(fastForwardTo).toHaveBeenCalledWith(
         'C:/repos/app',
         'main',
         'refs/remotes/origin/main',
       );
-      expect(switchBranch.mock.invocationCallOrder[0]).toBeLessThan(
+      expect(switchTakingBranch.mock.invocationCallOrder[0]).toBeLessThan(
         fastForwardTo.mock.invocationCallOrder[0] ?? 0,
       );
     });
@@ -690,7 +718,7 @@ describe('actions', () => {
     it('only fast-forwards when the branch is already checked out', async () => {
       const store = createStore();
       await openRepo(store, 'C:/repos/app');
-      switchBranch.mockClear();
+      switchTakingBranch.mockClear();
 
       await switchToRemote(store, {
         kind: 'forward',
@@ -699,7 +727,7 @@ describe('actions', () => {
         current: true,
       });
 
-      expect(switchBranch).not.toHaveBeenCalled();
+      expect(switchTakingBranch).not.toHaveBeenCalled();
       expect(fastForwardTo).toHaveBeenCalledWith(
         'C:/repos/app',
         'main',
@@ -707,8 +735,34 @@ describe('actions', () => {
       );
     });
 
+    it('still says the other worktree was detached when the fast-forward then fails', async () => {
+      switchTakingBranch.mockResolvedValue({ freedFrom: 'C:/repos/app-fix' });
+      fastForwardTo.mockRejectedValue(
+        new GitError('command-failed', 'not a fast-forward'),
+      );
+      const store = createStore();
+      await openRepo(store, 'C:/repos/app');
+
+      await expect(
+        switchToRemote(store, {
+          kind: 'forward',
+          name: 'main',
+          remoteRef: 'origin/main',
+          current: false,
+        }),
+      ).resolves.toBe(false);
+
+      const notice = store.getState().notice;
+      expect(notice?.tone).toBe('error');
+      // Both facts, the failure first.
+      expect(notice?.message).toContain('not a fast-forward');
+      expect(notice?.message).toContain('C:/repos/app-fix, which is now detached');
+    });
+
     it('stops at a refused switch and never fast-forwards the wrong branch', async () => {
-      switchBranch.mockRejectedValue(new GitError('command-failed', 'local changes'));
+      switchTakingBranch.mockRejectedValue(
+        new GitError('command-failed', 'local changes'),
+      );
       const store = createStore();
       await openRepo(store, 'C:/repos/app');
 

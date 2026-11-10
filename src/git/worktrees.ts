@@ -8,20 +8,31 @@
  * run *in* that worktree — which is all it takes, because `git` resolves the
  * shared `.git` from wherever it is invoked.
  *
- * One thing here writes: {@link removeWorktree} (ADR-0065), which takes a
- * finished checkout off disk. Adding one is still not built (ADR-0027).
+ * Two things here write: {@link removeWorktree} (ADR-0065), which takes a
+ * finished checkout off disk, and {@link switchTakingBranch} (ADR-0068), which
+ * detaches another worktree's HEAD so this one can check out its branch. Adding one is still not built (ADR-0027).
  */
 
+import { buildSwitchCommand } from './commands/branch';
+import { buildRepoProbeCommand } from './commands/repo';
 import {
+  buildBisectLogCommand,
+  buildDetachHeadCommand,
+  buildHeadRefCommand,
   buildWorktreeListCommand,
   buildWorktreeRemoveCommand,
 } from './commands/worktree';
 import { approve, type Confirmation } from './confirm';
 import { GitError } from './errors';
+import { readOperation } from './operation';
+import { parseRepoProbe } from './parsers/repo';
 import { parseWorktrees } from './parsers/worktree';
 import { runGit } from './runner';
 import { getStatus } from './status';
 import type { RepoStatus, Worktree } from './types';
+
+/** A switch, or a detach at the commit already checked out: nothing can be lost. */
+const SAFE = { confirmed: true } as const;
 
 /** A worktree plus what is uncommitted in it, when that could be read. */
 export interface WorktreeSummary extends Worktree {
@@ -162,4 +173,123 @@ export async function removeWorktree(
     }
     throw error;
   }
+}
+
+/** What a switch had to do in another worktree to get its branch. */
+export interface SwitchOutcome {
+  /** The worktree that was holding the branch and is now detached, or `null`. */
+  freedFrom: string | null;
+}
+
+/**
+ * Switches `repo` to `name`, taking the branch from another worktree that has
+ * it checked out (ADR-0068).
+ *
+ * Git refuses to check out a branch another worktree is on, and the refusal is
+ * a dead end in a GUI: the other checkout is often one nobody is looking at.
+ * So the holder is detached at the commit it already has — no file, no index
+ * entry, no uncommitted change moves there, and the branch still points where
+ * it did — and the switch runs here.
+ *
+ * Not taken, and git's own refusal stands, when the holder:
+ * - is **locked**: a lock is somebody saying "leave this one alone";
+ * - is **prunable**: its directory is gone, so there is nothing to detach;
+ * - is **in the middle of a rebase, merge, cherry-pick or revert**: detaching
+ *   there would strand the operation, and a commit finishing it would land on
+ *   no branch.
+ *
+ * If the switch here then fails — uncommitted work here that the switch would
+ * overwrite is the usual reason — the holder is put back on the branch before
+ * the error is passed on. That cannot move a file either: its HEAD is still
+ * the branch's commit, because a refused switch moves no ref.
+ */
+export async function switchTakingBranch(
+  repo: string,
+  name: string,
+): Promise<SwitchOutcome> {
+  const switchHere = buildSwitchCommand(name);
+  // Already here: nothing to take. Asked of this checkout rather than decided
+  // from the list, because the path the app opened and the path git prints can
+  // differ (a junction, a subst drive) and this checkout would otherwise be
+  // mistaken for its own holder.
+  if ((await headRef(repo)) === `refs/heads/${name}`) return { freedFrom: null };
+  const worktrees = await listWorktrees(repo);
+  const holder = worktrees.find(
+    (worktree) => worktree.branch === name && !samePath(worktree.path, repo),
+  );
+  if (holder === undefined) {
+    await runGit(repo, switchHere, SAFE);
+    return { freedFrom: null };
+  }
+
+  const refuse = (why: string): never => {
+    throw new GitError(
+      'command-failed',
+      `"${name}" is checked out in ${holder.path}, ${why}`,
+      { args: switchHere.args },
+    );
+  };
+  if (holder.locked !== null) {
+    refuse(
+      `which is locked${holder.locked === '' ? '' : ` (${holder.locked})`}. Unlock it or switch it to another branch first.`,
+    );
+  }
+  if (holder.prunable !== null) {
+    refuse(
+      `which git cannot reach (${holder.prunable}). Run "git worktree prune" to forget it, then try again.`,
+    );
+  }
+
+  // That worktree's own git dir: a linked worktree keeps its HEAD, and its
+  // rebase or merge state, under `.git/worktrees/<name>`, not in this one's.
+  const probe = await runGit(holder.path, buildRepoProbeCommand());
+  const operation = await readOperation(holder.path, parseRepoProbe(probe.stdout).gitDir);
+  if (operation.kind !== null) {
+    refuse(
+      `which is in the middle of a ${operation.kind}. Finish or abort it there first.`,
+    );
+  }
+  const bisect = await runGit(holder.path, buildBisectLogCommand(), {
+    ...SAFE,
+    allowExitCodes: [1],
+  });
+  if (bisect.code === 0) {
+    refuse('which is in the middle of a bisect. Run "git bisect reset" there first.');
+  }
+  // Read again at the last moment, *in* that directory: the list is a moment
+  // old and somebody — often an agent — may have switched it since. Detaching
+  // a worktree that is no longer on the branch would change it for nothing,
+  // and putting it "back" afterwards would put it somewhere it never was.
+  if ((await headRef(holder.path)) !== `refs/heads/${name}`) {
+    await runGit(repo, switchHere, SAFE);
+    return { freedFrom: null };
+  }
+
+  await runGit(holder.path, buildDetachHeadCommand(), SAFE);
+  try {
+    await runGit(repo, switchHere, SAFE);
+  } catch (error) {
+    try {
+      await runGit(holder.path, buildSwitchCommand(name), SAFE);
+    } catch {
+      // Left detached at the branch's commit, which loses nothing — but the
+      // user has to hear that the other worktree changed, so it is added to
+      // the switch's own reason rather than swallowed.
+      const why = error instanceof Error ? error.message : String(error);
+      throw new GitError(
+        'command-failed',
+        `${why}\n${holder.path} was left detached at the same commit; run "git switch ${name}" there to put it back.`,
+        { args: switchHere.args },
+      );
+    }
+    throw error;
+  }
+  return { freedFrom: holder.path };
+}
+
+/** The full ref HEAD is on in `cwd`, or `null` when it is detached. */
+async function headRef(cwd: string): Promise<string | null> {
+  const output = await runGit(cwd, buildHeadRefCommand(), { allowExitCodes: [1] });
+  const ref = output.stdout.trim();
+  return output.code === 0 && ref.length > 0 ? ref : null;
 }

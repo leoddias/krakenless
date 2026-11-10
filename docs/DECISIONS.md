@@ -453,7 +453,7 @@ one the user edited, and refusing more than git does would refuse work git would
 have accepted. The refusal git does produce is surfaced in its own words.
 ## ADR-0027 — Worktrees are shown and opened, never created or removed
 
-**Status:** superseded in part by ADR-0065 — removing a worktree is built; adding one still is not
+**Status:** superseded in part by ADR-0065 — removing a worktree is built; adding one still is not — and by ADR-0068: a branch another worktree holds is taken from it, not offered disabled
 
 **Decision:** The app reads `git worktree list --porcelain`, runs one
 `git status` inside each linked worktree to count what is uncommitted there,
@@ -2111,3 +2111,35 @@ two `cat-file` processes per side. The pure pairing lives in
 `views/diff/imageSides.ts`, the spec in `git/commands/blob.ts`. A loaded image
 is keyed on the diff's `index <old>..<new>` line, so a refresh with new content
 at the same path reads it again rather than keep drawing the first load.
+## ADR-0068 — Checking out a branch another worktree holds takes it from that worktree
+**Date:** 2026-11-10 · **Status:** accepted
+**Decision:** Checking out a local branch that another worktree has checked
+out (double click on the chip, the refs panel, the toolbar picker, or the local
+side of a remote-chip double click) first detaches that worktree with
+`git switch --detach` run inside it, with no start point, then runs the switch
+here. The other worktree keeps its commit, index, files and uncommitted changes;
+only its HEAD stops being the branch. A notice names that worktree by path. Not
+done, and the refusal stands, when the holder is locked, prunable, or in the
+middle of a rebase, merge, cherry-pick, revert or bisect. The holder's HEAD is
+read again (`symbolic-ref`) just before the detach, and nothing is done there if
+it has moved off the branch since the list was read. If the switch here fails after
+the detach, the holder is switched back onto the branch, and if that fails too,
+the error says the holder was left detached. The picker offers such a branch as
+"name — take from <path>" and disables it only for a locked or gone holder.
+**Why:** "Estou tentando fazer checkout para uma branch e fica dando erro. Eu
+não quero nem saber, eu deveria conseguir fazer checkout." Git's refusal (`'main'
+is already checked out at …`) is a dead end in a GUI. The holder is often a
+worktree nobody is looking at, like an agent's under `.claude/worktrees/`.
+Rejected: `git switch --ignore-other-worktrees`, which puts one branch in two
+worktrees, so a commit in one shows up in the other as staged changes undoing
+it. Rejected: a confirmation dialog, because detaching at the current commit
+loses nothing and is undone with one `git switch <branch>` there. Asking would
+put back the friction the user complained about, and the safety bar reserves
+confirmations for destructive operations. Rejected: opening the other worktree
+instead, which answers a different question than "check out here".
+**Consequences:** One operation now writes to a checkout other than the open
+one (`switchTakingBranch` in `git/worktrees.ts`). Commits made later in the
+detached worktree land on no branch until someone switches it to one; the
+notice says so. Checking for an operation in progress costs a `rev-parse` and
+the rebase-state read in the holder, but only when a holder exists. The plain
+switch path is unchanged when no other worktree holds the branch.
