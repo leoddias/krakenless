@@ -215,6 +215,19 @@
 
 ## Released
 
+- **v0.19.0-alpha** (2026-11-12): published as Latest. The conflict resolver
+  opens large files (ADR-0069): line matching is Myers O(ND) in linear space
+  over interned lines (`views/conflicts/lineDiff.ts`), same LCS answer as the
+  quadratic table, on a work budget that leaves a too-different region
+  unmatched (a bigger block, never an auto-merge). The 4000-line refusal is now
+  a million-line guard; agreed and decided runs over 40 lines are folded to 5
+  at each end in panes and Output. The reported 5,236-line `es.json` builds in
+  ~7 ms; two 50k-line files with nothing shared in ~330 ms. Conventions review:
+  no critical/major; minors fixed (no-op edit marked `edited`, fold button
+  nested in an ARIA button, decided runs unfolded, stale copy). Workflows,
+  manifests (0.19.0, URLs 200) and landing page verified. Not verified by
+  hand: the resolver against a real conflicted large file in the app, and the
+  in-app update swap.
 - **v0.18.0-alpha** (2026-11-10): published as Latest. Checking out a branch
   another worktree holds now takes it from there (ADR-0068): the holder is
   detached at its commit (`switch --detach`, no files move) and the switch runs
