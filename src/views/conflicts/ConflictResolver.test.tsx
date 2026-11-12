@@ -14,6 +14,7 @@ import { resolveConflict } from '../../state/actions';
 import { StoreProvider } from '../../state/hooks';
 import { createStore, type Store } from '../../state/store';
 import { ConflictResolver, sideLabels } from './ConflictResolver';
+import { MAX_LINES } from './resolve';
 
 vi.mock('../../git/conflict', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../git/conflict')>();
@@ -405,6 +406,16 @@ describe('editing the result', () => {
     expect((await editing('mine')).value).toBe('mine');
   });
 
+  it('does not call a run edited when it was opened and left as it was', async () => {
+    renderResolver();
+    await screen.findByRole('dialog');
+    fireEvent.click(screen.getByRole('button', { name: /Take all from Ours/ }));
+
+    fireEvent.blur(await editing('mine'));
+
+    expect(screen.queryByText('edited')).toBeNull();
+  });
+
   it('writes what was typed into the file that gets saved', async () => {
     const store = renderResolver();
     await screen.findByRole('dialog');
@@ -638,10 +649,107 @@ describe('when the file cannot be shown', () => {
   });
 
   it('refuses a file too large to compare, and says where to go instead', async () => {
-    const huge = `${'x\n'.repeat(5000)}`;
+    const huge = 'x\n'.repeat(MAX_LINES + 1);
     readSides.mockResolvedValue(sides(huge, huge));
     renderResolver();
 
     expect(await screen.findByRole('alert')).toHaveTextContent('too large to compare');
+  });
+});
+
+describe('a large file', () => {
+  /** A locale file: every key on its own line, as in the bug report. */
+  const locale = (count: number, edit: (i: number) => string | null): string =>
+    Array.from(
+      { length: count },
+      (_, i) => edit(i) ?? `  "key.${String(i)}": "v${String(i)}",`,
+    )
+      .map((line) => `${line}\n`)
+      .join('');
+
+  it('opens one of thirty thousand lines, standing on its one conflict', async () => {
+    readSides.mockResolvedValue(
+      sides(
+        locale(30_000, (i) => (i === 20_000 ? '  "key.20000": "ours",' : null)),
+        locale(30_000, (i) => (i === 20_000 ? '  "key.20000": "theirs",' : null)),
+        locale(30_000, () => null),
+      ),
+    );
+    renderResolver();
+
+    expect(await screen.findByText('Conflict 1 of 1')).toBeInTheDocument();
+    expect(screen.getAllByText(/"key.20000": "ours"/).length).toBeGreaterThan(0);
+  });
+
+  it('folds the long agreed runs, and opens one everywhere at once', async () => {
+    readSides.mockResolvedValue(
+      sides(
+        locale(200, (i) => (i === 100 ? 'ours' : null)),
+        locale(200, (i) => (i === 100 ? 'theirs' : null)),
+        locale(200, () => null),
+      ),
+    );
+    renderResolver();
+
+    // 100 agreed lines above the conflict: 5 shown at each end, 90 folded, in
+    // both panes and in the Output.
+    const folds = await screen.findAllByRole('button', { name: /90 unchanged lines/ });
+    expect(folds.length).toBe(3);
+    expect(screen.queryByText('  "key.50": "v50",')).not.toBeInTheDocument();
+
+    fireEvent.click(folds[0] as HTMLElement);
+
+    expect(screen.queryAllByRole('button', { name: /90 unchanged lines/ })).toHaveLength(
+      0,
+    );
+    expect(screen.getAllByText(/"key\.50": "v50",/).length).toBeGreaterThan(0);
+  });
+
+  it('folds a decided run of a large file too, outside the editable run', async () => {
+    readSides.mockResolvedValue(
+      sides(
+        locale(200, (i) => `ours ${String(i)}`),
+        locale(200, (i) => `theirs ${String(i)}`),
+        locale(200, () => null),
+      ),
+    );
+    renderResolver();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Take all from Ours/ }));
+
+    const output = screen.getByLabelText('Output');
+    const fold = within(output).getByRole('button', { name: /190 unchanged lines/ });
+    // Not nested in the run's own role="button", where a screen reader would
+    // flatten it away.
+    expect(fold.parentElement?.closest('[role="button"]')).toBeNull();
+    expect(within(output).queryByText('ours 100')).toBeNull();
+
+    fireEvent.click(fold);
+
+    expect(within(output).getByText('ours 100')).toBeInTheDocument();
+  });
+
+  it('writes every folded line, not only the ones on screen', async () => {
+    const ours = locale(200, (i) => (i === 100 ? 'ours' : null));
+    readSides.mockResolvedValue(
+      sides(
+        ours,
+        locale(200, (i) => (i === 100 ? 'theirs' : null)),
+        locale(200, () => null),
+      ),
+    );
+    renderResolver();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Take all from Ours/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save and mark resolved' }));
+
+    await waitFor(() =>
+      expect(resolveMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'src/app.ts',
+        ours,
+        '17-open',
+      ),
+    );
   });
 });

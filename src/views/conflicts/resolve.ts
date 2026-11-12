@@ -8,11 +8,14 @@
  * choices concatenated — so the preview the user reads is not an approximation
  * of the result, it *is* the result, produced by the same function that writes.
  *
- * The diff is a plain longest-common-subsequence over lines. Not because it is
- * clever, but because it is predictable: a user comparing two panes must be
- * able to see why a block is a block, and a heuristic that occasionally aligns
- * lines "better" is a heuristic that occasionally aligns them worse with no
- * way to tell.
+ * The diff is a plain longest-common-subsequence over lines, found by Myers'
+ * O(ND) search (`lineDiff`). Not because it is clever, but because it is
+ * predictable: a user comparing two panes must be able to see why a block is a
+ * block, and a heuristic that occasionally aligns lines "better" is a heuristic
+ * that occasionally aligns them worse with no way to tell. The one concession
+ * to size is the search's work budget: a region too different to search within
+ * it stays unmatched, which shows up as a bigger block to decide — never as an
+ * automatic merge.
  *
  * **The common ancestor is read, not ignored.** Comparing only ours against
  * theirs cannot tell "they changed this" from "we both changed it": both look
@@ -22,6 +25,8 @@
  * a box beside the words "nothing on this side". Only the runs both sides
  * genuinely changed are left undecided, which is what git means by a conflict.
  */
+
+import { matchLines } from './lineDiff';
 
 /** Which side of a disagreement to keep. `both` keeps ours then theirs. */
 export type Choice = 'ours' | 'theirs' | 'both' | 'neither';
@@ -71,39 +76,15 @@ function sameLines(a: string[], b: string[]): boolean {
 }
 
 /**
- * Lengths of the longest common subsequence for every prefix pair.
+ * Above this many lines on a side, the screen refuses.
  *
- * Quadratic in lines, which is the honest cost of an exact answer. Guarded by
- * {@link MAX_LINES} at the call site rather than swapped for something
- * approximate: a file too big for this deserves the merge tool, not a worse
- * diff presented as the same thing.
+ * The diff is Myers' O(ND) on a work budget (see `lineDiff`), so it is not
+ * what limits size any more; this is a guard against handing the window a file
+ * whose text alone would not fit comfortably in memory.
  */
-function lcsTable(a: string[], b: string[]): number[][] {
-  const table: number[][] = Array.from({ length: a.length + 1 }, () =>
-    new Array<number>(b.length + 1).fill(0),
-  );
-  for (let i = a.length - 1; i >= 0; i -= 1) {
-    for (let j = b.length - 1; j >= 0; j -= 1) {
-      const row = table[i];
-      const next = table[i + 1];
-      if (row === undefined || next === undefined) continue;
-      row[j] =
-        a[i] === b[j] ? (next[j + 1] ?? 0) + 1 : Math.max(next[j] ?? 0, row[j + 1] ?? 0);
-    }
-  }
-  return table;
-}
+export const MAX_LINES = 1_000_000;
 
-/**
- * Above this many lines on a side, the pane refuses rather than freezing.
- *
- * The tables are `base × ours` and `base × theirs` numbers; at ten thousand
- * lines a side that is a hundred million cells, which is a hung window, not a
- * slow one.
- */
-export const MAX_LINES = 4000;
-
-/** True when a file is too large for the block view to build honestly. */
+/** True when a file is too large for the block view to build. */
 export function tooLargeToCompare(ours: string, theirs: string, base = ''): boolean {
   return (
     toLines(ours).length > MAX_LINES ||
@@ -123,19 +104,16 @@ export function tooLargeToCompare(ours: string, theirs: string, base = ''): bool
  * when stage 1 is missing.
  */
 export function buildBlocks(ours: string[], theirs: string[]): Block[] {
-  const table = lcsTable(ours, theirs);
+  const map = matchLines(ours, theirs);
   const blocks: Block[] = [];
   let i = 0;
   let j = 0;
   let nextId = 0;
 
-  const matching = (): boolean =>
-    i < ours.length && j < theirs.length && ours[i] === theirs[j];
-
   while (i < ours.length || j < theirs.length) {
-    if (matching()) {
+    if (i < ours.length && map[i] === j) {
       const run: string[] = [];
-      while (matching()) {
+      while (i < ours.length && map[i] === j) {
         run.push(ours[i] as string);
         i += 1;
         j += 1;
@@ -147,35 +125,18 @@ export function buildBlocks(ours: string[], theirs: string[]): Block[] {
     // Everything up to the next agreed line is *one* decision, both sides
     // together. Emitting a block per side would ask the user twice about a
     // single edit and would lose the pairing that makes the two panes readable.
-    const ourRun: string[] = [];
-    const theirRun: string[] = [];
-    while ((i < ours.length || j < theirs.length) && !matching()) {
-      if (j >= theirs.length) {
-        ourRun.push(ours[i] as string);
-        i += 1;
-      } else if (i >= ours.length) {
-        theirRun.push(theirs[j] as string);
-        j += 1;
-      } else if ((table[i + 1]?.[j] ?? 0) >= (table[i]?.[j + 1] ?? 0)) {
-        // Walking down whichever side keeps more in common afterwards is what
-        // makes the agreed runs as long as they can be.
-        ourRun.push(ours[i] as string);
-        i += 1;
-      } else {
-        theirRun.push(theirs[j] as string);
-        j += 1;
-      }
-    }
-
-    if (ourRun.length > 0 || theirRun.length > 0) {
-      blocks.push({
-        kind: 'conflict',
-        id: nextId++,
-        ours: ourRun,
-        theirs: theirRun,
-        choice: null,
-      });
-    }
+    let ni = i;
+    while (ni < ours.length && map[ni] === -1) ni += 1;
+    const nj = ni < ours.length ? (map[ni] as number) : theirs.length;
+    blocks.push({
+      kind: 'conflict',
+      id: nextId++,
+      ours: ours.slice(i, ni),
+      theirs: theirs.slice(j, nj),
+      choice: null,
+    });
+    i = ni;
+    j = nj;
   }
 
   return blocks;
@@ -184,28 +145,13 @@ export function buildBlocks(ours: string[], theirs: string[]): Block[] {
 /**
  * For every line of `a`, the line of `b` it is matched to, or -1.
  *
- * The matching is the longest common subsequence, walked greedily, so it is
+ * The matching is a longest common subsequence (`matchLines`), so it is
  * monotonic: later lines of `a` never match earlier lines of `b`. That property
  * is what lets {@link buildMergedBlocks} treat a base line matched on both
  * sides as a point all three files pass through together.
  */
-function alignment(a: string[], b: string[]): number[] {
-  const table = lcsTable(a, b);
-  const map = new Array<number>(a.length).fill(-1);
-  let i = 0;
-  let j = 0;
-  while (i < a.length && j < b.length) {
-    if (a[i] === b[j]) {
-      map[i] = j;
-      i += 1;
-      j += 1;
-    } else if ((table[i + 1]?.[j] ?? 0) >= (table[i]?.[j + 1] ?? 0)) {
-      i += 1;
-    } else {
-      j += 1;
-    }
-  }
-  return map;
+function alignment(a: string[], b: string[]): Int32Array {
+  return matchLines(a, b);
 }
 
 /**
@@ -506,4 +452,28 @@ export function assemble(blocks: Block[], trailingNewline: boolean): string {
 /** Whether the original text ended with a newline. */
 export function endsWithNewline(text: string): boolean {
   return text.length > 0 && text.endsWith('\n');
+}
+
+/** Agreed runs longer than this are shown folded, with a few lines at each end. */
+export const FOLD_OVER = 40;
+/** Lines kept visible at each end of a folded run. */
+export const FOLD_CONTEXT = 5;
+
+/**
+ * How a run of agreed lines is drawn: whole, or folded to its ends.
+ *
+ * Folding is what keeps a fifty-thousand-line file with three conflicts a
+ * screen of a few hundred elements instead of fifty thousand of them, which is
+ * what made it slow to draw and slower to re-draw on every choice. Only the
+ * drawing is folded — the block keeps every line, and `assemble` writes them.
+ */
+export function foldRun(
+  lines: string[],
+): { head: string[]; hidden: number; tail: string[] } | null {
+  if (lines.length <= FOLD_OVER) return null;
+  return {
+    head: lines.slice(0, FOLD_CONTEXT),
+    hidden: lines.length - 2 * FOLD_CONTEXT,
+    tail: lines.slice(lines.length - FOLD_CONTEXT),
+  };
 }

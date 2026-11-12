@@ -38,7 +38,7 @@
  * themselves — and walk past the ones the merge already answered.
  */
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import { readConflictSides, type ConflictSides } from '../../git/conflict';
 import { stampWorktreeFile } from '../../fs/file';
 import { resolveConflict } from '../../state/actions';
@@ -57,6 +57,7 @@ import {
   conflictCount,
   editLines,
   endsWithNewline,
+  foldRun,
   navigable,
   toLines,
   tooLargeToCompare,
@@ -219,9 +220,8 @@ export function ConflictResolver(): ReactNode {
 
         {loaded.state === 'too-large' && (
           <p className={styles.notice} role="alert">
-            This file is too large to compare line by line here. Use your merge tool or an
-            editor, then stage it — the block view would take longer to build than the
-            window would survive.
+            This file is too large to compare line by line here (over a million lines on a
+            side). Use your merge tool or an editor, then stage it.
           </p>
         )}
 
@@ -307,6 +307,13 @@ function ResolverBody({
    * conflict is not what dragging this edge means.
    */
   const [outputShare, setOutputShare] = useState(34);
+  /**
+   * Runs the user unfolded, as `blockIndex:part` — the Output's run key. An
+   * agreed run is `index:lines` in both panes and the Output, so it opens
+   * everywhere at once and the rows stay level.
+   */
+  const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(() => new Set());
+  const unfold = (key: string): void => setUnfolded((open) => new Set(open).add(key));
   const shareAtDragStart = useRef(34);
   const body = useRef<HTMLDivElement | null>(null);
 
@@ -410,6 +417,12 @@ function ResolverBody({
   /** Writes the typed text back into the block the run came from. */
   const commitEdit = (index: number, part: BlockPart): void => {
     setEditingAt(null);
+    const segment = assembleSegments(blocks).find(
+      (run) => run.blockIndex === index && run.part === part,
+    );
+    // Opening a run and leaving it as it was is not an edit: marking it
+    // `edited` would tell the user they changed lines they did not.
+    if (segment !== undefined && segment.lines.join('\n') === draft) return;
     onBlocks(editLines(blocks, index, part, draft === '' ? [] : draft.split('\n')));
   };
 
@@ -520,6 +533,8 @@ function ResolverBody({
             blocks={blocks}
             busy={busy}
             currentId={currentId}
+            unfolded={unfolded}
+            onUnfold={unfold}
             onChoose={(id, choice) => onBlocks(choose(blocks, id, choice))}
           />
           <Side
@@ -529,6 +544,8 @@ function ResolverBody({
             blocks={blocks}
             busy={busy}
             currentId={currentId}
+            unfolded={unfolded}
+            onUnfold={unfold}
             onChoose={(id, choice) => onBlocks(choose(blocks, id, choice))}
           />
         </div>
@@ -573,73 +590,89 @@ function ResolverBody({
           >
             {assembleSegments(blocks).map((segment) => {
               const key = `${String(segment.blockIndex)}:${segment.part}`;
-              return editingAt === key ? (
-                <textarea
-                  key={key}
-                  className={styles.editor}
-                  aria-label="Edit these lines of the result"
-                  value={draft}
-                  rows={Math.max(draft.split('\n').length, 1)}
-                  spellCheck={false}
-                  ref={(element) => {
-                    if (element !== null && document.activeElement !== element) {
-                      element.focus();
+              // Decided runs fold too: "take all" on a large file is one run
+              // of tens of thousands of lines.
+              const fold = unfolded.has(key) ? null : foldRun(segment.lines);
+              const run =
+                editingAt === key ? (
+                  <textarea
+                    key={key}
+                    className={styles.editor}
+                    aria-label="Edit these lines of the result"
+                    value={draft}
+                    rows={Math.max(draft.split('\n').length, 1)}
+                    spellCheck={false}
+                    ref={(element) => {
+                      if (element !== null && document.activeElement !== element) {
+                        element.focus();
+                      }
+                    }}
+                    onChange={(event) => setDraft(event.target.value)}
+                    onBlur={() => commitEdit(segment.blockIndex, segment.part)}
+                    onKeyDown={(event) => {
+                      // Escape belongs to the box, not to the screen: it would
+                      // otherwise throw away the whole resolution to cancel a
+                      // typo.
+                      if (event.key === 'Escape') {
+                        event.stopPropagation();
+                        setEditingAt(null);
+                        return;
+                      }
+                      if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+                        event.preventDefault();
+                        commitEdit(segment.blockIndex, segment.part);
+                      }
+                    }}
+                  />
+                ) : (
+                  <span
+                    key={fold === null ? key : undefined}
+                    className={`${SEGMENT_CLASS[segment.origin] ?? ''}${
+                      segment.edited === true ? ` ${styles.editedRun}` : ''
+                    }`}
+                    {...(segment.blockId === undefined
+                      ? {}
+                      : { 'data-block': segment.blockId })}
+                    data-origin={segment.origin}
+                    data-current={
+                      segment.blockId !== undefined && segment.blockId === currentId
+                        ? 'true'
+                        : undefined
                     }
-                  }}
-                  onChange={(event) => setDraft(event.target.value)}
-                  onBlur={() => commitEdit(segment.blockIndex, segment.part)}
-                  onKeyDown={(event) => {
-                    // Escape belongs to the box, not to the screen: it would
-                    // otherwise throw away the whole resolution to cancel a
-                    // typo.
-                    if (event.key === 'Escape') {
-                      event.stopPropagation();
-                      setEditingAt(null);
-                      return;
-                    }
-                    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
-                      event.preventDefault();
-                      commitEdit(segment.blockIndex, segment.part);
-                    }
-                  }}
-                />
-              ) : (
-                <span
-                  key={key}
-                  className={`${SEGMENT_CLASS[segment.origin] ?? ''}${
-                    segment.edited === true ? ` ${styles.editedRun}` : ''
-                  }`}
-                  {...(segment.blockId === undefined
-                    ? {}
-                    : { 'data-block': segment.blockId })}
-                  data-origin={segment.origin}
-                  data-current={
-                    segment.blockId !== undefined && segment.blockId === currentId
-                      ? 'true'
-                      : undefined
-                  }
-                  role="button"
-                  tabIndex={0}
-                  aria-label={`Edit ${String(segment.lines.length)} line${
-                    segment.lines.length === 1 ? '' : 's'
-                  } of the result`}
-                  onDoubleClick={() => startEditing(segment)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === 'F2') {
-                      event.preventDefault();
-                      startEditing(segment);
-                    }
-                  }}
-                >
-                  {segment.lines.map((line, line_) => (
-                    // Runs have no identity of their own; a line's position is
-                    // what it is, and the list is rebuilt on every change.
-                    // eslint-disable-next-line react/no-array-index-key
-                    <span key={line_} className={styles.line}>
-                      {line === '' ? ' ' : line}
-                    </span>
-                  ))}
-                </span>
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Edit ${String(segment.lines.length)} line${
+                      segment.lines.length === 1 ? '' : 's'
+                    } of the result`}
+                    onDoubleClick={() => startEditing(segment)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === 'F2') {
+                        event.preventDefault();
+                        startEditing(segment);
+                      }
+                    }}
+                  >
+                    {lineSpans(fold === null ? segment.lines : fold.head)}
+                  </span>
+                );
+              if (fold === null || editingAt === key) return run;
+              // The fold button and the tail sit beside the run, not inside it:
+              // a button inside an ARIA button is flattened away by a screen
+              // reader. The tail still opens the whole run on a double click.
+              return (
+                <Fragment key={key}>
+                  {run}
+                  <span className={styles.line}>
+                    <FoldButton hidden={fold.hidden} onUnfold={() => unfold(key)} />
+                  </span>
+                  <span
+                    className={SEGMENT_CLASS[segment.origin] ?? ''}
+                    data-origin={segment.origin}
+                    onDoubleClick={() => startEditing(segment)}
+                  >
+                    {lineSpans(fold.tail, segment.lines.length - fold.tail.length)}
+                  </span>
+                </Fragment>
               );
             })}
           </pre>
@@ -673,6 +706,17 @@ function ResolverBody({
   );
 }
 
+/** One element per line, so each sits on its own row of the Output. */
+function lineSpans(lines: string[], from = 0): ReactNode[] {
+  return lines.map((line, index) => (
+    // Runs have no identity of their own; a line's position is what it is,
+    // and the list is rebuilt on every change.
+    <span key={from + index} className={styles.line}>
+      {line === '' ? ' ' : line}
+    </span>
+  ));
+}
+
 /**
  * How each run of the output is drawn: agreed lines plain, decided ones tinted
  * by the side they came from. Colour is never the only cue — the runs also
@@ -701,6 +745,8 @@ function Side({
   blocks,
   busy,
   currentId,
+  unfolded,
+  onUnfold,
   onChoose,
 }: {
   title: string;
@@ -710,6 +756,8 @@ function Side({
   busy: boolean;
   /** The block Previous/Next is standing on, marked on both sides. */
   currentId: number | null;
+  unfolded: ReadonlySet<string>;
+  onUnfold: (key: string) => void;
   onChoose: (id: number, choice: Choice) => void;
 }): ReactNode {
   return (
@@ -723,13 +771,13 @@ function Side({
       </h3>
       {blocks.map((block, index) =>
         block.kind === 'same' ? (
-          <pre
+          <Agreed
             key={`same-${String(index)}`}
-            className={styles.context}
+            lines={block.lines}
+            folded={!unfolded.has(`${String(index)}:lines`)}
             style={{ gridColumn: column, gridRow: index + 2 }}
-          >
-            {block.lines.join('\n')}
-          </pre>
+            onUnfold={() => onUnfold(`${String(index)}:lines`)}
+          />
         ) : (
           <BlockChoice
             key={`block-${String(block.id)}`}
@@ -743,6 +791,58 @@ function Side({
         ),
       )}
     </section>
+  );
+}
+
+/**
+ * A run both sides agree on, in a pane. Long runs are folded to their ends
+ * (`foldRun`); the button between the ends opens the run in both panes and in
+ * the Output.
+ */
+function Agreed({
+  lines,
+  folded,
+  style,
+  onUnfold,
+}: {
+  lines: string[];
+  folded: boolean;
+  style: React.CSSProperties;
+  onUnfold: () => void;
+}): ReactNode {
+  const fold = folded ? foldRun(lines) : null;
+  if (fold === null) {
+    return (
+      <pre className={styles.context} style={style}>
+        {lines.join('\n')}
+      </pre>
+    );
+  }
+  return (
+    <div style={style}>
+      <pre className={styles.context}>{fold.head.join('\n')}</pre>
+      <FoldButton hidden={fold.hidden} onUnfold={onUnfold} />
+      <pre className={styles.context}>{fold.tail.join('\n')}</pre>
+    </div>
+  );
+}
+
+function FoldButton({
+  hidden,
+  onUnfold,
+}: {
+  hidden: number;
+  onUnfold: () => void;
+}): ReactNode {
+  return (
+    <button
+      type="button"
+      className={styles.fold}
+      title="Show the unchanged lines"
+      onClick={onUnfold}
+    >
+      ⋯ {hidden.toLocaleString('en-US')} unchanged line{hidden === 1 ? '' : 's'}
+    </button>
   );
 }
 

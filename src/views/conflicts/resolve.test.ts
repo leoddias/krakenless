@@ -11,7 +11,10 @@ import {
   conflictCount,
   editLines,
   endsWithNewline,
+  FOLD_CONTEXT,
+  FOLD_OVER,
   MAX_LINES,
+  foldRun,
   navigable,
   toLines,
   tooLargeToCompare,
@@ -319,5 +322,25 @@ describe('endsWithNewline and the size guard', () => {
     const huge = `${'x\n'.repeat(MAX_LINES + 1)}`;
     expect(tooLargeToCompare(huge, 'a\n')).toBe(true);
     expect(tooLargeToCompare('a\n', 'b\n')).toBe(false);
+  });
+});
+
+describe('foldRun', () => {
+  const lines = (count: number): string[] =>
+    Array.from({ length: count }, (_, i) => `line ${String(i)}`);
+
+  it('leaves a run of the threshold or less whole', () => {
+    expect(foldRun(lines(FOLD_OVER))).toBeNull();
+  });
+
+  it('folds a longer run to its ends, and counts every line it hides', () => {
+    const run = lines(FOLD_OVER + 1);
+    const fold = foldRun(run);
+    expect(fold).not.toBeNull();
+    expect(fold?.head).toEqual(run.slice(0, FOLD_CONTEXT));
+    expect(fold?.tail).toEqual(run.slice(-FOLD_CONTEXT));
+    expect(
+      (fold?.head.length ?? 0) + (fold?.hidden ?? 0) + (fold?.tail.length ?? 0),
+    ).toBe(run.length);
   });
 });

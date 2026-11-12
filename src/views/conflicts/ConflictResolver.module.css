@@ -481,3 +481,25 @@
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+
+/* Where a long agreed run is folded: says how much is hidden, opens it. */
+.fold {
+  display: block;
+  width: 100%;
+  margin: 0.1rem 0;
+  padding: 0.15rem 0.6rem;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.6875rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fold:hover,
+.fold:focus-visible {
+  color: var(--fg);
+  border-color: var(--muted);
+}

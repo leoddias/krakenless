@@ -569,6 +569,8 @@ rebase — reordering, squashing, `edit` — is still not built; this makes the
 
 ## ADR-0031 — Conflicts are resolved in the app, block by block, from the index
 
+**Status:** superseded in part by ADR-0069 — the diff is Myers O(ND) on a work budget and the 4000-line guard is gone; everything else stands
+
 **Decision:** Clicking a conflicted file opens a full-window resolver: the two
 sides side by side, a checkbox per differing block on each side, and an Output
 pane showing the file that will be written. Save writes the assembled text
@@ -2143,3 +2145,31 @@ detached worktree land on no branch until someone switches it to one; the
 notice says so. Checking for an operation in progress costs a `rev-parse` and
 the rebase-state read in the holder, but only when a holder exists. The plain
 switch path is unchanged when no other worktree holds the branch.
+
+## ADR-0069 — The conflict resolver diffs with Myers O(ND) and folds unchanged runs
+**Date:** 2026-11-12 · **Status:** accepted
+**Decision:** The resolver's line matching (`lineDiff.ts`) is Myers' O(ND)
+diff in linear space (middle snake), over lines interned to integers, after
+matching the common prefix and suffix. It still finds a longest common
+subsequence, the same answer as the table it replaces. The search runs on a work
+budget; a region too different to search within it is left unmatched and
+becomes one larger block, shown on both sides and asked about. The 4000-line
+refusal is replaced by a guard at a million lines a side. Agreed runs longer
+than 40 lines are drawn folded to five lines at each end in both panes and in
+the Output, with a button that opens the run in all three at once; `assemble`
+still writes every line.
+**Why:** The quadratic table made a 5,236-line locale file unopenable: the
+cost was the product of the sizes, not the size of the change. Myers costs the
+size times the number of differing lines, which is milliseconds for a real
+conflict (7 ms for that file) and is what git and VS Code use. Rejected: a
+heuristic diff (patience, histogram), which aligns differently from what the
+panes promise, as ADR-0031 argued; running the table in a worker, which keeps the
+window alive but still takes minutes and gigabytes; virtualizing the panes,
+which a single shared grid with level rows makes hard and folding makes
+unnecessary. The budget trades a minimal diff for a bounded one only on
+pathological input, and its failure mode is a bigger question, never an
+automatic merge: an unmatched line is never treated as unchanged.
+**Consequences:** Worst-case build time is bounded (about a third of a second
+for two 50,000-line files with nothing in common). A file over the budget can
+show one large block where a perfect diff would show several. Unfolding is per
+screen and not remembered.
